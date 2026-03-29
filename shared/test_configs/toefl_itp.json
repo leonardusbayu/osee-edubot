@@ -1,0 +1,43 @@
+{
+  "test_type": "TOEFL_ITP",
+  "display_name": "TOEFL ITP Practice Test",
+  "description": "Full TOEFL ITP practice — Listening, Structure & Written Expression, Reading. Score 310-677.",
+  "total_duration_minutes": 115,
+  "scoring": {
+    "method": "raw_to_scaled",
+    "scale": "310-677",
+    "sections_weighted": true
+  },
+  "sections": [
+    {
+      "id": "listening",
+      "name": "Listening Comprehension",
+      "duration_minutes": 35,
+      "parts": [
+        { "part": "A", "name": "Short Dialogues", "questions": 30 },
+        { "part": "B", "name": "Long Conversations", "questions": 8 },
+        { "part": "C", "name": "Lectures/Talks", "questions": 12 }
+      ],
+      "total_questions": 50,
+      "scoring": { "method": "raw_to_scaled", "min_score": 31, "max_score": 68 }
+    },
+    {
+      "id": "structure",
+      "name": "Structure & Written Expression",
+      "duration_minutes": 25,
+      "parts": [
+        { "part": "A", "name": "Structure (Sentence Completion)", "questions": 15 },
+        { "part": "B", "name": "Written Expression (Error Identification)", "questions": 25 }
+      ],
+      "total_questions": 40,
+      "scoring": { "method": "raw_to_scaled", "min_score": 31, "max_score": 68 }
+    },
+    {
+      "id": "reading",
+      "name": "Reading Comprehension",
+      "duration_minutes": 55,
+      "total_questions": 50,
+      "scoring": { "method": "raw_to_scaled", "min_score": 31, "max_score": 67 }
+    }
+  ]
+}

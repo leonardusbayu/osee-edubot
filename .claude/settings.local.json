@@ -49,7 +49,17 @@
       "Bash(unzip -o -q \"C:/Users/user/Downloads/IELTS Anas -20260329T053202Z-1-001.zip\" -d ielts-anas)",
       "Bash(/dev/null __NEW_LINE_2e23fa9831c18f3f__ curl -s --insecure \"$API/api/tests/questions/writing?question_type=write_academic_discussion&limit=2&test_type=TOEFL_IBT\")",
       "Bash(/dev/null curl:*)",
-      "Bash(head -10 echo --- find C:/Users/user/Downloads/ -iname *toeic*)"
+      "Bash(head -10 echo --- find C:/Users/user/Downloads/ -iname *toeic*)",
+      "Read(//d/claude telegram bot/=== D:/TOEFL/**)",
+      "Read(//d/TOEFL/HOW TO TEACH/**)",
+      "Read(//d/claude telegram bot/**)",
+      "Bash(mkdir -p itp-materials)",
+      "Bash(unzip -o -q \"C:/Users/user/Downloads/toefl_itp_materials.zip\" -d itp-materials/mat)",
+      "Bash(unzip -o -q \"C:/Users/user/Downloads/toefl-itp-interactive-quiz.zip\" -d itp-materials/quiz)",
+      "Bash(python3 -c \":*)",
+      "Bash(find 'D:/claude telegram bot/itp-materials/quiz/' -name *.ts -o -name *.tsx -o -name *.json)",
+      "Bash(find 'D:/claude telegram bot/itp-materials/quiz/' -name *.ts -exec head -5 {})",
+      "Bash(2)"
     ]
   }
 }

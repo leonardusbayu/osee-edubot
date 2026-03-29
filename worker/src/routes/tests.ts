@@ -30,6 +30,18 @@ const TEST_CONFIGS: Record<string, any> = {
       { id: 'speaking', name: 'Speaking', duration_minutes: 14 },
     ],
   },
+  TOEFL_ITP: {
+    test_type: 'TOEFL_ITP',
+    display_name: 'TOEFL ITP Practice Test',
+    description: 'Full TOEFL ITP — Listening, Structure, Reading. Score 310-677.',
+    total_duration_minutes: 115,
+    max_band: 677,
+    sections: [
+      { id: 'listening', name: 'Listening', duration_minutes: 35 },
+      { id: 'structure', name: 'Structure & Written Expression', duration_minutes: 25 },
+      { id: 'reading', name: 'Reading', duration_minutes: 55 },
+    ],
+  },
   TOEIC: {
     test_type: 'TOEIC',
     display_name: 'TOEIC Listening & Reading Test',
