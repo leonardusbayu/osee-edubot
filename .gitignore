@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.env
+*.db
+.wrangler/
+.dev.vars
+media/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Build
+*.tsbuildinfo
+
+# Temp
+*.log
+import-questions.sql
+test-bot.sh

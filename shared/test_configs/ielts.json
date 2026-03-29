@@ -1,0 +1,47 @@
+{
+  "test_type": "IELTS",
+  "display_name": "IELTS Academic Practice Test",
+  "description": "Full-length IELTS Academic practice test with all 4 sections.",
+  "total_duration_minutes": 170,
+  "status": "planned",
+  "sections": [
+    {
+      "id": "listening",
+      "name": "Listening",
+      "duration_minutes": 30,
+      "num_sections": 4,
+      "question_types": ["fill_in_blank", "multiple_choice", "matching", "map_diagram_labeling", "note_completion"],
+      "scoring": { "method": "raw_to_band", "total_questions": 40, "max_band": 9 }
+    },
+    {
+      "id": "reading",
+      "name": "Reading",
+      "duration_minutes": 60,
+      "num_passages": 3,
+      "total_questions": 40,
+      "question_types": ["true_false_not_given", "matching_headings", "matching_information", "sentence_completion", "summary_completion", "multiple_choice"],
+      "scoring": { "method": "raw_to_band", "max_band": 9 }
+    },
+    {
+      "id": "writing",
+      "name": "Writing",
+      "duration_minutes": 60,
+      "tasks": [
+        { "type": "task1", "description": "Describe a graph/chart/diagram", "duration_minutes": 20 },
+        { "type": "task2", "description": "Essay writing", "duration_minutes": 40 }
+      ],
+      "scoring": { "method": "ai_rubric", "criteria": ["task_achievement", "coherence_cohesion", "lexical_resource", "grammatical_range_accuracy"], "max_band": 9 }
+    },
+    {
+      "id": "speaking",
+      "name": "Speaking",
+      "duration_minutes": 14,
+      "parts": [
+        { "type": "part1", "description": "Familiar topics Q&A", "duration_minutes": 5 },
+        { "type": "part2", "description": "Long turn: 1 min prep, 2 min speak", "prep_minutes": 1, "speak_minutes": 2 },
+        { "type": "part3", "description": "Discussion follow-up questions", "duration_minutes": 5 }
+      ],
+      "scoring": { "method": "ai_rubric", "criteria": ["fluency_coherence", "lexical_resource", "grammar", "pronunciation"], "max_band": 9 }
+    }
+  ]
+}

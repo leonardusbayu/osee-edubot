@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__0f611187-90f3-446a-8261-2c219425c100__workers_list",
+      "Bash(curl -s --insecure \"https://edubot-api.edubot-leonardus.workers.dev/api/tests/questions/speaking?limit=1\")",
+      "Bash(curl -s --insecure \"https://edubot-api.edubot-leonardus.workers.dev/api/tests/questions/writing?question_type=write_academic_discussion&limit=1\")",
+      "mcp__Desktop_Commander__read_file",
+      "mcp__Desktop_Commander__list_directory",
+      "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 CLOUDFLARE_ACCOUNT_ID=6d55097e8961e881b77a4108e1ae40c2 npx wrangler deploy)",
+      "Bash(npm run:*)",
+      "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 CLOUDFLARE_ACCOUNT_ID=6d55097e8961e881b77a4108e1ae40c2 npx wrangler@3 pages deploy dist --project-name edubot-webapp --branch main)",
+      "Bash(python3 -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(f''''Questions: {sum\\(c[count] for c in d\\)}''''\\)\")",
+      "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 CLOUDFLARE_ACCOUNT_ID=6d55097e8961e881b77a4108e1ae40c2 echo \"OSEE2026\")",
+      "Bash(npx wrangler:*)",
+      "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 CLOUDFLARE_ACCOUNT_ID=6d55097e8961e881b77a4108e1ae40c2 npx wrangler secret put TEACHER_CODE)",
+      "Bash(API=\"https://edubot-api.edubot-leonardus.workers.dev\")",
+      "Bash(SECRET=\"edubot-webhook-secret-2026\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/api/health\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/api/tests/available\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/api/tests/question-counts\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" -X POST \"$API/api/tests/start\" -H \"Content-Type: application/json\" -d '{\"\"test_type\"\":\"\"TOEFL_IBT\"\"}')",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" -X POST \"$API/api/tests/start\" -H \"Content-Type: application/json\" -d '{\"\"test_type\"\":\"\"XXX\"\"}')",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/api/progress/overview\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/api/progress/costs\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/api/tts/speak?text=hello&voice=nova\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/api/tts/speak?multi=true&text=Man:+Hi.+Woman:+Hello.\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/api/tts/speak?text=%20\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" -X POST \"$API/api/speaking/evaluate\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/test\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/progress\")",
+      "Bash(curl -s --insecure -X POST \"https://edubot-api.edubot-leonardus.workers.dev/api/speaking/evaluate\")",
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" -X POST \"https://edubot-api.edubot-leonardus.workers.dev/api/speaking/evaluate\")"
+    ]
+  }
+}

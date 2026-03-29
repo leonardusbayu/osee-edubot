@@ -1,0 +1,29 @@
+name = "edubot-api"
+main = "src/index.ts"
+compatibility_date = "2024-12-05"
+
+[vars]
+WEBAPP_URL = "https://edubot-api.edubot-leonardus.workers.dev"
+
+# Secrets (set via `wrangler secret put`):
+# TELEGRAM_BOT_TOKEN
+# TELEGRAM_BOT_SECRET
+# ANTHROPIC_API_KEY
+# OPENAI_API_KEY
+# JWT_SECRET
+
+[[d1_databases]]
+binding = "DB"
+database_name = "edubot-db"
+database_id = "d501b671-128e-4a45-9d90-74b22e6691ce"
+
+# Cron triggers:
+# Daily at 8:03 AM WIB (1:03 UTC) — study reminders + daily quiz
+# Monday at 8:07 AM WIB (1:07 UTC) — weekly leaderboard
+[triggers]
+crons = ["3 1 * * *", "7 1 * * 1"]
+
+# Uncomment after enabling R2 in dashboard:
+# [[r2_buckets]]
+# binding = "MEDIA"
+# bucket_name = "edubot-media"

@@ -1,0 +1,168 @@
+{
+  "test_type": "TOEFL_IBT",
+  "display_name": "TOEFL iBT Practice Test (2026 Format)",
+  "description": "Full-length TOEFL iBT practice test following the January 2026 format with adaptive sections and CEFR-aligned band scoring (1-6).",
+  "total_duration_minutes": 90,
+  "scoring": {
+    "method": "band_average",
+    "scale": "1-6",
+    "increment": 0.5,
+    "cefr_aligned": true
+  },
+  "sections": [
+    {
+      "id": "reading",
+      "name": "Reading",
+      "duration_minutes": 30,
+      "adaptive": true,
+      "stages": [
+        {
+          "stage": 1,
+          "task_types": [
+            {
+              "type": "complete_the_words",
+              "description": "Fill missing letters in a paragraph",
+              "input_method": "text_input",
+              "num_items": 10
+            },
+            {
+              "type": "read_in_daily_life",
+              "description": "Short everyday texts with comprehension questions",
+              "question_types": ["multiple_choice"],
+              "num_passages": 2,
+              "questions_per_passage": 5
+            }
+          ]
+        },
+        {
+          "stage": 2,
+          "description": "Difficulty adjusts based on stage 1 performance",
+          "task_types": [
+            {
+              "type": "read_academic_passage",
+              "description": "Abridged academic passage with comprehension questions",
+              "question_types": ["multiple_choice", "insert_text", "prose_summary"],
+              "num_passages": 2,
+              "questions_per_passage": 10
+            }
+          ]
+        }
+      ],
+      "scoring": {
+        "method": "adaptive_band",
+        "max_band": 6
+      }
+    },
+    {
+      "id": "listening",
+      "name": "Listening",
+      "duration_minutes": 29,
+      "adaptive": true,
+      "media_type": "audio",
+      "replay_allowed": false,
+      "practice_mode_replay": true,
+      "stages": [
+        {
+          "stage": 1,
+          "task_types": [
+            {
+              "type": "listen_choose_response",
+              "description": "Audio-only prompt, no text on screen. Choose the best response.",
+              "input_method": "multiple_choice",
+              "num_items": 8
+            },
+            {
+              "type": "listen_conversation",
+              "description": "Listen to a conversation and answer questions",
+              "question_types": ["multiple_choice"],
+              "num_items": 5
+            }
+          ]
+        },
+        {
+          "stage": 2,
+          "task_types": [
+            {
+              "type": "listen_announcement",
+              "description": "Listen to an announcement and answer questions",
+              "question_types": ["multiple_choice"],
+              "num_items": 5
+            },
+            {
+              "type": "listen_academic_talk",
+              "description": "Listen to an academic talk and answer questions",
+              "question_types": ["multiple_choice"],
+              "num_items": 6
+            }
+          ]
+        }
+      ],
+      "scoring": {
+        "method": "adaptive_band",
+        "max_band": 6
+      }
+    },
+    {
+      "id": "speaking",
+      "name": "Speaking",
+      "duration_minutes": 8,
+      "media_type": "audio_record",
+      "no_prep_timer": true,
+      "task_types": [
+        {
+          "type": "listen_and_repeat",
+          "description": "Reproduce spoken sentence exactly",
+          "num_items": 5,
+          "scoring_criteria": ["pronunciation", "rhythm", "accuracy"]
+        },
+        {
+          "type": "take_interview",
+          "description": "Simulated spontaneous dialogue — immediate recording, no prep time",
+          "num_items": 6,
+          "scoring_criteria": ["pronunciation", "rhythm", "natural_flow", "content"]
+        }
+      ],
+      "scoring": {
+        "method": "ai_rubric",
+        "max_band": 6,
+        "criteria": ["pronunciation", "rhythm", "natural_conversational_flow"]
+      }
+    },
+    {
+      "id": "writing",
+      "name": "Writing",
+      "duration_minutes": 23,
+      "task_types": [
+        {
+          "type": "build_sentence",
+          "description": "Drag-and-drop UI to arrange words correctly",
+          "input_method": "drag_drop",
+          "num_items": 5,
+          "scoring_criteria": ["grammatical_accuracy"]
+        },
+        {
+          "type": "write_email",
+          "description": "Write a short email in response to a prompt",
+          "duration_minutes": 7,
+          "input_method": "text_editor",
+          "num_items": 1,
+          "scoring_criteria": ["grammatical_accuracy", "practical_communication"]
+        },
+        {
+          "type": "write_academic_discussion",
+          "description": "Write a contribution to an academic discussion",
+          "duration_minutes": 10,
+          "input_method": "rich_text_editor",
+          "word_count_display": true,
+          "num_items": 1,
+          "scoring_criteria": ["grammatical_accuracy", "academic_content_quality"]
+        }
+      ],
+      "scoring": {
+        "method": "ai_rubric",
+        "max_band": 6,
+        "criteria": ["grammatical_accuracy", "practical_communication", "academic_content_quality"]
+      }
+    }
+  ]
+}
