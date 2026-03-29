@@ -30,7 +30,15 @@
       "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/test\")",
       "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" \"$API/progress\")",
       "Bash(curl -s --insecure -X POST \"https://edubot-api.edubot-leonardus.workers.dev/api/speaking/evaluate\")",
-      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" -X POST \"https://edubot-api.edubot-leonardus.workers.dev/api/speaking/evaluate\")"
+      "Bash(curl -s --insecure -o /dev/null -w \"%{http_code}\" -X POST \"https://edubot-api.edubot-leonardus.workers.dev/api/speaking/evaluate\")",
+      "Bash(gh auth:*)",
+      "Bash(gh secret:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh run:*)",
+      "Bash(mkdir -p \"D:/claude telegram bot/ielts-materials\")",
+      "Bash(unzip -o -q \"C:/Users/user/Downloads/1. Basic IELTS-20260329T050255Z-1-001.zip\" -d basic)",
+      "Bash(unzip -o -q \"C:/Users/user/Downloads/2. Intermediate IELTS-20260329T050255Z-1-001.zip\" -d intermediate)",
+      "Bash(unzip -o -q \"C:/Users/user/Downloads/3. Advanced IELTS-20260329T050256Z-1-001.zip\" -d advanced)"
     ]
   }
 }

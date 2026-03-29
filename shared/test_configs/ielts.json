@@ -1,9 +1,13 @@
 {
   "test_type": "IELTS",
   "display_name": "IELTS Academic Practice Test",
-  "description": "Full-length IELTS Academic practice test with all 4 sections.",
+  "description": "Full-length IELTS Academic practice test with all 4 sections. Band 1-9 scoring.",
   "total_duration_minutes": 170,
-  "status": "planned",
+  "scoring": {
+    "method": "band_average",
+    "scale": "1-9",
+    "increment": 0.5
+  },
   "sections": [
     {
       "id": "listening",
@@ -27,8 +31,8 @@
       "name": "Writing",
       "duration_minutes": 60,
       "tasks": [
-        { "type": "task1", "description": "Describe a graph/chart/diagram", "duration_minutes": 20 },
-        { "type": "task2", "description": "Essay writing", "duration_minutes": 40 }
+        { "type": "task1", "description": "Describe a graph, chart, or diagram (150+ words)", "duration_minutes": 20, "min_words": 150 },
+        { "type": "task2", "description": "Essay writing (250+ words)", "duration_minutes": 40, "min_words": 250 }
       ],
       "scoring": { "method": "ai_rubric", "criteria": ["task_achievement", "coherence_cohesion", "lexical_resource", "grammatical_range_accuracy"], "max_band": 9 }
     },
@@ -41,7 +45,7 @@
         { "type": "part2", "description": "Long turn: 1 min prep, 2 min speak", "prep_minutes": 1, "speak_minutes": 2 },
         { "type": "part3", "description": "Discussion follow-up questions", "duration_minutes": 5 }
       ],
-      "scoring": { "method": "ai_rubric", "criteria": ["fluency_coherence", "lexical_resource", "grammar", "pronunciation"], "max_band": 9 }
+      "scoring": { "method": "ai_rubric", "criteria": ["fluency_coherence", "lexical_resource", "grammatical_range_accuracy", "pronunciation"], "max_band": 9 }
     }
   ]
 }

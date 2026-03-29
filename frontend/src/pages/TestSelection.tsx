@@ -37,16 +37,17 @@ export default function TestSelection() {
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<'menu' | 'full_test' | 'section'>('menu');
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
+  const [testType, setTestType] = useState<string>('TOEFL_IBT');
   const navigate = useNavigate();
   const { startTest } = useTestStore();
 
   useEffect(() => {
     loadCounts();
-  }, []);
+  }, [testType]);
 
   async function loadCounts() {
     try {
-      const response = await fetch('/api/tests/question-counts');
+      const response = await fetch(`/api/tests/question-counts?test_type=${testType}`);
       if (response.ok) {
         setCounts(await response.json());
       }
@@ -69,7 +70,7 @@ export default function TestSelection() {
       const response = await fetch('/api/tests/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ test_type: 'TOEFL_IBT' }),
+        body: JSON.stringify({ test_type: testType }),
       });
       if (!response.ok) {
         setError('Gagal memulai tes');
@@ -93,7 +94,7 @@ export default function TestSelection() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          test_type: 'TOEFL_IBT',
+          test_type: testType,
           section_only: section,
           question_type: questionType || undefined,
         }),
@@ -185,7 +186,23 @@ export default function TestSelection() {
   // Main menu
   return (
     <div className="p-4 max-w-lg mx-auto">
-      <h1 className="text-2xl font-bold mb-1">TOEFL iBT 2026</h1>
+      {/* Test Type Selector */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => { setTestType('TOEFL_IBT'); setSelectedSection(null); }}
+          className={`flex-1 py-2 rounded-lg font-medium text-sm ${testType === 'TOEFL_IBT' ? 'bg-tg-button text-tg-button-text' : 'bg-tg-secondary text-tg-text'}`}
+        >
+          🇺🇸 TOEFL iBT
+        </button>
+        <button
+          onClick={() => { setTestType('IELTS'); setSelectedSection(null); }}
+          className={`flex-1 py-2 rounded-lg font-medium text-sm ${testType === 'IELTS' ? 'bg-tg-button text-tg-button-text' : 'bg-tg-secondary text-tg-text'}`}
+        >
+          🇬🇧 IELTS
+        </button>
+      </div>
+
+      <h1 className="text-2xl font-bold mb-1">{testType === 'IELTS' ? 'IELTS Academic' : 'TOEFL iBT 2026'}</h1>
       <p className="text-tg-hint text-sm mb-6">Pilih mode latihan</p>
 
       {error && (
@@ -196,10 +213,13 @@ export default function TestSelection() {
       <div className="bg-gradient-to-r from-tg-button/10 to-tg-button/5 rounded-xl p-4 mb-6">
         <h2 className="text-lg font-semibold mb-1">Simulasi Tes Lengkap</h2>
         <p className="text-tg-hint text-sm mb-3">
-          4 section, 90 menit — simulasi kondisi tes sesungguhnya
+          {testType === 'IELTS' ? '4 section, 170 menit' : '4 section, 90 menit'} — simulasi kondisi tes
         </p>
         <div className="flex flex-wrap gap-2 mb-3">
-          {['Reading (30m)', 'Listening (29m)', 'Speaking (8m)', 'Writing (23m)'].map((s) => (
+          {(testType === 'IELTS'
+            ? ['Listening (30m)', 'Reading (60m)', 'Writing (60m)', 'Speaking (14m)']
+            : ['Reading (30m)', 'Listening (29m)', 'Speaking (8m)', 'Writing (23m)']
+          ).map((s) => (
             <span key={s} className="text-xs bg-tg-bg px-2 py-1 rounded-full">{s}</span>
           ))}
         </div>

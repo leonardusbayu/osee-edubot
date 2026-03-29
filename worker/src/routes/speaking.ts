@@ -19,6 +19,7 @@ speakingRoutes.post('/evaluate', async (c) => {
   const audioFile = formData.get('audio') as File | null;
   const prompt = formData.get('prompt') as string || '';
   const questionType = formData.get('question_type') as string || 'interview';
+  const testType = formData.get('test_type') as string || 'TOEFL_IBT';
 
   if (!audioFile) {
     return c.json({ error: 'No audio file' }, 400);
@@ -55,13 +56,13 @@ speakingRoutes.post('/evaluate', async (c) => {
     }
 
     // Step 2: Score based on question type
+    const maxBand = testType === 'IELTS' ? 9 : 6;
+
     if (questionType === 'listen_and_repeat') {
-      // Compare transcription to original text
-      const result = scoreListenAndRepeat(transcription, prompt);
+      const result = scoreListenAndRepeat(transcription, prompt, maxBand);
       return c.json(result);
     } else {
-      // Interview: AI scoring
-      const result = await scoreInterview(c.env.OPENAI_API_KEY, transcription, prompt);
+      const result = await scoreInterview(c.env.OPENAI_API_KEY, transcription, prompt, testType, maxBand);
       return c.json(result);
     }
   } catch (e: any) {
@@ -70,7 +71,7 @@ speakingRoutes.post('/evaluate', async (c) => {
 });
 
 // Listen & Repeat: word-by-word accuracy comparison
-function scoreListenAndRepeat(transcription: string, original: string) {
+function scoreListenAndRepeat(transcription: string, original: string, maxBand: number = 6) {
   const originalWords = original.toLowerCase().replace(/[^a-z\s']/g, '').split(/\s+/).filter(Boolean);
   const spokenWords = transcription.toLowerCase().replace(/[^a-z\s']/g, '').split(/\s+/).filter(Boolean);
 
@@ -87,13 +88,26 @@ function scoreListenAndRepeat(transcription: string, original: string) {
 
   const accuracy = originalWords.length > 0 ? Math.round((matchCount / originalWords.length) * 100) : 0;
 
-  // Map accuracy to band score (1-6)
+  // Map accuracy to band score
   let band = 1;
-  if (accuracy >= 90) band = 6;
-  else if (accuracy >= 80) band = 5;
-  else if (accuracy >= 70) band = 4;
-  else if (accuracy >= 55) band = 3;
-  else if (accuracy >= 40) band = 2;
+  if (maxBand === 9) {
+    // IELTS scale 1-9
+    if (accuracy >= 95) band = 9;
+    else if (accuracy >= 90) band = 8;
+    else if (accuracy >= 80) band = 7;
+    else if (accuracy >= 70) band = 6;
+    else if (accuracy >= 60) band = 5;
+    else if (accuracy >= 50) band = 4;
+    else if (accuracy >= 35) band = 3;
+    else if (accuracy >= 20) band = 2;
+  } else {
+    // TOEFL scale 1-6
+    if (accuracy >= 90) band = 6;
+    else if (accuracy >= 80) band = 5;
+    else if (accuracy >= 70) band = 4;
+    else if (accuracy >= 55) band = 3;
+    else if (accuracy >= 40) band = 2;
+  }
 
   const missedWords = wordResults.filter(w => !w.matched).map(w => w.word);
 
@@ -124,22 +138,24 @@ function scoreListenAndRepeat(transcription: string, original: string) {
 }
 
 // Interview: AI-powered scoring
-async function scoreInterview(apiKey: string, transcription: string, prompt: string) {
-  const scoringPrompt = `Score this TOEFL iBT speaking response on a 1-6 band scale.
+async function scoreInterview(apiKey: string, transcription: string, prompt: string, testType: string = 'TOEFL_IBT', maxBand: number = 6) {
+  const bandScale = testType === 'IELTS' ? '1-9' : '1-6';
+  const criteria = testType === 'IELTS'
+    ? 'Fluency & Coherence, Lexical Resource, Grammatical Range & Accuracy, Pronunciation'
+    : 'Content, Fluency, Grammar, Vocabulary';
+
+  const scoringPrompt = `Score this ${testType === 'IELTS' ? 'IELTS' : 'TOEFL iBT'} speaking response on a ${bandScale} band scale.
 
 Question prompt: "${prompt}"
 
 Student's spoken response (transcription): "${transcription}"
 
-Score on these criteria (each 1-6):
-1. Content: Did they answer the question? Is the response relevant?
-2. Fluency: Does it flow naturally? (Note: this is a transcription, so ignore minor artifacts)
-3. Grammar: Are sentences grammatically correct?
-4. Vocabulary: Range and accuracy of word choice
+Score on these criteria (each ${bandScale}):
+${criteria}
 
 Respond in JSON only:
 {
-  "overall_band": <number 1-6, in 0.5 increments>,
+  "overall_band": <number ${bandScale}, in 0.5 increments>,
   "content": <number>,
   "fluency": <number>,
   "grammar": <number>,

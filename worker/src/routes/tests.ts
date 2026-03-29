@@ -2,18 +2,32 @@ import { Hono } from 'hono';
 import type { Env } from '../types';
 import { getAuthUser } from '../services/auth';
 
-// Test configs (embedded — same as shared/test_configs/toefl_ibt.json)
+// Test configs — both TOEFL iBT and IELTS
 const TEST_CONFIGS: Record<string, any> = {
   TOEFL_IBT: {
     test_type: 'TOEFL_IBT',
     display_name: 'TOEFL iBT Practice Test (2026 Format)',
-    description: 'Full-length TOEFL iBT practice with adaptive sections and CEFR band scoring.',
+    description: 'Full-length TOEFL iBT practice with adaptive sections and CEFR band scoring (1-6).',
     total_duration_minutes: 90,
+    max_band: 6,
     sections: [
       { id: 'reading', name: 'Reading', duration_minutes: 30 },
       { id: 'listening', name: 'Listening', duration_minutes: 29 },
       { id: 'speaking', name: 'Speaking', duration_minutes: 8 },
       { id: 'writing', name: 'Writing', duration_minutes: 23 },
+    ],
+  },
+  IELTS: {
+    test_type: 'IELTS',
+    display_name: 'IELTS Academic Practice Test',
+    description: 'Full-length IELTS Academic practice test. Band 1-9 scoring.',
+    total_duration_minutes: 170,
+    max_band: 9,
+    sections: [
+      { id: 'listening', name: 'Listening', duration_minutes: 30 },
+      { id: 'reading', name: 'Reading', duration_minutes: 60 },
+      { id: 'writing', name: 'Writing', duration_minutes: 60 },
+      { id: 'speaking', name: 'Speaking', duration_minutes: 14 },
     ],
   },
 };
@@ -238,7 +252,8 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
     const sectionAnswers = answers.results.filter((a: any) => a.section === section.id);
     const correct = sectionAnswers.filter((a: any) => a.is_correct === 1).length;
     const total = sectionAnswers.length || 1;
-    sectionScores[section.id] = Math.round((correct / total) * 6 * 10) / 10;
+    const maxBand = config?.max_band || 6;
+    sectionScores[section.id] = Math.round((correct / total) * maxBand * 2) / 2; // 0.5 increments
   }
 
   const values = Object.values(sectionScores);
@@ -305,13 +320,14 @@ testRoutes.get('/questions/:section', async (c) => {
 
 // Get question count per section
 testRoutes.get('/question-counts', async (c) => {
+  const testType = c.req.query('test_type') || 'TOEFL_IBT';
   const result = await c.env.DB.prepare(
     `SELECT section, question_type, COUNT(*) as count
      FROM test_contents
-     WHERE test_type = 'TOEFL_IBT' AND status = 'published'
+     WHERE test_type = ? AND status = 'published'
      GROUP BY section, question_type
      ORDER BY section, question_type`
-  ).all();
+  ).bind(testType).all();
 
   return c.json(result.results);
 });
