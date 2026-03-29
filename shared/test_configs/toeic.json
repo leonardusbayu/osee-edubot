@@ -1,0 +1,38 @@
+{
+  "test_type": "TOEIC",
+  "display_name": "TOEIC Practice Test",
+  "description": "Full-length TOEIC Listening & Reading practice test. Score 10-990.",
+  "total_duration_minutes": 120,
+  "scoring": {
+    "method": "raw_to_scaled",
+    "scale": "10-990",
+    "increment": 5
+  },
+  "sections": [
+    {
+      "id": "listening",
+      "name": "Listening",
+      "duration_minutes": 45,
+      "parts": [
+        { "part": 1, "name": "Photographs", "questions": 6 },
+        { "part": 2, "name": "Question-Response", "questions": 25 },
+        { "part": 3, "name": "Conversations", "questions": 39 },
+        { "part": 4, "name": "Talks", "questions": 30 }
+      ],
+      "total_questions": 100,
+      "scoring": { "method": "raw_to_scaled", "max_score": 495 }
+    },
+    {
+      "id": "reading",
+      "name": "Reading",
+      "duration_minutes": 75,
+      "parts": [
+        { "part": 5, "name": "Incomplete Sentences", "questions": 30 },
+        { "part": 6, "name": "Text Completion", "questions": 16 },
+        { "part": 7, "name": "Reading Comprehension", "questions": 54 }
+      ],
+      "total_questions": 100,
+      "scoring": { "method": "raw_to_scaled", "max_score": 495 }
+    }
+  ]
+}

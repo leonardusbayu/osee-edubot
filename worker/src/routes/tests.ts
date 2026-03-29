@@ -30,6 +30,17 @@ const TEST_CONFIGS: Record<string, any> = {
       { id: 'speaking', name: 'Speaking', duration_minutes: 14 },
     ],
   },
+  TOEIC: {
+    test_type: 'TOEIC',
+    display_name: 'TOEIC Listening & Reading Test',
+    description: 'Full TOEIC practice — 200 multiple choice questions. Score 10-990.',
+    total_duration_minutes: 120,
+    max_band: 990,
+    sections: [
+      { id: 'listening', name: 'Listening', duration_minutes: 45 },
+      { id: 'reading', name: 'Reading', duration_minutes: 75 },
+    ],
+  },
 };
 
 export const testRoutes = new Hono<{ Bindings: Env }>();

@@ -200,9 +200,15 @@ export default function TestSelection() {
         >
           🇬🇧 IELTS
         </button>
+        <button
+          onClick={() => { setTestType('TOEIC'); setSelectedSection(null); }}
+          className={`flex-1 py-2 rounded-lg font-medium text-sm ${testType === 'TOEIC' ? 'bg-tg-button text-tg-button-text' : 'bg-tg-secondary text-tg-text'}`}
+        >
+          🏢 TOEIC
+        </button>
       </div>
 
-      <h1 className="text-2xl font-bold mb-1">{testType === 'IELTS' ? 'IELTS Academic' : 'TOEFL iBT 2026'}</h1>
+      <h1 className="text-2xl font-bold mb-1">{testType === 'IELTS' ? 'IELTS Academic' : testType === 'TOEIC' ? 'TOEIC L&R' : 'TOEFL iBT 2026'}</h1>
       <p className="text-tg-hint text-sm mb-6">Pilih mode latihan</p>
 
       {error && (
@@ -213,11 +219,13 @@ export default function TestSelection() {
       <div className="bg-gradient-to-r from-tg-button/10 to-tg-button/5 rounded-xl p-4 mb-6">
         <h2 className="text-lg font-semibold mb-1">Simulasi Tes Lengkap</h2>
         <p className="text-tg-hint text-sm mb-3">
-          {testType === 'IELTS' ? '4 section, 170 menit' : '4 section, 90 menit'} — simulasi kondisi tes
+          {testType === 'IELTS' ? '4 section, 170 menit' : testType === 'TOEIC' ? '2 section, 120 menit' : '4 section, 90 menit'} — simulasi kondisi tes
         </p>
         <div className="flex flex-wrap gap-2 mb-3">
           {(testType === 'IELTS'
             ? ['Listening (30m)', 'Reading (60m)', 'Writing (60m)', 'Speaking (14m)']
+            : testType === 'TOEIC'
+            ? ['Listening (45m)', 'Reading (75m)']
             : ['Reading (30m)', 'Listening (29m)', 'Speaking (8m)', 'Writing (23m)']
           ).map((s) => (
             <span key={s} className="text-xs bg-tg-bg px-2 py-1 rounded-full">{s}</span>
