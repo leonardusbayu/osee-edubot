@@ -12,6 +12,7 @@ import { classRoutes } from './routes/classes';
 import { speakingRoutes } from './routes/speaking';
 import { aiGenRoutes } from './routes/ai-generate';
 import { writingRoutes } from './routes/writing';
+import { analyticsRoutes } from './routes/analytics';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -56,6 +57,7 @@ app.route('/api/classes', classRoutes);
 app.route('/api/speaking', speakingRoutes);
 app.route('/api/ai-generate', aiGenRoutes);
 app.route('/api/writing', writingRoutes);
+app.route('/api/analytics', analyticsRoutes);
 
 // Serve frontend — proxy to Cloudflare Pages (same origin, no CORS issues)
 app.get('*', async (c) => {

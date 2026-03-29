@@ -642,6 +642,13 @@ export default function TestRunner() {
         {/* Non-listening types — show passage, instruction, audio, prompt, question */}
         {currentQuestion.type !== 'listening' && currentQuestion.type !== 'listening_passage' && (
           <>
+            {/* Image for IELTS graph/map/diagram questions */}
+            {currentQuestion.image_url && (
+              <div className="mb-4">
+                <img src={currentQuestion.image_url} alt="Question image" className="w-full rounded-lg border border-tg-secondary" />
+              </div>
+            )}
+
             {currentQuestion.passage && (
               <div className="bg-tg-secondary rounded-lg p-4 mb-4 text-sm leading-relaxed whitespace-pre-line">
                 {currentQuestion.passage}

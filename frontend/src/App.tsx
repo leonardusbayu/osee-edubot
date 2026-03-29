@@ -5,6 +5,7 @@ import TestSelection from './pages/TestSelection';
 import TestRunner from './pages/TestRunner';
 import TestResults from './pages/TestResults';
 import Progress from './pages/Progress';
+import Dashboard from './pages/Dashboard';
 import AdminContent from './pages/AdminContent';
 
 declare global {
@@ -69,6 +70,7 @@ function App() {
         <Route path="/test/:attemptId/results" element={<TestResults />} />
         <Route path="/progress" element={<Progress />} />
         <Route path="/admin/*" element={<AdminContent />} />
+        <Route path="/dashboard" element={<Dashboard />} />
       </Routes>
     </div>
   );
