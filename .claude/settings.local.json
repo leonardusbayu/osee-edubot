@@ -59,7 +59,18 @@
       "Bash(python3 -c \":*)",
       "Bash(find 'D:/claude telegram bot/itp-materials/quiz/' -name *.ts -o -name *.tsx -o -name *.json)",
       "Bash(find 'D:/claude telegram bot/itp-materials/quiz/' -name *.ts -exec head -5 {})",
-      "Bash(2)"
+      "Bash(2)",
+      "Bash(API=\"https://edubot-api.edubot-leonardus.workers.dev\" echo \"=== ALL 4 TESTS ===\" echo -n \"TOEFL iBT: \")",
+      "Bash(curl -s --insecure \"$API/api/tests/question-counts?test_type=TOEFL_IBT\")",
+      "Bash(/dev/null echo:*)",
+      "Bash(curl -s --insecure $API/api/tests/question-counts?test_type=IELTS)",
+      "Bash(curl -s --insecure $API/api/tests/question-counts?test_type=TOEIC)",
+      "Bash(curl -s --insecure $API/api/tests/question-counts?test_type=TOEFL_ITP)",
+      "Bash(find 'D:/TOEFL/MATERIALS/TOEFL Compilation/' -type f -name *.docx -o -name *.pdf -o -name *.doc -o -name *.mp3)",
+      "Bash(ls D:/TOEFL/MATERIALS/Answer Key* 2)",
+      "Bash(API=\"https://edubot-api.edubot-leonardus.workers.dev\" echo \"=== ENRICHED TOTALS ===\" echo -n \"TOEFL iBT: \")",
+      "Bash(do curl:*)",
+      "Bash(done)"
     ]
   }
 }
