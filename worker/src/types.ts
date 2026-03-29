@@ -1,6 +1,7 @@
 export interface Env {
   DB: D1Database;
   MEDIA?: R2Bucket;
+  AUDIO_BUCKET?: R2Bucket;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_BOT_SECRET: string;
   ANTHROPIC_API_KEY?: string;

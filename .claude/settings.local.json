@@ -70,7 +70,16 @@
       "Bash(ls D:/TOEFL/MATERIALS/Answer Key* 2)",
       "Bash(API=\"https://edubot-api.edubot-leonardus.workers.dev\" echo \"=== ENRICHED TOTALS ===\" echo -n \"TOEFL iBT: \")",
       "Bash(do curl:*)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 npx wrangler pages deploy dist --project-name edubot-webapp)",
+      "mcp__Desktop_Commander__start_search",
+      "mcp__Desktop_Commander__get_more_search_results",
+      "Bash(curl -s --insecure \"https://edubot-api.edubot-leonardus.workers.dev/api/tests/question-counts?test_type=TOEFL_ITP\")",
+      "Bash(python -c \":*)",
+      "Bash(python scripts/import-itp-reading.py)",
+      "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 npx wrangler r2 bucket list)",
+      "mcp__0f611187-90f3-446a-8261-2c219425c100__r2_bucket_create",
+      "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 npx wrangler deploy)"
     ]
   }
 }

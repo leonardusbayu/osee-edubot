@@ -59,6 +59,18 @@ app.route('/api/ai-generate', aiGenRoutes);
 app.route('/api/writing', writingRoutes);
 app.route('/api/analytics', analyticsRoutes);
 
+// Serve R2 audio files
+app.get('/api/audio/:path{.+}', async (c) => {
+  const bucket = c.env.AUDIO_BUCKET;
+  if (!bucket) return c.text('R2 not configured', 500);
+  const key = c.req.param('path');
+  const obj = await bucket.get(key);
+  if (!obj) return c.text('Not found', 404);
+  return new Response(obj.body, {
+    headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=31536000', 'Access-Control-Allow-Origin': '*' },
+  });
+});
+
 // Serve frontend — proxy to Cloudflare Pages (same origin, no CORS issues)
 app.get('*', async (c) => {
   const url = new URL(c.req.url);

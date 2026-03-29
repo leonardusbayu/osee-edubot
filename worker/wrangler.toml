@@ -23,7 +23,6 @@ database_id = "d501b671-128e-4a45-9d90-74b22e6691ce"
 [triggers]
 crons = ["3 1 * * *", "7 1 * * 1"]
 
-# Uncomment after enabling R2 in dashboard:
-# [[r2_buckets]]
-# binding = "MEDIA"
-# bucket_name = "edubot-media"
+[[r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "edubot-audio"
