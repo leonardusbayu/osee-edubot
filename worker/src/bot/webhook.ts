@@ -320,7 +320,11 @@ async function handleMessage(message: any, env: Env) {
           `/settings — Ubah target & level\n` +
           `/join KODE — Gabung kelas\n` +
           `/challenge @user — Duel\n` +
-          `/role — Lihat role kamu\n` +
+          `/role — Profil + XP + badges\n` +
+          `/referral — Kode referral kamu\n` +
+          `/refer KODE — Pakai kode referral\n` +
+          `/certificate — Sertifikat latihan\n` +
+          `/tos — Syarat & ketentuan\n` +
           `/help — Pesan ini`;
 
         if (user.role === 'teacher' || user.role === 'admin') {
@@ -572,8 +576,66 @@ async function handleMessage(message: any, env: Env) {
         return;
       }
 
-      case '/role':
-        await sendMessage(env, chatId, `Role kamu: ${user.role}`);
+      case '/role': {
+        const { getOrCreateGamification, formatLevel, formatBadges } = await import('../services/commercial');
+        const gam = await getOrCreateGamification(env, user.id);
+        const badges = JSON.parse(gam.badges || '[]');
+        let msg = `Role: ${user.role}\n${formatLevel(gam.level || 1, gam.xp || 0)}\nXP: ${gam.xp || 0}\nSoal total: ${gam.total_questions || 0}`;
+        if (badges.length > 0) msg += `\nBadges: ${formatBadges(badges)}`;
+        if (gam.referral_code) msg += `\n\nKode referral kamu: ${gam.referral_code}\nBagikan ke teman untuk dapat bonus XP!`;
+        await sendMessage(env, chatId, msg);
+        return;
+      }
+
+      case '/referral': {
+        const { getOrCreateGamification } = await import('../services/commercial');
+        const g = await getOrCreateGamification(env, user.id);
+        await sendMessage(env, chatId,
+          `Kode referral kamu: ${g.referral_code}\n\n` +
+          `Bagikan ke teman! Kalau mereka daftar pakai kode kamu:\n` +
+          `- Kamu dapat +100 XP\n` +
+          `- Teman dapat +50 XP\n\n` +
+          `Referral berhasil: ${g.referral_count || 0} orang\n\n` +
+          `Caranya: teman ketik /refer ${g.referral_code} saat pertama kali pakai bot.`
+        );
+        return;
+      }
+
+      case '/refer': {
+        const code = (text.split(' ')[1] || '').trim();
+        if (!code) {
+          await sendMessage(env, chatId, 'Ketik: /refer KODE_REFERRAL');
+          return;
+        }
+        const { processReferral } = await import('../services/commercial');
+        const result = await processReferral(env, user.id, code);
+        if (result) {
+          await sendMessage(env, chatId, 'Referral berhasil! Kamu dapat +50 XP bonus.');
+        } else {
+          await sendMessage(env, chatId, 'Kode referral tidak valid atau sudah digunakan.');
+        }
+        return;
+      }
+
+      case '/certificate': {
+        // Show last test result as certificate
+        const lastResult = await env.DB.prepare(
+          "SELECT tr.*, ta.test_type FROM test_results tr JOIN test_attempts ta ON tr.attempt_id=ta.id WHERE ta.user_id=? ORDER BY tr.created_at DESC LIMIT 1"
+        ).bind(user.id).first() as any;
+        if (!lastResult) {
+          await sendMessage(env, chatId, 'Belum ada tes yang selesai. Kerjakan tes dulu untuk dapat sertifikat.');
+          return;
+        }
+        const { generateCertificate } = await import('../services/commercial');
+        const cert = await generateCertificate(env, user.id, user.name, lastResult.test_type, lastResult.total_score, lastResult.band_score || lastResult.total_score);
+        await sendMessage(env, chatId, cert);
+        return;
+      }
+
+      case '/tos':
+        const { TERMS_OF_SERVICE, acceptToS } = await import('../services/commercial');
+        await acceptToS(env, user.id);
+        await sendMessage(env, chatId, TERMS_OF_SERVICE);
         return;
     }
   }

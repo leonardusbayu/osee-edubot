@@ -46,7 +46,8 @@
       "Bash(curl -s --insecure \"https://edubot-api.edubot-leonardus.workers.dev/api/tests/question-counts?test_type=IELTS\")",
       "Bash(ls -la \"C:/Users/user/Downloads/IELTS Anas\"*.zip \"C:/Users/user/Downloads/IELTS-2026\"*.zip)",
       "Bash(unzip -o -q \"C:/Users/user/Downloads/IELTS-20260329T053052Z-1-001.zip\" -d ielts-extra)",
-      "Bash(unzip -o -q \"C:/Users/user/Downloads/IELTS Anas -20260329T053202Z-1-001.zip\" -d ielts-anas)"
+      "Bash(unzip -o -q \"C:/Users/user/Downloads/IELTS Anas -20260329T053202Z-1-001.zip\" -d ielts-anas)",
+      "Bash(/dev/null __NEW_LINE_2e23fa9831c18f3f__ curl -s --insecure \"$API/api/tests/questions/writing?question_type=write_academic_discussion&limit=2&test_type=TOEFL_IBT\")"
     ]
   }
 }

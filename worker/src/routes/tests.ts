@@ -172,8 +172,13 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
     'UPDATE test_attempts SET current_question_index = ? WHERE id = ?'
   ).bind(question_index + 1, attemptId).run();
 
-  // Spaced repetition + skill tracking
+  // Gamification: award XP
   const userId = (attempt.user_id as number) || 1;
+  try {
+    const { addXP, incrementDailyUsage } = await import('../services/commercial');
+    await addXP(c.env, userId, isCorrect ? 15 : 10, isCorrect ? 'correct_answer' : 'answer');
+    await incrementDailyUsage(c.env, userId);
+  } catch {}
 
   if (isCorrect === false) {
     try {

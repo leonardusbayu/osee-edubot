@@ -10,6 +10,7 @@ import { handleWebhook } from './bot/webhook';
 import { ttsRoutes } from './routes/tts';
 import { classRoutes } from './routes/classes';
 import { speakingRoutes } from './routes/speaking';
+import { aiGenRoutes } from './routes/ai-generate';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -52,6 +53,7 @@ app.route('/api/media', mediaRoutes);
 app.route('/api/tts', ttsRoutes);
 app.route('/api/classes', classRoutes);
 app.route('/api/speaking', speakingRoutes);
+app.route('/api/ai-generate', aiGenRoutes);
 
 // Serve frontend — proxy to Cloudflare Pages (same origin, no CORS issues)
 app.get('*', async (c) => {
@@ -145,13 +147,30 @@ async function handleCron(env: Env) {
   }
 }
 
-// Weekly leaderboard — runs Mondays at 8 AM WIB (1 AM UTC)
+// Weekly — Mondays at 8 AM WIB: leaderboard + progress reports
 async function handleWeeklyCron(env: Env) {
   try {
     const { postWeeklyLeaderboard } = await import('./services/classroom');
     await postWeeklyLeaderboard(env);
   } catch (e) {
     console.error('Leaderboard cron error:', e);
+  }
+
+  // Send weekly progress reports to all users
+  try {
+    const { generateWeeklyReport } = await import('./services/commercial');
+    const users = await env.DB.prepare('SELECT id, telegram_id, name FROM users').all();
+    for (const u of users.results as any[]) {
+      const tgId = parseInt(String(u.telegram_id).replace('.0', ''));
+      const report = await generateWeeklyReport(env, u.id, u.name);
+      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: tgId, text: report }),
+      });
+    }
+  } catch (e) {
+    console.error('Weekly report error:', e);
   }
 }
 
