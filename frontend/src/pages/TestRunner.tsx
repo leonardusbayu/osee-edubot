@@ -25,6 +25,8 @@ export default function TestRunner() {
   const [blankInputs, setBlankInputs] = useState<string[]>([]);
   const [speakingResult, setSpeakingResult] = useState<any>(null);
   const [speakingLoading, setSpeakingLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
 
   const currentQuestion = questions[currentQuestionIndex];
   const currentSectionInfo = sections.find((s) => s.id === currentSection);
@@ -168,6 +170,63 @@ export default function TestRunner() {
         blanks,  // The correct answers for each blank
         answers: c.answers || blanks,
         explanation: c.explanation || '',
+      };
+    }
+
+    if (type === 'reading_passage') {
+      // Grouped reading passage — flatten into passage display + individual questions
+      if (c.type === 'grouped_reading' && c.questions?.length > 0) {
+        const passage = stripHtml(c.passage || '');
+        const items: any[] = [];
+        for (const sq of c.questions) {
+          const opts = (sq.options || []).map((o: any) => `${o.key}. ${stripHtml(o.text || '')}`);
+          items.push({
+            type: 'multiple_choice',
+            passage,
+            question: stripHtml(sq.question_text || ''),
+            options: opts.length >= 2 ? opts : getOptions(sq),
+            correct: (sq.answers?.[0] || '').toUpperCase(),
+            explanation: stripHtml(sq.explanation || ''),
+          });
+        }
+        return { _grouped: true, items };
+      }
+      // Fallback
+      return {
+        type: 'multiple_choice',
+        passage: stripHtml(c.passage || c.passage_text || ''),
+        question: stripHtml(c.question_text || ''),
+        options: getOptions(c),
+        correct: (c.answers?.[0] || '').toUpperCase(),
+        explanation: stripHtml(c.explanation || ''),
+      };
+    }
+
+    if (type === 'error_identification') {
+      // Grouped error identification — flatten into individual questions
+      if (c.type === 'grouped_reading' && c.questions?.length > 0) {
+        const items: any[] = [];
+        for (const sq of c.questions) {
+          const opts = (sq.options || []).map((o: any) => ({ key: o.key, text: stripHtml(o.text || '') }));
+          items.push({
+            type: 'error_identification',
+            instruction: stripHtml(c.direction || 'Find the error in this sentence.'),
+            sentence: stripHtml(sq.question_text || ''),
+            portions: opts,
+            correct: (sq.answers?.[0] || '').toUpperCase(),
+            explanation: stripHtml(sq.explanation || ''),
+          });
+        }
+        return items.length === 1 ? items[0] : { _grouped: true, items };
+      }
+      // Fallback single question
+      return {
+        type: 'error_identification',
+        instruction: stripHtml(c.direction || 'Find the error in this sentence.'),
+        sentence: stripHtml(c.question_text || ''),
+        portions: (c.options || []).map((o: any) => ({ key: o.key, text: stripHtml(o.text || '') })),
+        correct: (c.answers?.[0] || '').toUpperCase(),
+        explanation: stripHtml(c.explanation || ''),
       };
     }
 
@@ -410,22 +469,29 @@ export default function TestRunner() {
     setBlankInputs([]);
     setSpeakingResult(null);
     setSpeakingLoading(false);
+    setSubmitting(false);
   }, [currentQuestionIndex, currentSection]);
 
   const handleSubmitAnswer = useCallback(async () => {
-    if (!currentSection || !currentQuestion) return;
+    if (!currentSection || !currentQuestion || submitting) return;
+    setSubmitting(true);
 
     let answerData: any = {};
+
+    const advanceWithTransition = (fn: () => void) => {
+      setTransitioning(true);
+      setTimeout(() => { fn(); setTransitioning(false); }, 150);
+    };
 
     // Listening passage — just advance, no answer to save
     if (currentQuestion.type === 'listening_passage') {
       if (currentQuestionIndex + 1 < questions.length) {
-        setQuestionIndex(currentQuestionIndex + 1);
+        advanceWithTransition(() => setQuestionIndex(currentQuestionIndex + 1));
       }
       return;
     }
 
-    if (currentQuestion.type === 'multiple_choice' || currentQuestion.type === 'listening') {
+    if (currentQuestion.type === 'multiple_choice' || currentQuestion.type === 'listening' || currentQuestion.type === 'error_identification') {
       answerData = { selected: selectedAnswer, correct_answer: currentQuestion.correct };
     } else if (currentQuestion.type === 'write_email' || currentQuestion.type === 'write_academic_discussion') {
       answerData = { text: writingText };
@@ -451,14 +517,14 @@ export default function TestRunner() {
       });
     } catch {}
 
-    // Advance
+    // Advance with transition
     if (currentQuestionIndex + 1 < questions.length) {
-      setQuestionIndex(currentQuestionIndex + 1);
+      advanceWithTransition(() => setQuestionIndex(currentQuestionIndex + 1));
     } else {
       const currentIdx = sections.findIndex((s) => s.id === currentSection);
       if (currentIdx + 1 < sections.length) {
         const nextSection = sections[currentIdx + 1].id;
-        setCurrentSection(nextSection);
+        advanceWithTransition(() => setCurrentSection(nextSection));
         try {
           await fetch(`/api/tests/attempt/${attemptId}/section/${nextSection}`, { method: 'POST' });
         } catch {}
@@ -466,7 +532,7 @@ export default function TestRunner() {
         handleFinish();
       }
     }
-  }, [selectedAnswer, writingText, sentenceOrder, currentSection, currentQuestionIndex, questions]);
+  }, [selectedAnswer, writingText, sentenceOrder, currentSection, currentQuestionIndex, questions, submitting]);
 
   async function handleFinish() {
     try { await fetch(`/api/tests/attempt/${attemptId}/finish`, { method: 'POST' }); } catch {}
@@ -586,7 +652,7 @@ export default function TestRunner() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 p-4 overflow-y-auto">
+      <div className={`flex-1 p-4 overflow-y-auto ${transitioning ? 'opacity-0' : 'opacity-100 animate-fadeIn'}`} style={{transition: 'opacity 0.15s ease'}}>
         {/* Listening passage — audio only, listen first */}
         {currentQuestion.type === 'listening_passage' && (
           <>
@@ -675,6 +741,36 @@ export default function TestRunner() {
           </>
         )}
 
+        {/* Error Identification — sentence with labeled portions */}
+        {currentQuestion.type === 'error_identification' && currentQuestion.portions && (
+          <div className="mb-4">
+            {currentQuestion.instruction && (
+              <p className="text-sm text-tg-hint mb-3">{currentQuestion.instruction}</p>
+            )}
+            {/* Full sentence */}
+            <div className="bg-tg-secondary rounded-lg p-4 mb-4">
+              <p className="text-sm leading-relaxed">{currentQuestion.sentence}</p>
+            </div>
+            {/* Tappable portion labels */}
+            <div className="grid grid-cols-2 gap-2">
+              {currentQuestion.portions.map((portion: { key: string; text: string }) => (
+                <button
+                  key={portion.key}
+                  onClick={() => setSelectedAnswer(portion.key)}
+                  className={`text-left p-3 rounded-lg border-2 transition-colors ${
+                    selectedAnswer === portion.key
+                      ? 'border-tg-button bg-tg-button/10'
+                      : 'border-tg-secondary bg-tg-secondary'
+                  }`}
+                >
+                  <span className="text-xs font-bold text-tg-button mr-1">({portion.key})</span>
+                  <span className="text-sm">{portion.text}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Multiple choice (including listening) */}
         {currentQuestion.options && (currentQuestion.type === 'multiple_choice' || currentQuestion.type === 'listening') && (
           <div className="space-y-2 mb-4">
@@ -755,7 +851,7 @@ export default function TestRunner() {
             {currentQuestion.contexts?.length > 0 && (
               <div className="space-y-3 mb-4">
                 {currentQuestion.contexts.map((ctx: any, i: number) => (
-                  <div key={i} className={`rounded-lg p-3 text-sm leading-relaxed ${
+                  <div key={i} className={`rounded-lg p-3 text-sm leading-relaxed text-gray-800 ${
                     i === 0 ? 'bg-blue-50 border border-blue-200' :
                     'bg-gray-50 border border-gray-200'
                   }`}>
@@ -911,8 +1007,8 @@ export default function TestRunner() {
       {/* Footer */}
       {!['listen_and_repeat', 'take_interview'].includes(currentQuestion.type) && (
         <div className="sticky bottom-0 bg-tg-bg border-t border-tg-secondary p-4">
-          <button onClick={handleSubmitAnswer}
-            className="w-full bg-tg-button text-tg-button-text py-3 rounded-xl font-medium disabled:opacity-50">
+          <button onClick={handleSubmitAnswer} disabled={submitting}
+            className="w-full bg-tg-button text-tg-button-text py-3 rounded-xl font-medium disabled:opacity-50 active:scale-95 transition-transform">
             {currentQuestion.type === 'listening_passage'
               ? 'Lanjut ke Soal'
               : currentQuestionIndex + 1 === questions.length
