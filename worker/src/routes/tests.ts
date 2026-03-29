@@ -292,6 +292,25 @@ testRoutes.get('/questions/:section', async (c) => {
   const limit = parseInt(c.req.query('limit') || '20');
   const offset = parseInt(c.req.query('offset') || '0');
 
+  // Adaptive difficulty: check student's skill level for this section
+  const user = await getAuthUser(c.req.raw, c.env);
+  let targetDifficulty = 3; // default medium
+  if (user?.id) {
+    try {
+      const skill = await c.env.DB.prepare(
+        'SELECT score FROM student_skills WHERE user_id = ? AND skill = ?'
+      ).bind(user.id, section === 'reading' ? 'reading_strategy' : section === 'listening' ? 'listening_strategy' : section + '_templates').first() as any;
+      if (skill) {
+        // Map 0-100 score to difficulty 1-5
+        if (skill.score >= 80) targetDifficulty = 5;
+        else if (skill.score >= 60) targetDifficulty = 4;
+        else if (skill.score >= 40) targetDifficulty = 3;
+        else if (skill.score >= 20) targetDifficulty = 2;
+        else targetDifficulty = 1;
+      }
+    } catch {}
+  }
+
   let query = `SELECT id, question_type, title, content, media_url, difficulty
                FROM test_contents
                WHERE test_type = ? AND section = ? AND status = 'published'`;
@@ -302,8 +321,9 @@ testRoutes.get('/questions/:section', async (c) => {
     params.push(questionType);
   }
 
-  query += ' ORDER BY RANDOM() LIMIT ? OFFSET ?';
-  params.push(limit, offset);
+  // Adaptive: prefer questions near target difficulty, but include some variety
+  query += ' ORDER BY ABS(difficulty - ?) ASC, RANDOM() LIMIT ? OFFSET ?';
+  params.push(targetDifficulty, limit, offset);
 
   const stmt = c.env.DB.prepare(query);
   const result = await stmt.bind(...params).all();

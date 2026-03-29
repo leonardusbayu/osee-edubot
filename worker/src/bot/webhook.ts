@@ -189,9 +189,41 @@ function adminKeyboard(webappUrl: string) {
 }
 
 export async function handleWebhook(update: any, env: Env) {
+  // Pre-checkout query — must respond OK for Telegram Payments
+  if (update.pre_checkout_query) {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerPreCheckoutQuery`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pre_checkout_query_id: update.pre_checkout_query.id, ok: true }),
+    });
+    return;
+  }
+
   try {
     if (update.message) {
-      await handleMessage(update.message, env);
+      // Handle payment events
+      if (update.message.successful_payment) {
+        const payment = update.message.successful_payment;
+        const chatId = update.message.chat.id;
+        const userId = parseInt(payment.invoice_payload.split('_')[1] || '0');
+        if (userId > 0) {
+          // Activate premium for 30 days
+          const until = new Date(Date.now() + 30 * 86400000).toISOString();
+          await env.DB.prepare('UPDATE user_gamification SET is_premium = 1, premium_until = ? WHERE user_id = ?')
+            .bind(until, userId).run();
+          await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: 'Premium aktif! Kamu sekarang punya akses unlimited selama 30 hari.' }),
+          });
+        }
+        return;
+      }
+
+      // Handle voice messages — transcribe with Whisper then process as text
+      if (update.message.voice || update.message.audio) {
+        await handleVoiceMessage(update.message, env);
+      } else {
+        await handleMessage(update.message, env);
+      }
     } else if (update.callback_query) {
       await handleCallbackQuery(update.callback_query, env);
     }
@@ -208,6 +240,63 @@ export async function handleWebhook(update: any, env: Env) {
         });
       } catch {}
     }
+  }
+}
+
+async function handleVoiceMessage(message: any, env: Env) {
+  const chatId = message.chat.id;
+  const tgUser = message.from;
+  if (!tgUser) return;
+
+  const user = await getOrCreateUser(env, tgUser);
+  const voice = message.voice || message.audio;
+  const fileId = voice.file_id;
+
+  try {
+    // Get file URL from Telegram
+    const fileResp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
+    const fileData: any = await fileResp.json();
+    const filePath = fileData.result?.file_path;
+    if (!filePath) { await sendMessage(env, chatId, 'Gagal memproses audio.'); return; }
+
+    // Download the file
+    const audioResp = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${filePath}`);
+    const audioBytes = await audioResp.arrayBuffer();
+
+    // Transcribe with Whisper
+    const formData = new FormData();
+    formData.append('file', new Blob([audioBytes], { type: 'audio/ogg' }), 'voice.ogg');
+    formData.append('model', 'whisper-1');
+    formData.append('response_format', 'text');
+
+    const whisperResp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
+      body: formData,
+    });
+
+    const transcription = (await whisperResp.text()).trim();
+
+    if (!transcription || transcription.length < 2) {
+      await sendMessage(env, chatId, 'Tidak terdeteksi suara. Coba kirim ulang.');
+      return;
+    }
+
+    // Show what was heard
+    await sendMessage(env, chatId, `Aku dengar: "${transcription}"`);
+
+    // Log cost
+    try {
+      const duration = (voice.duration || 5) / 60;
+      await env.DB.prepare('INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd, user_id) VALUES (?, ?, ?, ?, ?)')
+        .bind('openai-whisper', 'voice-input', voice.duration || 5, duration * 0.006, user.id).run();
+    } catch {}
+
+    // Process as text message
+    message.text = transcription;
+    await handleMessage(message, env);
+  } catch (e: any) {
+    await sendMessage(env, chatId, 'Gagal memproses voice message: ' + (e.message || ''));
   }
 }
 
@@ -325,7 +414,9 @@ async function handleMessage(message: any, env: Env) {
           `/refer KODE — Pakai kode referral\n` +
           `/certificate — Sertifikat latihan\n` +
           `/tos — Syarat & ketentuan\n` +
-          `/help — Pesan ini`;
+          `/premium — Upgrade ke Premium\n` +
+          `/help — Pesan ini\n\n` +
+          `Kamu juga bisa kirim voice message — aku transkripsi dan jawab!`;
 
         if (user.role === 'teacher' || user.role === 'admin') {
           helpText += `\n\nGuru:\n` +
@@ -632,11 +723,33 @@ async function handleMessage(message: any, env: Env) {
         return;
       }
 
-      case '/tos':
+      case '/tos': {
         const { TERMS_OF_SERVICE, acceptToS } = await import('../services/commercial');
         await acceptToS(env, user.id);
         await sendMessage(env, chatId, TERMS_OF_SERVICE);
         return;
+      }
+
+      case '/premium': {
+        // Send Telegram Stars invoice
+        try {
+          await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendInvoice`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              title: 'EduBot Premium — 1 Bulan',
+              description: 'Unlimited soal, Speaking evaluation, Study plan, Sertifikat, tanpa iklan.',
+              payload: `premium_${user.id}_monthly`,
+              currency: 'XTR', // Telegram Stars
+              prices: [{ label: 'Premium 1 Bulan', amount: 150 }], // 150 Stars
+            }),
+          });
+        } catch {
+          await sendMessage(env, chatId, 'Pembayaran via Telegram Stars belum tersedia di platform kamu. Hubungi WA +62 811-2647-784 untuk upgrade.');
+        }
+        return;
+      }
     }
   }
 
