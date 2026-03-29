@@ -38,7 +38,12 @@
       "Bash(mkdir -p \"D:/claude telegram bot/ielts-materials\")",
       "Bash(unzip -o -q \"C:/Users/user/Downloads/1. Basic IELTS-20260329T050255Z-1-001.zip\" -d basic)",
       "Bash(unzip -o -q \"C:/Users/user/Downloads/2. Intermediate IELTS-20260329T050255Z-1-001.zip\" -d intermediate)",
-      "Bash(unzip -o -q \"C:/Users/user/Downloads/3. Advanced IELTS-20260329T050256Z-1-001.zip\" -d advanced)"
+      "Bash(unzip -o -q \"C:/Users/user/Downloads/3. Advanced IELTS-20260329T050256Z-1-001.zip\" -d advanced)",
+      "mcp__Desktop_Commander__start_process",
+      "mcp__Desktop_Commander__get_config",
+      "Bash(pip install:*)",
+      "Bash(python3:*)",
+      "Bash(curl -s --insecure \"https://edubot-api.edubot-leonardus.workers.dev/api/tests/question-counts?test_type=IELTS\")"
     ]
   }
 }
