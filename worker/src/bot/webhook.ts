@@ -421,6 +421,7 @@ async function handleMessage(message: any, env: Env) {
         if (user.role === 'teacher' || user.role === 'admin') {
           helpText += `\n\nGuru:\n` +
             `/admin — Panel guru\n` +
+            `/agent [perintah] — AI agent (query data, kirim pesan, generate soal)\n` +
             `/broadcast — Kirim ke semua siswa\n` +
             `/addclass — Hubungkan grup ke kelas`;
         }
@@ -727,6 +728,34 @@ async function handleMessage(message: any, env: Env) {
         const { TERMS_OF_SERVICE, acceptToS } = await import('../services/commercial');
         await acceptToS(env, user.id);
         await sendMessage(env, chatId, TERMS_OF_SERVICE);
+        return;
+      }
+
+      case '/agent': {
+        if (user.role !== 'teacher' && user.role !== 'admin') {
+          await sendMessage(env, chatId, 'Hanya untuk guru/admin.');
+          return;
+        }
+        const goal = text.replace('/agent', '').trim();
+        if (!goal) {
+          await sendMessage(env, chatId,
+            'Ketik: /agent [perintah]\n\nContoh:\n' +
+            '- /agent siapa siswa paling lemah?\n' +
+            '- /agent kirim reminder ke siswa inactive\n' +
+            '- /agent buatkan 10 soal reading tentang technology\n' +
+            '- /agent berapa biaya API bulan ini?\n' +
+            '- /agent publish semua draft questions\n' +
+            '- /agent analisis performa kelas');
+          return;
+        }
+        await sendMessage(env, chatId, 'Agent sedang bekerja...');
+        try {
+          const { runAgent } = await import('../services/agent');
+          const result = await runAgent(env, user, goal);
+          await sendMessage(env, chatId, result);
+        } catch (e: any) {
+          await sendMessage(env, chatId, 'Agent error: ' + (e.message || 'unknown'));
+        }
         return;
       }
 
