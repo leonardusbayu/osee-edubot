@@ -43,7 +43,10 @@
       "mcp__Desktop_Commander__get_config",
       "Bash(pip install:*)",
       "Bash(python3:*)",
-      "Bash(curl -s --insecure \"https://edubot-api.edubot-leonardus.workers.dev/api/tests/question-counts?test_type=IELTS\")"
+      "Bash(curl -s --insecure \"https://edubot-api.edubot-leonardus.workers.dev/api/tests/question-counts?test_type=IELTS\")",
+      "Bash(ls -la \"C:/Users/user/Downloads/IELTS Anas\"*.zip \"C:/Users/user/Downloads/IELTS-2026\"*.zip)",
+      "Bash(unzip -o -q \"C:/Users/user/Downloads/IELTS-20260329T053052Z-1-001.zip\" -d ielts-extra)",
+      "Bash(unzip -o -q \"C:/Users/user/Downloads/IELTS Anas -20260329T053202Z-1-001.zip\" -d ielts-anas)"
     ]
   }
 }
