@@ -303,10 +303,14 @@ export function generateSpeakingCTA(): string {
   return ctas[randomIndex];
 }
 
-export async function postToChannel(env: Env, text: string): Promise<boolean> {
+export async function postToChannel(env: Env, text: string, contentType = 'cta'): Promise<boolean> {
   const channelId = env.TELEGRAM_BOT_TOKEN.includes('test') 
     ? '@TOEFL_IELTS_Indonesia_Test' 
     : '-1003884450070';
+
+  let messageId: string | null = null;
+  let status = 'failed';
+  let errorMsg: string | null = null;
 
   try {
     const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -321,12 +325,28 @@ export async function postToChannel(env: Env, text: string): Promise<boolean> {
     });
 
     const result = await response.json() as any;
-    if (!result.ok) {
+    if (result.ok) {
+      messageId = String(result.result?.message_id || null);
+      status = 'sent';
+    } else {
+      errorMsg = result.description || 'Unknown error';
       console.error('Channel post failed:', result);
     }
-    return result.ok === true;
-  } catch (e) {
+  } catch (e: any) {
+    errorMsg = e?.message || String(e);
     console.error('Failed to post to channel:', e);
-    return false;
   }
+
+  // Log to channel_posts for analytics
+  try {
+    await env.DB.prepare(`
+      INSERT INTO channel_posts (post_type, post_content, content_preview, message_id, sent_to_channel, status, error_message)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(contentType, text, text.substring(0, 100), messageId, channelId, status, errorMsg).run();
+  } catch (e) {
+    // Non-fatal — don't let analytics failure break posting
+    console.error('Failed to log channel post:', e);
+  }
+
+  return status === 'sent';
 }

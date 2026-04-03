@@ -13,6 +13,7 @@ import { speakingRoutes } from './routes/speaking';
 import { aiGenRoutes } from './routes/ai-generate';
 import { writingRoutes } from './routes/writing';
 import { analyticsRoutes } from './routes/analytics';
+import { channelAnalyticsRoutes } from './routes/channel-analytics';
 import { premiumRoutes } from './routes/premium';
 import { handbookRoutes } from './routes/handbook';
 
@@ -60,6 +61,7 @@ app.route('/api/speaking', speakingRoutes);
 app.route('/api/ai-generate', aiGenRoutes);
 app.route('/api/writing', writingRoutes);
 app.route('/api/analytics', analyticsRoutes);
+app.route('/api/channel-analytics', channelAnalyticsRoutes);
 app.route('/api/premium', premiumRoutes);
 app.route('/api/handbook', handbookRoutes);
 
@@ -189,12 +191,12 @@ async function handleCron(env: Env) {
   try {
     const { generateVocabularyOfTheDay, generateDailyQuiz, formatQuizPost, postToChannel } = await import('./services/contentGenerator');
     const vocab = await generateVocabularyOfTheDay(env);
-    const vocabOk = await postToChannel(env, vocab.text);
+    const vocabOk = await postToChannel(env, vocab.text, 'vocab');
     console.log('Channel vocab post:', vocabOk ? 'OK' : 'FAILED');
 
     const quiz = await generateDailyQuiz(env);
     const quizText = formatQuizPost(quiz, 'https://t.me/osee_IBT_IELTS_tutor_bot?start=quiz_channel');
-    const quizOk = await postToChannel(env, quizText);
+    const quizOk = await postToChannel(env, quizText, 'quiz');
     console.log('Channel quiz post:', quizOk ? 'OK' : 'FAILED');
   } catch (e) {
     console.error('Morning channel post error:', e);
@@ -226,8 +228,9 @@ async function handleHourlyChannelCron(env: Env) {
 
     const idx = utcHour % contentTypes.length;
     const content = await contentTypes[idx].generate();
-    const ok = await postToChannel(env, content);
-    console.log(`Channel hourly post (${contentTypes[idx].type}, UTC ${utcHour}):`, ok ? 'OK' : 'FAILED');
+    const contentType = contentTypes[idx].type as string;
+    const ok = await postToChannel(env, content, contentType);
+    console.log(`Channel hourly post (${contentType}, UTC ${utcHour}):`, ok ? 'OK' : 'FAILED');
   } catch (e) {
     console.error('Hourly channel post error:', e);
   }
@@ -240,24 +243,24 @@ async function handleEveningCron(env: Env) {
 
     // Grammar tip
     const grammarTip = await generateGrammarTip(env);
-    const tipOk = await postToChannel(env, grammarTip);
+    const tipOk = await postToChannel(env, grammarTip, 'grammar_tip');
     console.log('Channel grammar tip post:', tipOk ? 'OK' : 'FAILED');
 
     // Idiom
     const idiom = await generateIdiom(env);
-    const idiomOk = await postToChannel(env, idiom);
+    const idiomOk = await postToChannel(env, idiom, 'idiom');
     console.log('Channel idiom post:', idiomOk ? 'OK' : 'FAILED');
 
     // Student spotlight (sometimes)
     const studentSpotlight = await generateStudentSpotlight(env);
     if (studentSpotlight) {
-      const spotlightOk = await postToChannel(env, studentSpotlight);
+      const spotlightOk = await postToChannel(env, studentSpotlight, 'spotlight');
       console.log('Channel spotlight post:', spotlightOk ? 'OK' : 'FAILED');
     }
 
     // Promo CTA
     const cta = generatePromoCTA();
-    const ctaOk = await postToChannel(env, cta);
+    const ctaOk = await postToChannel(env, cta, 'cta');
     console.log('Channel CTA post:', ctaOk ? 'OK' : 'FAILED');
   } catch (e) {
     console.error('Evening channel post error:', e);
