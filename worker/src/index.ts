@@ -13,6 +13,8 @@ import { speakingRoutes } from './routes/speaking';
 import { aiGenRoutes } from './routes/ai-generate';
 import { writingRoutes } from './routes/writing';
 import { analyticsRoutes } from './routes/analytics';
+import { premiumRoutes } from './routes/premium';
+import { handbookRoutes } from './routes/handbook';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -27,7 +29,7 @@ app.use('/api/*', cors({
     return allowed.includes(origin) ? origin : '';
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Telegram-User-Id'],
   credentials: true,
 }));
 
@@ -58,6 +60,8 @@ app.route('/api/speaking', speakingRoutes);
 app.route('/api/ai-generate', aiGenRoutes);
 app.route('/api/writing', writingRoutes);
 app.route('/api/analytics', analyticsRoutes);
+app.route('/api/premium', premiumRoutes);
+app.route('/api/handbook', handbookRoutes);
 
 // Serve R2 audio files
 app.get('/api/audio/:path{.+}', async (c) => {
@@ -116,8 +120,19 @@ async function handleCron(env: Env) {
     for (const user of users.results as any[]) {
       const tgId = parseInt(String(user.telegram_id).replace('.0', ''));
       const progress = Math.round((user.current_day / user.total_days) * 100);
+      const daysLeft = user.total_days - user.current_day;
 
-      const message = `Selamat pagi, ${user.name}!\n\nHari ${user.current_day + 1}/${user.total_days} study plan kamu (${progress}% selesai).\n\nKetik /today untuk lihat pelajaran hari ini, atau tap "Belajar" untuk mulai latihan.`;
+      const greetings = [
+        `Pagi, ${user.name}! ☀️`,
+        `Hei ${user.name}! 👋`,
+        `Morning, ${user.name}! ☕`,
+        `Rise and shine, ${user.name}! 🌅`,
+      ];
+      const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+
+      const progressBar = '🟩'.repeat(Math.round(progress / 10)) + '⬜'.repeat(10 - Math.round(progress / 10));
+
+      const message = `${greeting}\n\n${progressBar} ${progress}%\nDay ${user.current_day + 1} of ${user.total_days} — tinggal ${daysLeft} hari lagi!\n\nSiap belajar? Ketik /today yuk!`;
 
       await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
@@ -136,12 +151,20 @@ async function handleCron(env: Env) {
 
     for (const user of srUsers.results as any[]) {
       const tgId = parseInt(String(user.telegram_id).replace('.0', ''));
+      const nudges = [
+        `Ingat: tanpa review, otak kamu lupa 20% materi kemarin!`,
+        `Review itu cuma 5 menit, tapi efeknya tahan berminggu-minggu!`,
+        `Mumpung masih inget, langsung review yuk!`,
+        `Makin sering review, makin nempel di otak!`,
+      ];
+      const nudge = nudges[Math.floor(Math.random() * nudges.length)];
+
       await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: tgId,
-          text: `Kamu punya ${user.due_count} item yang perlu di-review. Ketik /review untuk mulai.\n\nIngat: tanpa review, otak kamu lupa 20% materi kemarin!`,
+          text: `Ada ${user.due_count} soal yang perlu kamu review nih! Ketik /review untuk mulai. 🧠\n\n${nudge}`,
         }),
       });
     }
@@ -160,6 +183,52 @@ async function handleCron(env: Env) {
 
   } catch (e) {
     console.error('Cron error:', e);
+  }
+
+  // Post to public channel - Morning (8 AM WIB = 1 AM UTC)
+  try {
+    const { generateVocabularyOfTheDay, generateDailyQuiz, formatQuizPost, postToChannel } = await import('./services/contentGenerator');
+    const vocab = await generateVocabularyOfTheDay(env);
+    const vocabOk = await postToChannel(env, vocab.text);
+    console.log('Channel vocab post:', vocabOk ? 'OK' : 'FAILED');
+
+    const quiz = await generateDailyQuiz(env);
+    const quizText = formatQuizPost(quiz, 'https://t.me/osee_IBT_IELTS_tutor_bot?start=quiz_channel');
+    const quizOk = await postToChannel(env, quizText);
+    console.log('Channel quiz post:', quizOk ? 'OK' : 'FAILED');
+  } catch (e) {
+    console.error('Morning channel post error:', e);
+  }
+}
+
+// Evening — 6 PM WIB (11 AM UTC): Grammar tip + Idiom + CTA
+async function handleEveningCron(env: Env) {
+  try {
+    const { generateGrammarTip, generateIdiom, generateStudentSpotlight, generatePromoCTA, postToChannel } = await import('./services/contentGenerator');
+
+    // Grammar tip
+    const grammarTip = await generateGrammarTip(env);
+    const tipOk = await postToChannel(env, grammarTip);
+    console.log('Channel grammar tip post:', tipOk ? 'OK' : 'FAILED');
+
+    // Idiom
+    const idiom = await generateIdiom(env);
+    const idiomOk = await postToChannel(env, idiom);
+    console.log('Channel idiom post:', idiomOk ? 'OK' : 'FAILED');
+
+    // Student spotlight (sometimes)
+    const studentSpotlight = await generateStudentSpotlight(env);
+    if (studentSpotlight) {
+      const spotlightOk = await postToChannel(env, studentSpotlight);
+      console.log('Channel spotlight post:', spotlightOk ? 'OK' : 'FAILED');
+    }
+
+    // Promo CTA
+    const cta = generatePromoCTA();
+    const ctaOk = await postToChannel(env, cta);
+    console.log('Channel CTA post:', ctaOk ? 'OK' : 'FAILED');
+  } catch (e) {
+    console.error('Evening channel post error:', e);
   }
 }
 
@@ -188,6 +257,134 @@ async function handleWeeklyCron(env: Env) {
   } catch (e) {
     console.error('Weekly report error:', e);
   }
+
+  // Send weekly teacher report to all teachers/admins
+  try {
+    const teachers = await env.DB.prepare(
+      "SELECT DISTINCT u.telegram_id, u.name FROM users u WHERE u.role IN ('teacher', 'admin')"
+    ).all();
+    for (const t of teachers.results as any[]) {
+      const tgId = parseInt(String(t.telegram_id).replace('.0', ''));
+      if (!tgId) continue;
+      const report = await generateTeacherWeeklyReport(env);
+      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: tgId, text: report }),
+      });
+    }
+  } catch (e) {
+    console.error('Teacher weekly report error:', e);
+  }
+}
+
+// Hourly — cancel expired payment requests
+async function handlePaymentExpiryCron(env: Env) {
+  try {
+    // Cancel pending payments that have expired
+    const result = await env.DB.prepare(
+      `UPDATE payment_requests 
+       SET status = 'expired' 
+       WHERE status = 'pending' AND expires_at < datetime('now')`
+    ).run();
+
+    if (result.meta?.changes > 0) {
+      console.log(`Cancelled ${result.meta.changes} expired payment requests`);
+    }
+  } catch (e) {
+    console.error('Payment expiry cron error:', e);
+  }
+}
+
+// Generate weekly report for teachers (class overview)
+async function generateTeacherWeeklyReport(env: Env): Promise<string> {
+  const today = new Date();
+  const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const weekAgoStr = weekAgo.toISOString();
+
+  // Get total students
+  const totalStudents = await env.DB.prepare(
+    "SELECT COUNT(*) as count FROM users WHERE role = 'student'"
+  ).first() as any;
+
+  // Get active students this week
+  const activeStudents = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT ta.user_id) as count
+     FROM test_attempts ta
+     JOIN attempt_answers aa ON ta.id = aa.attempt_id
+     WHERE aa.submitted_at >= ?`
+  ).bind(weekAgoStr).first() as any;
+
+  // Get total questions answered this week
+  const weeklyQuestions = await env.DB.prepare(
+    `SELECT COUNT(*) as count FROM attempt_answers WHERE submitted_at >= ?`
+  ).bind(weekAgoStr).first() as any;
+
+  // Get weekly accuracy
+  const weeklyAccuracy = await env.DB.prepare(
+    `SELECT
+       SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct,
+       COUNT(*) as total
+     FROM attempt_answers
+     WHERE submitted_at >= ?`
+  ).bind(weekAgoStr).first() as any;
+
+  // Get top improvers (users who completed a test this week vs last week)
+  const topStudents = await env.DB.prepare(
+    `SELECT u.name, u.telegram_id, COUNT(aa.id) as questions
+     FROM attempt_answers aa
+     JOIN test_attempts ta ON aa.attempt_id = ta.id
+     JOIN users u ON ta.user_id = u.id
+     WHERE aa.submitted_at >= ?
+     GROUP BY u.id
+     ORDER BY questions DESC
+     LIMIT 5`
+  ).bind(weekAgoStr).all();
+
+  // Get class breakdown by target_test
+  const classBreakdown = await env.DB.prepare(
+    `SELECT target_test, COUNT(*) as count FROM users
+     WHERE role = 'student' AND target_test IS NOT NULL
+     GROUP BY target_test`
+  ).all();
+
+  // Get weekly challenges count
+  const challengesCount = await env.DB.prepare(
+    `SELECT COUNT(*) as count FROM analytics WHERE event = 'challenge_sent' AND created_at >= ?`
+  ).bind(weekAgoStr).first() as any;
+
+  const accuracyRate = weeklyAccuracy.total > 0
+    ? Math.round((weeklyAccuracy.correct / weeklyAccuracy.total) * 100)
+    : 0;
+
+  let report = `📊 *Weekly Teacher Report*\n━━━━━━━━━━━━━━━━━━━━\n`;
+  report += `📅 ${today.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}\n\n`;
+
+  report += `*Overall Stats*\n`;
+  report += `👥 Total Students: ${totalStudents?.count || 0}\n`;
+  report += `✅ Active This Week: ${activeStudents?.count || 0}\n`;
+  report += `📝 Questions Answered: ${weeklyQuestions?.count || 0}\n`;
+  report += `🎯 Weekly Accuracy: ${accuracyRate}%\n`;
+  report += `⚔️ Challenges Sent: ${challengesCount?.count || 0}\n\n`;
+
+  report += `*Class Breakdown*\n`;
+  for (const c of classBreakdown.results as any[]) {
+    const emoji = c.target_test === 'TOEFL_IBT' ? '📝' :
+                  c.target_test === 'IELTS' ? '🎓' :
+                  c.target_test === 'TOEFL_ITP' ? '📋' :
+                  c.target_test === 'TOEIC' ? '💼' : '📌';
+    report += `${emoji} ${c.target_test}: ${c.count} students\n`;
+  }
+
+  report += `\n*Top Active Students*\n`;
+  for (const s of topStudents.results as any[]) {
+    report += `🏆 ${s.name}: ${s.questions} questions\n`;
+  }
+
+  report += `\n━━━━━━━━━━━━━━━━━━━━\n`;
+  report += `Export data: /admin → Students → Export CSV`;
+
+  return report;
 }
 
 export default {
@@ -196,7 +393,14 @@ export default {
     // Check which cron triggered
     if (event.cron === '7 1 * * 1') {
       ctx.waitUntil(handleWeeklyCron(env));
+    } else if (event.cron === '0 11 * * *') {
+      // Evening channel post (6 PM WIB)
+      ctx.waitUntil(handleEveningCron(env));
+    } else if (event.cron === '30 * * * *') {
+      // Hourly — cancel expired payments
+      ctx.waitUntil(handlePaymentExpiryCron(env));
     } else {
+      // Morning cron (8 AM WIB) + channel morning post
       ctx.waitUntil(handleCron(env));
     }
   },
