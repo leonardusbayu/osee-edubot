@@ -291,6 +291,18 @@ export function generatePromoCTA(): string {
   return ctas[randomIndex];
 }
 
+export function generateSpeakingCTA(): string {
+  const ctas = [
+    `🗣️ Tahu nggak? Bagian Speaking TOEFL/IELTS yang paling bikin orang gugup.\n\nPasalnya, lo nggak punya guru yang bisa koreksi pronunciation lo.\n\nDi EduBot, lo bisa latihan Speaking dengan evaluasi AI — tau persis gimana cara ngomong yang bener.\n\nCoba gratis! 👉 https://t.me/osee_IBT_IELTS_tutor_bot?start=promo`,
+    `🎙️朗读 atau Interview Speaking — lo pilih.\n\nDua-duanya ada evaluasi AI yang kasih tahu lo persis bagian mana yang perlu diperbaiki.\n\nKenapa pronunciation lo belum bisa di atas Band 4? Biasanya masalahnya di vowel sounds atau word stress.\n\nCek sekarang! 👉 https://t.me/osee_IBT_IELTS_tutor_bot?start=promo`,
+    `💬 Di EduBot, Speaking practice itu bukan cuma "catat band score."\n\nSetiap jawaban lo dinilai oleh AI: pronunciation, fluency, AND comprehension.\n\nBaru nemu platform yang nerjemahin "lo salah pronunciation di kata ini" dengan spesifik.\n\nMulai gratis! 👉 https://t.me/osee_IBT_IELTS_tutor_bot?start=promo`,
+    `🗣️ Indonesian accent + TOEFL Speaking = tantangan terbesar.\n\nTapi kalau tau exactly apa yang salah, gampang diperbaiki.\n\nEduBot AI kasih feedback per kata — bukan cuma skor, tapi INI yang harus lo improve.\n\nCoba sekarang 👉 https://t.me/osee_IBT_IELTS_tutor_bot?start=promo`,
+  ];
+
+  const randomIndex = Math.floor(Math.random() * ctas.length);
+  return ctas[randomIndex];
+}
+
 export async function postToChannel(env: Env, text: string): Promise<boolean> {
   const channelId = env.TELEGRAM_BOT_TOKEN.includes('test') 
     ? '@TOEFL_IELTS_Indonesia_Test' 

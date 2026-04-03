@@ -827,9 +827,10 @@ async function handleMessage(message: any, env: Env) {
             `🔒 *Mini App Premium*\n\n` +
             `Batas harian tercapai!\n\n` +
             `📊 Hari ini: ${access.used_today}/${access.daily_limit} soal\n` +
-            `🎁 Bonus dari referral: ${access.bonus_quota} soal\n\n` +
+            `🎁 Bonus dari referral: ${access.bonus_quota} soal\n` +
             `⏰ Reset otomatis jam 00:00 WIB\n\n` +
-            `⬆️ *Upgrade ke Premium untuk akses unlimited!*`,
+            `🗣️ Premium = Speaking practice + unlimited soal\n` +
+            `⬆️ Upgrade ke Premium untuk akses penuh!`,
             {
               inline_keyboard: [
                 [{ text: '⭐ Upgrade Premium', callback_data: 'buy_stars' }],
@@ -844,14 +845,16 @@ async function handleMessage(message: any, env: Env) {
         if (!access.is_premium && access.allowed) {
           // Free user with remaining quota
           await sendMessage(env, chatId,
-            `📝 *Practice Test*\n\n` +
-            `📊 Sisa harian: ${access.remaining} soal hari ini\n` +
+            `📝 *Practice Test + Speaking*\n\n` +
+            `📊 Sisa harian: ${access.remaining} soal\n` +
             `${access.bonus_quota > 0 ? `🎁 Bonus referral: ${access.bonus_quota} soal\n` : ''}` +
             `⏰ Reset jam 00:00 WIB\n\n` +
-            `Buka aplikasi untuk mulai latihan soal.`,
+            `🗣️ Premium: Speaking practice dengan evaluasi AI.\n` +
+            `📖 Reading, Listening, Writing — termasuk free!\n\n` +
+            `Buka aplikasi untuk mulai.`,
             {
               inline_keyboard: [
-                [{ text: '📝 Mulai Latihan Tes', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${user.telegram_id}` } }],
+                [{ text: '📝 Mulai Practice Test', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${user.telegram_id}` } }],
                 [{ text: '⭐ Upgrade Premium', callback_data: 'buy_stars' }],
               ],
             }
@@ -861,12 +864,15 @@ async function handleMessage(message: any, env: Env) {
 
         // Premium user
         await sendMessage(env, chatId,
-          `📝 *Practice Test*\n\n` +
+          `📝 *Practice Test + Speaking*\n\n` +
           `👑 Premium Access — Unlimited\n\n` +
-          `Buka aplikasi untuk mulai latihan soal. Pilih section yang ingin kamu kerjakan.`,
+          `🗣️ *Speaking Practice* — Coba evaluasi AI untuk pronunciation & fluency!\n` +
+          `📝 Reading, Listening, Writing — semua unlimited.\n\n` +
+          `Buka aplikasi untuk mulai.`,
           {
             inline_keyboard: [
-              [{ text: '📝 Mulai Latihan Tes', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${user.telegram_id}` } }],
+              [{ text: '📝 Mulai Practice Test', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${user.telegram_id}` } }],
+              [{ text: '🗣️ Speaking Practice', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${user.telegram_id}&section=speaking` } }],
               [{ text: '📖 Belajar Topik', callback_data: 'cat_practice' }],
             ],
           }

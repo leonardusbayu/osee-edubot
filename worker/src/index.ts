@@ -209,13 +209,16 @@ async function handleHourlyChannelCron(env: Env) {
       generateIdiom,
       generateVocabularyOfTheDay,
       generatePromoCTA,
+      generateSpeakingCTA,
       postToChannel,
     } = await import('./services/contentGenerator');
 
     // Rotate content based on UTC hour (WIB = UTC+7, so UTC hour +7 = WIB hour)
+    // 5 content types × 4 hour cycle = 20 hours coverage, slight overlap at top of hour
     const utcHour = new Date().getUTCHours();
     const contentTypes = [
       { type: 'grammar_tip', generate: () => generateGrammarTip(env) },
+      { type: 'speaking_cta', generate: () => generateSpeakingCTA() },
       { type: 'idiom', generate: () => generateIdiom(env) },
       { type: 'vocab', generate: () => generateVocabularyOfTheDay(env).then(v => v.text) },
       { type: 'cta', generate: () => generatePromoCTA() },
