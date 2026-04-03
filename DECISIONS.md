@@ -219,4 +219,42 @@
 **Watch out for:**
 - `channel_referrals` table is created but not wired up yet — referral signup flow needs to write to it
 - No cost tracking yet — OpenAI spend per post is not recorded
+
+---
+
+## 2026-04-03 — Vision Expanded: All Four Test Types + osee.co.id Content Hub
+
+**Changed:** `VISION.md`, `worker/src/services/contentGenerator.ts`
+
+**Why:** The original vision focused narrowly on TOEFL iBT and IELTS. The user clarified the real scope: all four test types (TOEFL iBT, IELTS, TOEFL ITP, TOEIC) equally, serving students at any starting level, with improvement tied to real market outcomes (scholarship, jobs, university admission). The channel and osee.co.id blog should be the primary content differentiation — not generic tips, but specific, actionable, Indonesian-learner-targeted content.
+
+**Details:**
+
+VISION.md updates:
+- "From beginner to Band 7+" — any starting level, any target band
+- All four test types served equally (not just TOEFL iBT as flagship)
+- Success metrics tied to real outcomes: scholarship acceptance, job qualification
+- 3,000 premium subscribers (was 1,000)
+- 20,000 channel followers + 50+ osee.co.id blog articles for SEO
+- Channel differentiated through value and links, not generic tips
+
+contentGenerator.ts rewrite:
+- Every post links to `https://osee.co.id/blog/[slug]` articles — driving SEO and deeper reading
+- Test-type-aware vocabulary rotation (all 4 types covered in examples and context)
+- Vocab: 3 words per post, each with TOEFL/Indonesian context + article deep-dive
+- Grammar tips: 5 comprehensive tips targeting TOEFL ITP/IBT/IELTS specifically
+- Idioms: 10 idioms with natural English usage + speaking/writing relevance
+- Quiz: 8 questions covering all test types, with rich explanations
+- Student spotlight: shows real scores + links to osee.co.id success stories article
+- Speaking CTA: 4 Indonesian-accent-focused speaking practice CTAs
+- Promo CTA: 4 CTAs mentioning specific test types
+- `disable_web_page_preview: false` — Telegram now shows link previews for osee.co.id
+
+**Note:** osee.co.id blog slugs in contentGenerator.ts are placeholders — need to be filled in as articles are published.
+
+**Watch out for:**
+- Channel content quality depends on osee.co.id article volume (need 50+ articles to match the vision)
+- All slug URLs in posts are placeholders — broken links if articles aren't published
+- Image generation API (DALL-E or similar) not yet integrated — visuals in posts are text-only until then
+- Need to expand handbook, /start, and bot description to cover all 4 test types equally
 - The admin test-post endpoint calls `postToChannel` but doesn't verify the result before returning
