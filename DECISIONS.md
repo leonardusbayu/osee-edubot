@@ -150,3 +150,73 @@
 
 **Watch out for:**
 - No explicit "trial used" flag — if a user creates a second account, they get another trial
+
+---
+
+## 2026-04-03 — Explanation Enrichment Pipeline
+
+**Changed:** `scripts/enrich-explanations.ts`, `frontend/src/pages/TestRunner.tsx`
+
+**Why:** Most imported questions have empty explanations (`'explanation': ''`), which makes the newly-added explanation UI feature feel hollow. Students get blank "💡 Penjelasan:" banners instead of learning why they were wrong.
+
+**Details:**
+- Built `scripts/enrich-explanations.ts` — a one-time GPT-4 pipeline that:
+  - Queries all `test_contents` with empty explanations
+  - Generates Indonesian-language explanations via GPT-4
+  - Backfills the `content.explanation` field
+  - Rate-limits to 1 req/sec to control OpenAI costs
+  - Can be re-run to handle new questions
+- Added UI guard: explanation banner only shows if `explanation.trim().length > 5`
+
+**Rejected alternatives:**
+- Generate explanations on-the-fly (lazy generation) — rejected; too slow, costs per request
+- Ask teachers to write manually — rejected; too slow at scale
+
+**Watch out for:**
+- Running the script will cost OpenAI credits — estimate ~$0.01-0.02 per question at GPT-4o-mini prices
+- Some questions have grouped_reading format — explanations nested inside `content.questions[i].explanation`, not at top level
+- Need to re-run after adding new questions via `/ai-generate`
+
+---
+
+## 2026-04-03 — Speaking as the Moat
+
+**Changed:** `worker/src/services/contentGenerator.ts`, `worker/src/index.ts`, `worker/src/bot/webhook.ts`
+
+**Why:** VISION.md identifies speaking evaluation trained on Indonesian-accented English as the moat, but it's buried. Channel posts and `/test` command never mention it. The funnel converts on "more questions" instead of "your pronunciation is fixable."
+
+**Details:**
+- Added `generateSpeakingCTA()` — 4 Indonesian-language speaking-focused CTAs
+- Hourly channel rotation expanded to 5 types: grammar_tip, speaking_cta, idiom, vocab, cta
+- `/test` command premium users: "🗣️ Speaking Practice" button added
+- `/test` command free users: speaking mentioned as premium benefit
+- `/test` command limit-reached: "Premium = Speaking practice" as upgrade hook
+
+**Watch out for:**
+- Speaking CTA might not resonate if users haven't tried speaking practice yet
+- Could A/B test speaking CTAs vs generic CTAs to measure referral lift
+- The speaking pipeline latency needs to stay under 5 seconds (VISION.md goal) — currently it can be 8-10s
+
+---
+
+## 2026-04-03 — Channel Analytics
+
+**Changed:** `worker/src/routes/channel-analytics.ts`, `worker/src/services/contentGenerator.ts`, `worker/src/index.ts`
+
+**Why:** Flying blind on the channel. 6,000+ followers, hourly posts, but zero visibility into what content drives signups or what the OpenAI content generation costs.
+
+**Details:**
+- New API route `GET /api/channel-analytics/summary` — posts by type, success rate, referral sources, last 7-30 days
+- `GET /api/channel-analytics/posts` — recent posts with status and error messages
+- `GET /api/channel-analytics/referrals` — referral breakdown by context
+- `POST /api/channel-analytics/test-post` — admin endpoint to manually trigger a test post
+- `postToChannel()` now logs every post to `channel_posts` table: type, content, message_id, status, error_message
+- Tables: `channel_posts` (existing + altered), `channel_referrals`, `channel_hourly_stats`
+- Teacher/admin role required for all endpoints
+
+**Note:** `channel_posts` table existed from a prior uncommitted migration attempt — schema uses `post_type`/`post_content` instead of `content_type`/`content_preview`. New columns added via ALTER.
+
+**Watch out for:**
+- `channel_referrals` table is created but not wired up yet — referral signup flow needs to write to it
+- No cost tracking yet — OpenAI spend per post is not recorded
+- The admin test-post endpoint calls `postToChannel` but doesn't verify the result before returning
