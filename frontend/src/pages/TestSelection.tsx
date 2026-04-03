@@ -1,11 +1,35 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTestStore } from '../stores/test';
+import { authedFetch } from '../api/authedFetch';
+
+interface QuotaInfo {
+  allowed: boolean;
+  is_premium: boolean;
+  daily_limit: number;
+  used_today: number;
+  bonus_quota: number;
+  remaining: number;
+  reset_at: string;
+}
 
 interface QuestionCount {
   section: string;
   question_type: string;
   count: number;
+}
+
+interface TestInfo {
+  test_type: string;
+  display_name: string;
+  description: string;
+  total_duration_minutes: number;
+  sections: { id: string; name: string; duration_minutes: number }[];
+}
+
+interface AvailableResponse {
+  tests: TestInfo[];
+  quota: QuotaInfo | null;
 }
 
 const SECTION_INFO: Record<string, { icon: string; name: string; color: string; desc: string }> = {
@@ -31,7 +55,9 @@ const QUESTION_TYPE_LABELS: Record<string, string> = {
 };
 
 export default function TestSelection() {
+  const [tests, setTests] = useState<TestInfo[]>([]);
   const [counts, setCounts] = useState<QuestionCount[]>([]);
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,16 +66,35 @@ export default function TestSelection() {
   const [testType, setTestType] = useState<string>('TOEFL_IBT');
   const navigate = useNavigate();
   const { startTest } = useTestStore();
+  const [searchParams] = useSearchParams();
 
   useEffect(() => {
-    loadCounts();
+    loadData();
   }, [testType]);
 
-  async function loadCounts() {
+  useEffect(() => {
+    if (searchParams.get('limit_reached') === '1') {
+      setError('Batas harian tercapai! Upgrade ke premium untuk akses unlimited.');
+    }
+  }, [searchParams]);
+
+  async function loadData() {
+    setLoading(true);
     try {
-      const response = await fetch(`/api/tests/question-counts?test_type=${testType}`);
-      if (response.ok) {
-        setCounts(await response.json());
+      const [testsRes, countsRes] = await Promise.all([
+        authedFetch('/api/tests/available'),
+        authedFetch(`/api/tests/question-counts?test_type=${testType}`),
+      ]);
+
+      if (testsRes.ok) {
+        const data: AvailableResponse = await testsRes.json();
+        setTests(data.tests || []);
+        if (data.quota) {
+          setQuota(data.quota);
+        }
+      }
+      if (countsRes.ok) {
+        setCounts(await countsRes.json());
       }
     } catch {}
     setLoading(false);
@@ -67,16 +112,24 @@ export default function TestSelection() {
     setStarting('full');
     setError(null);
     try {
-      const response = await fetch('/api/tests/start', {
+      const response = await authedFetch('/api/tests/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ test_type: testType }),
       });
+
+      const data = await response.json();
+
       if (!response.ok) {
-        setError('Gagal memulai tes');
+        if (data.code === 'LIMIT_REACHED') {
+          setError('Batas harian tercapai! Upgrade ke premium untuk akses unlimited.');
+          setQuota(data.quota);
+        } else {
+          setError(data.error || 'Gagal memulai tes');
+        }
         return;
       }
-      const data = await response.json();
+
       startTest(data.attempt_id, data.test_type, data.sections, data.current_section);
       navigate(`/test/${data.attempt_id}`);
     } catch {
@@ -90,7 +143,7 @@ export default function TestSelection() {
     setStarting(section + (questionType || ''));
     setError(null);
     try {
-      const response = await fetch('/api/tests/start', {
+      const response = await authedFetch('/api/tests/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -99,11 +152,19 @@ export default function TestSelection() {
           question_type: questionType || undefined,
         }),
       });
+
+      const data = await response.json();
+
       if (!response.ok) {
-        setError('Gagal memulai latihan');
+        if (data.code === 'LIMIT_REACHED') {
+          setError('Batas harian tercapai! Upgrade ke premium untuk akses unlimited.');
+          setQuota(data.quota);
+        } else {
+          setError(data.error || 'Gagal memulai latihan');
+        }
         return;
       }
-      const data = await response.json();
+
       startTest(data.attempt_id, data.test_type, data.sections, data.current_section, data.question_type);
       navigate(`/test/${data.attempt_id}`);
     } catch {
@@ -113,10 +174,76 @@ export default function TestSelection() {
     }
   }
 
+  function formatResetTime(isoString: string): string {
+    if (!isoString) return '00:00 WIB';
+    const d = new Date(isoString);
+    const wib = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+    return `${wib.getHours().toString().padStart(2, '0')}:${wib.getMinutes().toString().padStart(2, '0')} WIB`;
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-tg-button"></div>
+      </div>
+    );
+  }
+
+  // Show locked screen if quota exceeded
+  if (quota && !quota.allowed && !quota.is_premium) {
+    return (
+      <div className="p-4 max-w-lg mx-auto">
+        <div className="text-center mb-8 mt-8">
+          <div className="text-6xl mb-4">🔒</div>
+          <h1 className="text-2xl font-bold mb-2">Mini App Premium</h1>
+          <p className="text-tg-hint">Akses unlimited ke semua soal latihan</p>
+        </div>
+
+        <div className="bg-tg-secondary rounded-xl p-4 mb-6">
+          <h2 className="font-semibold mb-3">📊 Quota Hari Ini</h2>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-tg-hint">Soal digunakan</span>
+              <span className="font-medium">{quota.used_today}/{quota.daily_limit}</span>
+            </div>
+            {quota.bonus_quota > 0 && (
+              <div className="flex justify-between">
+                <span className="text-tg-hint">Bonus referral</span>
+                <span className="font-medium text-green-500">+{quota.bonus_quota}</span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-tg-hint">Reset</span>
+              <span className="font-medium">{formatResetTime(quota.reset_at)}</span>
+            </div>
+          </div>
+          <div className="mt-3 bg-tg-bg rounded-full h-2">
+            <div
+              className="bg-tg-button rounded-full h-2 transition-all"
+              style={{ width: `${Math.min(100, (quota.used_today / quota.daily_limit) * 100)}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="space-y-3 mb-6">
+          <a
+            href="https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=premium"
+            className="block w-full bg-gradient-to-r from-yellow-400 to-orange-500 text-black font-bold py-4 rounded-xl text-center"
+          >
+            ⭐ Upgrade Premium
+          </a>
+          <button
+            onClick={() => navigate('/referral')}
+            className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-xl text-center"
+          >
+            🎁 Undang Teman — Dapat Bonus Soal
+          </button>
+        </div>
+
+        <div className="text-center text-sm text-tg-hint">
+          <p>Premium = Akses unlimited + AI Tutor + Speaking Practice</p>
+          <p className="mt-1">Mulai dari Rp 99.000/bulan</p>
+        </div>
       </div>
     );
   }
@@ -129,7 +256,7 @@ export default function TestSelection() {
     return (
       <div className="p-4 max-w-lg mx-auto">
         <button onClick={() => setSelectedSection(null)} className="text-tg-button text-sm mb-4">
-          &larr; Kembali
+          ← Kembali
         </button>
 
         <div className="flex items-center gap-3 mb-4">
@@ -140,6 +267,16 @@ export default function TestSelection() {
           </div>
         </div>
 
+        {quota && !quota.is_premium && (
+          <div className="bg-tg-secondary rounded-lg p-3 mb-4 text-sm">
+            <span className="text-tg-hint">Sisa harian: </span>
+            <span className="font-semibold text-tg-button">{quota.remaining} soal</span>
+            {quota.bonus_quota > 0 && (
+              <span className="text-green-500 ml-2">+{quota.bonus_quota} bonus</span>
+            )}
+          </div>
+        )}
+
         <p className="text-sm text-tg-hint mb-4">
           {getTotalForSection(selectedSection)} soal tersedia
         </p>
@@ -148,7 +285,6 @@ export default function TestSelection() {
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">{error}</div>
         )}
 
-        {/* Practice all in this section */}
         <button
           onClick={() => handleStartSection(selectedSection)}
           disabled={!!starting}
@@ -157,7 +293,6 @@ export default function TestSelection() {
           {starting === selectedSection ? 'Memulai...' : `Latihan Semua ${info.name} (10 soal acak)`}
         </button>
 
-        {/* By question type */}
         <h2 className="font-semibold text-sm text-tg-hint mb-2">Pilih Tipe Soal:</h2>
         <div className="space-y-2">
           {sectionCounts.map((qc) => (
@@ -186,7 +321,26 @@ export default function TestSelection() {
   // Main menu
   return (
     <div className="p-4 max-w-lg mx-auto">
-      {/* Test Type Selector */}
+      {quota && !quota.is_premium && (
+        <div className="bg-gradient-to-r from-tg-button/20 to-yellow-500/10 rounded-xl p-3 mb-4 border border-tg-button/20">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm font-medium">📊 Quota Hari Ini</span>
+            <span className="text-sm font-semibold text-tg-button">
+              {quota.remaining}/{quota.daily_limit} soal
+            </span>
+          </div>
+          <div className="bg-tg-bg rounded-full h-2">
+            <div
+              className="bg-tg-button rounded-full h-2 transition-all"
+              style={{ width: `${Math.min(100, (quota.used_today / quota.daily_limit) * 100)}%` }}
+            />
+          </div>
+          {quota.bonus_quota > 0 && (
+            <p className="text-xs text-green-500 mt-1">🎁 Bonus: +{quota.bonus_quota} soal dari referral</p>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-2 mb-4">
         <button
           onClick={() => { setTestType('TOEFL_IBT'); setSelectedSection(null); }}
@@ -202,7 +356,7 @@ export default function TestSelection() {
         </button>
         <button
           onClick={() => { setTestType('TOEIC'); setSelectedSection(null); }}
-          className={`flex-1 py-2 rounded-lg font-medium text-sm ${testType === 'TOEIC' ? 'bg-tg-button text-tg-button-text' : 'bg-tg-secondary text-tg-text'}`}
+          className={`flex-1 py-2 rounded-lg font-medium text-sm ${testType === 'TOEFL_ITP' ? 'bg-tg-button text-tg-button-text' : 'bg-tg-secondary text-tg-text'}`}
         >
           🏢 TOEIC
         </button>
@@ -224,11 +378,16 @@ export default function TestSelection() {
       }</h1>
       <p className="text-tg-hint text-sm mb-6">Pilih mode latihan</p>
 
+      {quota?.is_premium && (
+        <div className="bg-gradient-to-r from-yellow-400/20 to-orange-500/20 border border-yellow-500/30 rounded-xl p-3 mb-4 text-sm">
+          👑 <span className="font-semibold">Premium Access</span> — Unlimited soal & fitur
+        </div>
+      )}
+
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">{error}</div>
       )}
 
-      {/* Full test */}
       <div className="bg-gradient-to-r from-tg-button/10 to-tg-button/5 rounded-xl p-4 mb-6">
         <h2 className="text-lg font-semibold mb-1">Simulasi Tes Lengkap</h2>
         <p className="text-tg-hint text-sm mb-3">
@@ -240,11 +399,11 @@ export default function TestSelection() {
         <div className="flex flex-wrap gap-2 mb-3">
           {(testType === 'IELTS'
             ? ['Listening (30m)', 'Reading (60m)', 'Writing (60m)', 'Speaking (14m)']
-            : testType === 'TOEIC'
-            ? ['Listening (45m)', 'Reading (75m)']
-            : testType === 'TOEFL_ITP'
-            ? ['Listening (35m)', 'Structure (25m)', 'Reading (55m)']
-            : ['Reading (30m)', 'Listening (29m)', 'Speaking (8m)', 'Writing (23m)']
+              : testType === 'TOEIC'
+              ? ['Listening (45m)', 'Reading (75m)']
+              : testType === 'TOEFL_ITP'
+              ? ['Listening (35m)', 'Structure (25m)', 'Reading (55m)']
+              : ['Reading (30m)', 'Listening (29m)', 'Speaking (8m)', 'Writing (23m)']
           ).map((s) => (
             <span key={s} className="text-xs bg-tg-bg px-2 py-1 rounded-full">{s}</span>
           ))}
@@ -258,7 +417,6 @@ export default function TestSelection() {
         </button>
       </div>
 
-      {/* Section practice */}
       <h2 className="font-semibold mb-3">Latihan Per Section</h2>
       <div className="space-y-3">
         {Object.entries(SECTION_INFO).map(([id, info]) => {
@@ -284,7 +442,6 @@ export default function TestSelection() {
         })}
       </div>
 
-      {/* Quick stats */}
       <div className="mt-6 text-center text-sm text-tg-hint">
         Total: {counts.reduce((s, c) => s + c.count, 0)} soal dari database OSEE
       </div>

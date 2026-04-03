@@ -27,6 +27,8 @@ export default function TestRunner() {
   const [speakingLoading, setSpeakingLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
+  const [showExplanation, setShowExplanation] = useState(false);
+  const [currentExplanation, setCurrentExplanation] = useState('');
 
   const currentQuestion = questions[currentQuestionIndex];
   const currentSectionInfo = sections.find((s) => s.id === currentSection);
@@ -506,7 +508,7 @@ export default function TestRunner() {
     saveAnswer(currentSection, currentQuestionIndex, answerData);
 
     try {
-      await fetch(`/api/tests/attempt/${attemptId}/answer`, {
+      const response = await fetch(`/api/tests/attempt/${attemptId}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -515,24 +517,49 @@ export default function TestRunner() {
           answer_data: answerData,
         }),
       });
+
+      if (!response.ok) {
+        const data = await response.json();
+        if (data.code === 'LIMIT_REACHED') {
+          navigate('/test?limit_reached=1');
+          return;
+        }
+      }
     } catch {}
 
-    // Advance with transition
-    if (currentQuestionIndex + 1 < questions.length) {
-      advanceWithTransition(() => setQuestionIndex(currentQuestionIndex + 1));
+    // Types that have a definite correct answer and should show explanation
+    const hasExplanation = currentQuestion.explanation &&
+      !['listening_passage', 'write_email', 'write_academic_discussion', 'listen_and_repeat', 'take_interview'].includes(currentQuestion.type);
+
+    if (hasExplanation) {
+      // Show explanation for 1.5s then advance
+      setCurrentExplanation(currentQuestion.explanation || '');
+      setShowExplanation(true);
+      setTimeout(() => {
+        setShowExplanation(false);
+        advanceToNext();
+      }, 1500);
     } else {
-      const currentIdx = sections.findIndex((s) => s.id === currentSection);
-      if (currentIdx + 1 < sections.length) {
-        const nextSection = sections[currentIdx + 1].id;
-        advanceWithTransition(() => setCurrentSection(nextSection));
-        try {
-          await fetch(`/api/tests/attempt/${attemptId}/section/${nextSection}`, { method: 'POST' });
-        } catch {}
+      advanceToNext();
+    }
+
+    function advanceToNext() {
+      if (currentQuestionIndex + 1 < questions.length) {
+        advanceWithTransition(() => setQuestionIndex(currentQuestionIndex + 1));
       } else {
-        handleFinish();
+        const currentIdx = sections.findIndex((s) => s.id === currentSection);
+        if (currentIdx + 1 < sections.length) {
+          const nextSection = sections[currentIdx + 1].id;
+          advanceWithTransition(() => setCurrentSection(nextSection));
+          try {
+            const response = fetch(`/api/tests/attempt/${attemptId}/section/${nextSection}`, { method: 'POST' });
+          } catch {}
+        } else {
+          handleFinish();
+        }
       }
     }
-  }, [selectedAnswer, writingText, sentenceOrder, currentSection, currentQuestionIndex, questions, submitting]);
+  }, [selectedAnswer, writingText, sentenceOrder, currentSection, currentQuestionIndex, questions, submitting, currentQuestion]);
 
   async function handleFinish() {
     try { await fetch(`/api/tests/attempt/${attemptId}/finish`, { method: 'POST' }); } catch {}
@@ -579,7 +606,7 @@ export default function TestRunner() {
 
         // Submit to backend
         try {
-          await fetch(`/api/tests/attempt/${attemptId}/answer`, {
+          const response = await fetch(`/api/tests/attempt/${attemptId}/answer`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -588,6 +615,14 @@ export default function TestRunner() {
               answer_data: { audio: true, transcription: result.transcription, score: result.score },
             }),
           });
+
+          if (!response.ok) {
+            const data = await response.json();
+            if (data.code === 'LIMIT_REACHED') {
+              navigate('/test?limit_reached=1');
+              return;
+            }
+          }
         } catch {}
       } else {
         setSpeakingResult({ error: 'Evaluasi gagal. Coba lagi.' });
@@ -1007,7 +1042,13 @@ export default function TestRunner() {
       {/* Footer */}
       {!['listen_and_repeat', 'take_interview'].includes(currentQuestion.type) && (
         <div className="sticky bottom-0 bg-tg-bg border-t border-tg-secondary p-4">
-          <button onClick={handleSubmitAnswer} disabled={submitting}
+          {showExplanation && currentExplanation && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3 text-sm">
+              <p className="font-medium text-blue-700 mb-1">💡 Penjelasan:</p>
+              <p className="text-blue-800 leading-relaxed">{currentExplanation}</p>
+            </div>
+          )}
+          <button onClick={handleSubmitAnswer} disabled={submitting || showExplanation}
             className="w-full bg-tg-button text-tg-button-text py-3 rounded-xl font-medium disabled:opacity-50 active:scale-95 transition-transform">
             {currentQuestion.type === 'listening_passage'
               ? 'Lanjut ke Soal'

@@ -4,12 +4,28 @@ import { api } from '../api/client';
 import { useTestStore } from '../stores/test';
 import type { TestResult } from '../types';
 
+interface ReviewItem {
+  section: string;
+  question_index: number;
+  question_type: string;
+  answer_data: any;
+  is_correct: boolean | null;
+  score: number | null;
+  explanation: string;
+  question_text: string;
+  passage: string;
+  options: any[];
+  correct_answer: string;
+}
+
 export default function TestResults() {
   const { attemptId } = useParams<{ attemptId: string }>();
   const navigate = useNavigate();
   const { reset } = useTestStore();
   const [result, setResult] = useState<TestResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const [review, setReview] = useState<ReviewItem[]>([]);
+  const [showReview, setShowReview] = useState(false);
 
   useEffect(() => {
     loadResults();
@@ -19,8 +35,15 @@ export default function TestResults() {
     try {
       const data = await api.getResults(Number(attemptId));
       setResult(data);
+      // Load review data
+      try {
+        const reviewRes = await fetch(`/api/tests/attempt/${attemptId}/review`);
+        if (reviewRes.ok) {
+          const reviewData = await reviewRes.json();
+          setReview(reviewData.review || []);
+        }
+      } catch {}
     } catch {
-      // No fake data — show null state
       setResult(null);
     } finally {
       setLoading(false);
@@ -112,6 +135,85 @@ export default function TestResults() {
           <div className="bg-tg-secondary rounded-xl p-4">
             <p className="text-sm leading-relaxed">{result.ai_summary}</p>
           </div>
+        </div>
+      )}
+
+      {/* Review Answers */}
+      {review.length > 0 && (
+        <div className="mb-6">
+          <button
+            onClick={() => setShowReview(!showReview)}
+            className="w-full flex items-center justify-between bg-tg-secondary rounded-xl p-4 mb-3"
+          >
+            <span className="font-semibold">📝 Review Jawaban</span>
+            <span className="text-tg-hint">{showReview ? '▲' : '▼'}</span>
+          </button>
+
+          {showReview && (
+            <div className="space-y-4">
+              {review.map((item, idx) => (
+                <div key={idx} className="bg-tg-secondary rounded-xl p-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <span className="text-xs text-tg-hint capitalize">{item.section} · Q{item.question_index + 1}</span>
+                    {item.is_correct === true && (
+                      <span className="text-xs font-bold text-green-500">✅ Benar</span>
+                    )}
+                    {item.is_correct === false && (
+                      <span className="text-xs font-bold text-red-500">❌ Salah</span>
+                    )}
+                    {item.is_correct === null && (
+                      <span className="text-xs font-bold text-yellow-500">📋 Ditinjau</span>
+                    )}
+                  </div>
+
+                  {item.question_text && (
+                    <p className="text-sm font-medium mb-2">{item.question_text}</p>
+                  )}
+
+                  {item.passage && (
+                    <p className="text-xs text-tg-hint mb-2 line-clamp-2">{item.passage.substring(0, 200)}...</p>
+                  )}
+
+                  {item.options.length > 0 && (
+                    <div className="space-y-1 mb-2">
+                      {item.options.map((opt: any, i: number) => {
+                        const letter = typeof opt === 'string' ? opt.charAt(0) : opt.key;
+                        const text = typeof opt === 'string' ? opt : opt.text;
+                        const isSelected = item.answer_data?.selected === letter;
+                        const isCorrectOpt = item.correct_answer?.toUpperCase() === letter;
+                        return (
+                          <div key={i} className={`text-sm p-2 rounded-lg ${
+                            isCorrectOpt ? 'bg-green-100 text-green-800 font-medium' :
+                            isSelected ? 'bg-red-100 text-red-800' :
+                            'bg-tg-bg text-tg-text'
+                          }`}>
+                            <span className="font-bold mr-2">{letter}.</span>
+                            {text}
+                            {isSelected && !isCorrectOpt && ' ← jawaban kamu'}
+                            {isCorrectOpt && ' ← jawaban benar'}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {item.explanation && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-2">
+                      <p className="text-xs font-medium text-blue-700 mb-1">💡 Penjelasan:</p>
+                      <p className="text-xs text-blue-800 leading-relaxed">{item.explanation}</p>
+                    </div>
+                  )}
+
+                  {item.answer_data?.text && (
+                    <div className="mt-2">
+                      <p className="text-xs text-tg-hint mb-1">Jawaban kamu:</p>
+                      <p className="text-sm bg-tg-bg rounded-lg p-2 italic">"{item.answer_data.text}"</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

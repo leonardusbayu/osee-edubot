@@ -52,12 +52,24 @@ const SECTION_LABELS: Record<string, { name: string; icon: string; color: string
   writing: { name: 'Writing', icon: '✍️', color: 'bg-purple-500' },
 };
 
+interface QuotaInfo {
+  allowed: boolean;
+  is_premium: boolean;
+  daily_limit: number;
+  used_today: number;
+  bonus_quota: number;
+  remaining: number;
+  reset_at: string;
+}
+
 export default function Progress() {
   const [data, setData] = useState<ProgressData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
 
   useEffect(() => {
     loadProgress();
+    loadQuota();
   }, []);
 
   async function loadProgress() {
@@ -68,6 +80,18 @@ export default function Progress() {
       }
     } catch {}
     setLoading(false);
+  }
+
+  async function loadQuota() {
+    try {
+      const response = await fetch('/api/tests/available');
+      if (response.ok) {
+        const result = await response.json();
+        if (result.quota) {
+          setQuota(result.quota);
+        }
+      }
+    } catch {}
   }
 
   if (loading) {
@@ -92,6 +116,40 @@ export default function Progress() {
     <div className="p-4 max-w-lg mx-auto pb-8">
       <h1 className="text-2xl font-bold mb-1">Progress Kamu</h1>
       <p className="text-tg-hint text-sm mb-5">TOEFL iBT 2026</p>
+
+      {/* Quota bar for non-premium users */}
+      {quota && !quota.is_premium && (
+        <div className="bg-tg-secondary rounded-xl p-3 mb-5">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium">Kuota Harian</span>
+            <span className="text-xs text-tg-hint">
+              {quota.used_today} / {quota.daily_limit} soal
+              {quota.bonus_quota > 0 && <span className="text-green-500 ml-1">(+{quota.bonus_quota} bonus)</span>}
+            </span>
+          </div>
+          <div className="w-full bg-tg-bg rounded-full h-2.5 mb-2">
+            <div
+              className={`h-2.5 rounded-full transition-all ${quota.remaining > 0 ? 'bg-tg-button' : 'bg-red-500'}`}
+              style={{ width: `${Math.min((quota.used_today / (quota.daily_limit + quota.bonus_quota)) * 100, 100)}%` }}
+            />
+          </div>
+          {quota.remaining > 0 ? (
+            <p className="text-xs text-tg-hint">
+              {quota.remaining} soal tersisa hari ini · Reset {new Date(quota.reset_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
+            </p>
+          ) : (
+            <p className="text-xs text-red-500 font-medium">
+              Kuota habis! Upgrade ke Premium untuk akses unlimited.
+            </p>
+          )}
+        </div>
+      )}
+
+      {quota && quota.is_premium && (
+        <div className="bg-gradient-to-r from-yellow-500/20 to-yellow-500/5 rounded-xl p-3 mb-5 text-center">
+          <span className="text-sm font-medium text-yellow-500">👑 Premium User — Akses Unlimited</span>
+        </div>
+      )}
 
       {!hasActivity ? (
         <div className="text-center py-12">

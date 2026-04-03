@@ -164,25 +164,26 @@ export function formatPaywall(): string {
 
 export async function processReferral(env: Env, newUserId: number, referralCode: string): Promise<string | null> {
   const referrer = await env.DB.prepare(
-    'SELECT user_id FROM user_gamification WHERE referral_code = ?'
+    'SELECT id FROM users WHERE referral_code = ?'
   ).bind(referralCode.toUpperCase()).first() as any;
 
-  if (!referrer || referrer.user_id === newUserId) return null;
+  if (!referrer || referrer.id === newUserId) return null;
 
   // Mark new user as referred
   await env.DB.prepare(
-    'UPDATE user_gamification SET referred_by = ? WHERE user_id = ?'
-  ).bind(referrer.user_id, newUserId).run();
+    'UPDATE users SET referred_by = ? WHERE id = ?'
+  ).bind(referrer.id, newUserId).run();
 
-  // Give referrer bonus
+  // Increment referrer's referral count
   await env.DB.prepare(
-    'UPDATE user_gamification SET referral_count = referral_count + 1, xp = xp + ? WHERE user_id = ?'
-  ).bind(XP_PER_REFERRAL, referrer.user_id).run();
+    'UPDATE users SET referral_count = referral_count + 1 WHERE id = ?'
+  ).bind(referrer.id).run();
 
-  // Give new user bonus
-  await addXP(env, newUserId, 50, 'referral_bonus');
+  // Grant bonus questions to referrer (+5 questions per referral signup)
+  const { grantReferralBonusQuota } = await import('../services/premium');
+  await grantReferralBonusQuota(env, referrer.id, 5);
 
-  return referrer.user_id;
+  return referrer.id;
 }
 
 // --- Certificate ---

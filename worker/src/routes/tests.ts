@@ -57,7 +57,15 @@ const TEST_CONFIGS: Record<string, any> = {
 
 export const testRoutes = new Hono<{ Bindings: Env }>();
 
-testRoutes.get('/available', (c) => {
+testRoutes.get('/available', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env).catch(() => null);
+  let quotaInfo = null;
+
+  if (user?.id) {
+    const { checkTestAccess } = await import('../services/premium');
+    quotaInfo = await checkTestAccess(c.env, user.id);
+  }
+
   const tests = Object.values(TEST_CONFIGS).map((config) => ({
     test_type: config.test_type,
     display_name: config.display_name,
@@ -65,17 +73,49 @@ testRoutes.get('/available', (c) => {
     total_duration_minutes: config.total_duration_minutes,
     sections: config.sections,
   }));
-  return c.json(tests);
+
+  return c.json({
+    tests,
+    quota: quotaInfo ? {
+      allowed: quotaInfo.allowed,
+      is_premium: quotaInfo.is_premium,
+      daily_limit: quotaInfo.daily_limit,
+      used_today: quotaInfo.used_today,
+      bonus_quota: quotaInfo.bonus_quota,
+      remaining: quotaInfo.remaining,
+      reset_at: quotaInfo.reset_at,
+    } : null,
+  });
 });
 
 testRoutes.post('/start', async (c) => {
   try {
     const user = await getAuthUser(c.req.raw, c.env);
-    const userId = user?.id || 1; // MVP: fallback to user 1 for unauthenticated Mini App
+    const userId = user?.id || 1;
 
     const { test_type, section_only, question_type } = await c.req.json();
     const config = TEST_CONFIGS[test_type];
     if (!config) return c.json({ error: 'Unknown test type' }, 404);
+
+    // Check quota for non-premium users
+    if (user?.id) {
+      const { checkTestAccess } = await import('../services/premium');
+      const access = await checkTestAccess(c.env, user.id);
+      if (!access.allowed) {
+        return c.json({
+          error: 'Daily limit reached',
+          code: 'LIMIT_REACHED',
+          quota: {
+            daily_limit: access.daily_limit,
+            used_today: access.used_today,
+            bonus_quota: access.bonus_quota,
+            remaining: 0,
+            reset_at: access.reset_at,
+            upgrade_url: 'https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=premium',
+          },
+        }, 403);
+      }
+    }
 
     // Determine sections to include
     let sections = config.sections;
@@ -168,6 +208,20 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
     'SELECT id FROM attempt_answers WHERE attempt_id = ? AND section = ? AND question_index = ?'
   ).bind(attemptId, section, question_index).first();
 
+  // Track quota for new answers (not updates)
+  const userId = (attempt.user_id as number) || 1;
+  if (!existing && userId > 1) {
+    const { trackQuestionAnswer } = await import('../services/premium');
+    const trackResult = await trackQuestionAnswer(c.env, userId);
+    if (!trackResult.success) {
+      return c.json({
+        error: trackResult.error,
+        code: 'LIMIT_REACHED',
+        remaining: 0,
+      }, 403);
+    }
+  }
+
   let isCorrect: boolean | null = null;
 
   // Score objective questions
@@ -196,7 +250,6 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
   ).bind(question_index + 1, attemptId).run();
 
   // Gamification: award XP
-  const userId = (attempt.user_id as number) || 1;
   try {
     const { addXP, incrementDailyUsage } = await import('../services/commercial');
     await addXP(c.env, userId, isCorrect ? 15 : 10, isCorrect ? 'correct_answer' : 'answer');
@@ -408,4 +461,42 @@ testRoutes.get('/results/:id', async (c) => {
     detailed_feedback: result.detailed_feedback ? JSON.parse(result.detailed_feedback as string) : null,
     completed_at: attempt.finished_at,
   });
+});
+
+// Get detailed review of all answers with explanations
+testRoutes.get('/attempt/:id/review', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+  const attemptId = parseInt(c.req.param('id'));
+
+  const attempt = await c.env.DB.prepare(
+    'SELECT * FROM test_attempts WHERE id = ? AND user_id = ?'
+  ).bind(attemptId, user.id).first();
+
+  if (!attempt) return c.json({ error: 'Not found' }, 404);
+
+  const answers = await c.env.DB.prepare(
+    'SELECT aa.*, tc.content, tc.question_type, tc.section FROM attempt_answers aa LEFT JOIN test_contents tc ON aa.question_id = tc.id WHERE aa.attempt_id = ? ORDER BY aa.section, aa.question_index'
+  ).bind(attemptId).all();
+
+  const review = answers.results.map((a: any) => {
+    let content: any = {};
+    try { content = JSON.parse(a.content || '{}'); } catch {}
+    return {
+      section: a.section,
+      question_index: a.question_index,
+      question_type: a.question_type,
+      answer_data: a.answer_data,
+      is_correct: a.is_correct,
+      score: a.score,
+      explanation: content.explanation || content.grouped_reading?.explanation || '',
+      question_text: content.question_text || content.passage_text || '',
+      passage: content.passage || content.grouped_reading?.passage || '',
+      options: content.options || content.grouped_reading?.questions?.[0]?.options || [],
+      correct_answer: content.answers?.[0] || '',
+    };
+  });
+
+  return c.json({ attempt_id: attemptId, review });
 });
