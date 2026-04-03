@@ -201,6 +201,35 @@ async function handleCron(env: Env) {
   }
 }
 
+// Hourly channel content rotation (every hour)
+async function handleHourlyChannelCron(env: Env) {
+  try {
+    const {
+      generateGrammarTip,
+      generateIdiom,
+      generateVocabularyOfTheDay,
+      generatePromoCTA,
+      postToChannel,
+    } = await import('./services/contentGenerator');
+
+    // Rotate content based on UTC hour (WIB = UTC+7, so UTC hour +7 = WIB hour)
+    const utcHour = new Date().getUTCHours();
+    const contentTypes = [
+      { type: 'grammar_tip', generate: () => generateGrammarTip(env) },
+      { type: 'idiom', generate: () => generateIdiom(env) },
+      { type: 'vocab', generate: () => generateVocabularyOfTheDay(env).then(v => v.text) },
+      { type: 'cta', generate: () => generatePromoCTA() },
+    ];
+
+    const idx = utcHour % contentTypes.length;
+    const content = await contentTypes[idx].generate();
+    const ok = await postToChannel(env, content);
+    console.log(`Channel hourly post (${contentTypes[idx].type}, UTC ${utcHour}):`, ok ? 'OK' : 'FAILED');
+  } catch (e) {
+    console.error('Hourly channel post error:', e);
+  }
+}
+
 // Evening — 6 PM WIB (11 AM UTC): Grammar tip + Idiom + CTA
 async function handleEveningCron(env: Env) {
   try {
@@ -394,13 +423,14 @@ export default {
     if (event.cron === '7 1 * * 1') {
       ctx.waitUntil(handleWeeklyCron(env));
     } else if (event.cron === '0 11 * * *') {
-      // Evening channel post (6 PM WIB)
+      // Evening channel post (6 PM WIB = 11 AM UTC)
       ctx.waitUntil(handleEveningCron(env));
     } else if (event.cron === '30 * * * *') {
-      // Hourly — cancel expired payments
+      // Hourly — channel content rotation + cancel expired payments
+      ctx.waitUntil(handleHourlyChannelCron(env));
       ctx.waitUntil(handlePaymentExpiryCron(env));
     } else {
-      // Morning cron (8 AM WIB) + channel morning post
+      // Morning cron (8 AM WIB = 1 AM UTC) + channel morning post
       ctx.waitUntil(handleCron(env));
     }
   },
