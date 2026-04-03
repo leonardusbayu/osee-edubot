@@ -1042,7 +1042,7 @@ export default function TestRunner() {
       {/* Footer */}
       {!['listen_and_repeat', 'take_interview'].includes(currentQuestion.type) && (
         <div className="sticky bottom-0 bg-tg-bg border-t border-tg-secondary p-4">
-          {showExplanation && currentExplanation && (
+          {showExplanation && currentExplanation && currentExplanation.trim().length > 5 && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3 text-sm">
               <p className="font-medium text-blue-700 mb-1">💡 Penjelasan:</p>
               <p className="text-blue-800 leading-relaxed">{currentExplanation}</p>
