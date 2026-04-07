@@ -117,6 +117,15 @@ testRoutes.post('/start', async (c) => {
       }
     }
 
+    // Auto-complete any stale in_progress attempts for this user (older than 2 hours)
+    try {
+      await c.env.DB.prepare(
+        `UPDATE test_attempts SET status = 'abandoned', finished_at = datetime('now')
+         WHERE user_id = ? AND status = 'in_progress'
+         AND started_at < datetime('now', '-2 hours')`
+      ).bind(userId).run();
+    } catch {}
+
     // Determine sections to include
     let sections = config.sections;
     if (section_only) {
@@ -201,7 +210,7 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
 
   if (!attempt) return c.json({ error: 'Not found' }, 404);
 
-  const { section, question_index, answer_data } = await c.req.json();
+  const { section, question_index, content_id, answer_data, time_spent_seconds = 0 } = await c.req.json();
 
   // Check if answer exists
   const existing = await c.env.DB.prepare(
@@ -225,22 +234,23 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
   let isCorrect: boolean | null = null;
 
   // Score objective questions
-  if (answer_data.selected && answer_data.correct_answer) {
+  if (answer_data?.selected && answer_data?.correct_answer) {
     isCorrect = answer_data.selected.toLowerCase() === answer_data.correct_answer.toLowerCase();
   }
 
   if (existing) {
     await c.env.DB.prepare(
-      'UPDATE attempt_answers SET answer_data = ?, is_correct = ?, submitted_at = ? WHERE id = ?'
-    ).bind(JSON.stringify(answer_data), isCorrect !== null ? (isCorrect ? 1 : 0) : null, new Date().toISOString(), existing.id).run();
+      'UPDATE attempt_answers SET answer_data = ?, is_correct = ?, submitted_at = ?, time_spent_seconds = ?, content_id = ? WHERE id = ?'
+    ).bind(JSON.stringify(answer_data), isCorrect !== null ? (isCorrect ? 1 : 0) : null, new Date().toISOString(), time_spent_seconds, content_id || null, existing.id).run();
   } else {
     await c.env.DB.prepare(
-      `INSERT INTO attempt_answers (attempt_id, section, question_index, answer_data, is_correct, score)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO attempt_answers (attempt_id, section, question_index, content_id, answer_data, is_correct, score, time_spent_seconds)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
-      attemptId, section, question_index, JSON.stringify(answer_data),
+      attemptId, section, question_index, content_id || null, JSON.stringify(answer_data),
       isCorrect !== null ? (isCorrect ? 1 : 0) : null,
       isCorrect !== null ? (isCorrect ? 1.0 : 0.0) : null,
+      time_spent_seconds,
     ).run();
   }
 
@@ -249,36 +259,56 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
     'UPDATE test_attempts SET current_question_index = ? WHERE id = ?'
   ).bind(question_index + 1, attemptId).run();
 
-  // Gamification: award XP
-  try {
-    const { addXP, incrementDailyUsage } = await import('../services/commercial');
-    await addXP(c.env, userId, isCorrect ? 15 : 10, isCorrect ? 'correct_answer' : 'answer');
-    await incrementDailyUsage(c.env, userId);
-  } catch {}
-
-  if (isCorrect === false) {
+  // Analytics: track progress, skills, and streak only for new answers
+  if (!existing) {
     try {
-      const { addToReview } = await import('../services/spaced-repetition');
-      await addToReview(
-        c.env, userId, section, '',
-        JSON.stringify(answer_data), answer_data.correct_answer || '', answer_data.selected || '',
-      );
-    } catch {}
-  }
+      const { incrementDailyStudyLog, trackSkillProgress, updateStreak } = await import('../services/analytics');
+      await incrementDailyStudyLog(c.env, userId, 1, time_spent_seconds, isCorrect === true ? 1 : 0, 0, 0);
+      await updateStreak(c.env, userId);
 
-  // Update skill score for this section
-  if (isCorrect !== null) {
-    try {
-      const { updateSkillScore } = await import('../services/prerequisites');
-      // Map section to skill
-      const sectionSkills: Record<string, string> = {
+      // Track sub-skill progress
+      const skillMap: Record<string, string> = {
         reading: 'reading_strategy',
         listening: 'listening_strategy',
         speaking: 'speaking_templates',
         writing: 'writing_templates',
+        structure: 'grammar_structure',
       };
-      await updateSkillScore(c.env, userId, sectionSkills[section] || section, isCorrect);
-    } catch {}
+      const skill = skillMap[section] || section;
+      await trackSkillProgress(c.env, userId, skill, attempt.test_type as string, 1, isCorrect === true ? 1 : 0, time_spent_seconds);
+    } catch (e) { console.error('Analytics tracking error:', e); }
+
+    // Gamification: award XP
+    try {
+      const { addXP, incrementDailyUsage } = await import('../services/commercial');
+      await addXP(c.env, userId, isCorrect ? 15 : 10, isCorrect ? 'correct_answer' : 'answer');
+      await incrementDailyUsage(c.env, userId);
+    } catch (e) { console.error('XP tracking error:', e); }
+
+    // Spaced repetition: add wrong answers to review queue
+    if (isCorrect === false) {
+      try {
+        const { addToReview } = await import('../services/spaced-repetition');
+        await addToReview(
+          c.env, userId, section, '',
+          JSON.stringify(answer_data), answer_data.correct_answer || '', answer_data.selected || '',
+        );
+      } catch (e) { console.error('Spaced repetition error:', e); }
+    }
+
+    // Update skill score for this section
+    if (isCorrect !== null) {
+      try {
+        const { updateSkillScore } = await import('../services/prerequisites');
+        const sectionSkills: Record<string, string> = {
+          reading: 'reading_strategy',
+          listening: 'listening_strategy',
+          speaking: 'speaking_templates',
+          writing: 'writing_templates',
+        };
+        await updateSkillScore(c.env, userId, sectionSkills[section] || section, isCorrect);
+      } catch (e) { console.error('Skill update error:', e); }
+    }
   }
 
   return c.json({ saved: true, is_correct: isCorrect, next_question_index: question_index + 1 });
@@ -308,115 +338,118 @@ testRoutes.post('/attempt/:id/section/:nextSection', async (c) => {
 });
 
 testRoutes.post('/attempt/:id/finish', async (c) => {
-  const attemptId = parseInt(c.req.param('id'));
-  const attempt = await c.env.DB.prepare(
-    'SELECT * FROM test_attempts WHERE id = ?'
-  ).bind(attemptId).first();
+  try {
+    const attemptId = parseInt(c.req.param('id'));
+    const attempt = await c.env.DB.prepare(
+      'SELECT * FROM test_attempts WHERE id = ?'
+    ).bind(attemptId).first();
 
-  if (!attempt) return c.json({ error: 'Not found' }, 404);
+    if (!attempt) return c.json({ error: 'Not found' }, 404);
 
-  const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    'UPDATE test_attempts SET status = ?, finished_at = ? WHERE id = ?'
-  ).bind('completed', now, attemptId).run();
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(
+      'UPDATE test_attempts SET status = ?, finished_at = ? WHERE id = ?'
+    ).bind('completed', now, attemptId).run();
 
-  const config = TEST_CONFIGS[attempt.test_type as string];
+    const config = TEST_CONFIGS[attempt.test_type as string];
 
-  // Load answers and calculate scores
-  const answers = await c.env.DB.prepare(
-    'SELECT * FROM attempt_answers WHERE attempt_id = ?'
-  ).bind(attemptId).all();
+    // Load answers and calculate scores
+    const answers = await c.env.DB.prepare(
+      'SELECT * FROM attempt_answers WHERE attempt_id = ?'
+    ).bind(attemptId).all();
 
-  const sectionScores: Record<string, number> = {};
+    const sectionScores: Record<string, number> = {};
 
-  for (const section of config?.sections || []) {
-    const sectionAnswers = answers.results.filter((a: any) => a.section === section.id);
-    const correct = sectionAnswers.filter((a: any) => a.is_correct === 1).length;
-    const total = sectionAnswers.length || 1;
-    const maxBand = config?.max_band || 6;
-    sectionScores[section.id] = Math.round((correct / total) * maxBand * 2) / 2; // 0.5 increments
+    for (const section of config?.sections || []) {
+      const sectionAnswers = (answers.results || []).filter((a: any) => a.section === section.id);
+      const correct = sectionAnswers.filter((a: any) => a.is_correct === 1).length;
+      const total = sectionAnswers.length;
+      const maxBand = config?.max_band || 6;
+      if (total === 0) {
+        sectionScores[section.id] = 0;
+      } else {
+        sectionScores[section.id] = Math.round((correct / total) * maxBand * 2) / 2;
+      }
+    }
+
+    const values = Object.values(sectionScores).filter((v: number) => !isNaN(v));
+    const totalScore = values.length > 0
+      ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10
+      : 0;
+
+    await c.env.DB.prepare(
+      `INSERT INTO test_results (attempt_id, user_id, test_type, total_score, section_scores, band_score)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(attemptId, attempt.user_id || 0, attempt.test_type, totalScore, JSON.stringify(sectionScores), totalScore).run();
+
+    return c.json({
+      attempt_id: attemptId,
+      test_type: attempt.test_type,
+      total_score: totalScore,
+      band_score: totalScore,
+      section_scores: sectionScores,
+      ai_summary: null,
+      detailed_feedback: null,
+      completed_at: now,
+    });
+  } catch (e: any) {
+    console.error('finish error:', e);
+    return c.json({ error: 'Failed to finish test: ' + e.message }, 500);
   }
-
-  const values = Object.values(sectionScores);
-  const totalScore = values.length > 0
-    ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10
-    : 0;
-
-  await c.env.DB.prepare(
-    `INSERT INTO test_results (attempt_id, user_id, test_type, total_score, section_scores, band_score)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(attemptId, attempt.user_id || 0, attempt.test_type, totalScore, JSON.stringify(sectionScores), totalScore).run();
-
-  return c.json({
-    attempt_id: attemptId,
-    test_type: attempt.test_type,
-    total_score: totalScore,
-    band_score: totalScore,
-    section_scores: sectionScores,
-    ai_summary: null,
-    detailed_feedback: null,
-    completed_at: now,
-  });
 });
 
 // --- Serve questions from D1 ---
 
 testRoutes.get('/questions/:section', async (c) => {
-  const section = c.req.param('section');
-  const testType = c.req.query('test_type') || 'TOEFL_IBT';
-  const questionType = c.req.query('question_type');
-  const limit = parseInt(c.req.query('limit') || '20');
-  const offset = parseInt(c.req.query('offset') || '0');
+  try {
+    const section = c.req.param('section');
+    const testType = c.req.query('test_type') || 'TOEFL_IBT';
+    const questionType = c.req.query('question_type');
+    const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50);
+    const offset = parseInt(c.req.query('offset') || '0');
 
-  // Adaptive difficulty: check student's skill level for this section
-  const user = await getAuthUser(c.req.raw, c.env);
-  let targetDifficulty = 3; // default medium
-  if (user?.id) {
-    try {
-      const skill = await c.env.DB.prepare(
-        'SELECT score FROM student_skills WHERE user_id = ? AND skill = ?'
-      ).bind(user.id, section === 'reading' ? 'reading_strategy' : section === 'listening' ? 'listening_strategy' : section + '_templates').first() as any;
-      if (skill) {
-        // Map 0-100 score to difficulty 1-5
-        if (skill.score >= 80) targetDifficulty = 5;
-        else if (skill.score >= 60) targetDifficulty = 4;
-        else if (skill.score >= 40) targetDifficulty = 3;
-        else if (skill.score >= 20) targetDifficulty = 2;
-        else targetDifficulty = 1;
-      }
-    } catch {}
+    let query = `SELECT id, question_type, title, content, media_url, difficulty
+                 FROM test_contents
+                 WHERE test_type = ? AND section = ? AND status = 'published'`;
+    const params: any[] = [testType, section];
+
+    if (questionType) {
+      query += ' AND question_type = ?';
+      params.push(questionType);
+    }
+
+    // Deterministic ordering: shuffle using a subquery trick or by difficulty
+    // Use difficulty variance for variety without RANDOM() (which kills indexes)
+    query += ' ORDER BY difficulty ASC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+
+    const stmt = c.env.DB.prepare(query);
+    const result = await stmt.bind(...params).all();
+
+    return c.json({
+      section,
+      test_type: testType,
+      total: result.results.length,
+    questions: result.results.map((r: any) => {
+      let content = {};
+      try { content = JSON.parse(r.content || '{}'); } catch {}
+      // Only return media_url if it's a valid HTTP(S) URL, not a local file path
+      const mediaUrl = r.media_url;
+      const isValidUrl = mediaUrl && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'));
+      return {
+        id: r.id,
+        question_type: r.question_type,
+        title: r.title,
+        content,
+        media_url: isValidUrl ? mediaUrl : null,
+        difficulty: r.difficulty,
+      };
+    }),
+    });
+  } catch (e: any) {
+    console.error('questions error:', e);
+    return c.json({ error: 'Failed to load questions: ' + e.message }, 500);
   }
-
-  let query = `SELECT id, question_type, title, content, media_url, difficulty
-               FROM test_contents
-               WHERE test_type = ? AND section = ? AND status = 'published'`;
-  const params: any[] = [testType, section];
-
-  if (questionType) {
-    query += ' AND question_type = ?';
-    params.push(questionType);
-  }
-
-  // Adaptive: prefer questions near target difficulty, but include some variety
-  query += ' ORDER BY ABS(difficulty - ?) ASC, RANDOM() LIMIT ? OFFSET ?';
-  params.push(targetDifficulty, limit, offset);
-
-  const stmt = c.env.DB.prepare(query);
-  const result = await stmt.bind(...params).all();
-
-  return c.json({
-    section,
-    test_type: testType,
-    total: result.results.length,
-    questions: result.results.map((r: any) => ({
-      id: r.id,
-      question_type: r.question_type,
-      title: r.title,
-      content: JSON.parse(r.content || '{}'),
-      media_url: r.media_url,
-      difficulty: r.difficulty,
-    })),
-  });
 });
 
 // Get question count per section
@@ -493,7 +526,7 @@ testRoutes.get('/attempt/:id/review', async (c) => {
       explanation: content.explanation || content.grouped_reading?.explanation || '',
       question_text: content.question_text || content.passage_text || '',
       passage: content.passage || content.grouped_reading?.passage || '',
-      options: content.options || content.grouped_reading?.questions?.[0]?.options || [],
+      options: (content.options || content.grouped_reading?.questions?.[0]?.options || []),
       correct_answer: content.answers?.[0] || '',
     };
   });

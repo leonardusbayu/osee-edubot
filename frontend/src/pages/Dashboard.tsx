@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { authedFetch } from '../api/authedFetch';
 
 interface DashboardData {
   total_students: number;
@@ -30,9 +31,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/analytics/dashboard').then(r => r.ok ? r.json() : null),
-      fetch('/api/analytics/heatmap').then(r => r.ok ? r.json() : null),
-      fetch('/api/analytics/churn-risk').then(r => r.ok ? r.json() : null),
+      authedFetch('/api/analytics/dashboard').then(r => r.ok ? r.json() : null),
+      authedFetch('/api/analytics/heatmap').then(r => r.ok ? r.json() : null),
+      authedFetch('/api/analytics/churn-risk').then(r => r.ok ? r.json() : null),
     ]).then(([d, h, c]) => {
       setData(d);
       setHeatmap(h);
@@ -135,7 +136,7 @@ export default function Dashboard() {
                 <div key={day} className="flex gap-px items-center">
                   <div className="w-8 text-xs text-tg-hint">{day}</div>
                   {heatmap.data[di].map((val, hi) => {
-                    const max = Math.max(...heatmap.data.flat());
+                    const max = Math.max(0, ...heatmap.data.flat());
                     const intensity = max > 0 ? val / max : 0;
                     return (
                       <div key={hi} className="flex-1 h-4 rounded-sm" style={{
@@ -176,7 +177,7 @@ export default function Dashboard() {
 
       {/* API Cost */}
       <div className="bg-tg-secondary rounded-xl p-4 text-center text-sm">
-        <p className="text-tg-hint">Biaya API total: <b>${data.api_cost.toFixed(4)}</b></p>
+        <p className="text-tg-hint">Biaya API total: <b>${(data.api_cost ?? 0).toFixed(4)}</b></p>
       </div>
     </div>
   );

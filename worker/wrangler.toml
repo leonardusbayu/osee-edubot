@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2024-12-05"
 
 [vars]
-WEBAPP_URL = "https://edubot-api.edubot-leonardus.workers.dev"
+WEBAPP_URL = "https://edubot-webapp.pages.dev"
 
 # Secrets (set via `wrangler secret put`):
 # TELEGRAM_BOT_TOKEN
@@ -18,10 +18,12 @@ database_name = "edubot-db"
 database_id = "d501b671-128e-4a45-9d90-74b22e6691ce"
 
 # Cron triggers:
-# Daily at 8:03 AM WIB (1:03 UTC) — study reminders + daily quiz
+# Daily at 8:03 AM WIB (1:03 UTC) — study reminders + daily quiz + channel morning post
+# Daily at 11:00 AM UTC (6:03 PM WIB) — channel evening post
 # Monday at 8:07 AM WIB (1:07 UTC) — weekly leaderboard
+# Every hour — cancel expired payment requests
 [triggers]
-crons = ["3 1 * * *", "7 1 * * 1"]
+crons = ["3 1 * * *", "0 11 * * *", "7 1 * * 1", "30 * * * *"]
 
 [[r2_buckets]]
 binding = "AUDIO_BUCKET"

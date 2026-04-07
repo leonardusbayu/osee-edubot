@@ -41,7 +41,7 @@ contentRoutes.get('/', async (c) => {
 });
 
 contentRoutes.post('/', async (c) => {
-  const user = c.get('user');
+  const user = await getAuthUser(c.req.raw, c.env);
   const body = await c.req.json();
 
   await c.env.DB.prepare(

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 interface AudioRecorderProps {
   onRecordingComplete: (blob: Blob) => void;
@@ -12,10 +12,26 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      }
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    };
+  }, []);
 
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
           ? 'audio/webm;codecs=opus'
@@ -32,15 +48,18 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
       mediaRecorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         const url = URL.createObjectURL(blob);
+        audioUrlRef.current = url;
         setAudioUrl(url);
         onRecordingComplete(blob);
-        stream.getTracks().forEach((t) => t.stop());
+        streamRef.current?.getTracks().forEach((t) => t.stop());
       };
 
       mediaRecorder.start(1000);
       setIsRecording(true);
       setDuration(0);
       setAudioUrl(null);
+
+      revokeAudioUrl();
 
       timerRef.current = window.setInterval(() => {
         setDuration((d) => {
@@ -65,6 +84,13 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
       timerRef.current = null;
     }
     setIsRecording(false);
+  }
+
+  function revokeAudioUrl() {
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
   }
 
   const minutes = Math.floor(duration / 60);
@@ -97,7 +123,7 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
       </p>
 
       {audioUrl && (
-        <audio controls src={audioUrl} className="w-full max-w-xs mt-2" />
+        <audio controls src={audioUrl} className="w-full max-w-xs mt-2" onError={() => { setAudioUrl(null); }} />
       )}
     </div>
   );

@@ -165,7 +165,7 @@ export function formatPaywall(): string {
 export async function processReferral(env: Env, newUserId: number, referralCode: string): Promise<string | null> {
   const referrer = await env.DB.prepare(
     'SELECT id FROM users WHERE referral_code = ?'
-  ).bind(referralCode.toUpperCase()).first() as any;
+  ).bind(referralCode.trim()).first() as any;
 
   if (!referrer || referrer.id === newUserId) return null;
 

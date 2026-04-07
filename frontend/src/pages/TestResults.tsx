@@ -111,7 +111,7 @@ export default function TestResults() {
       <div className="mb-6">
         <h2 className="font-semibold mb-3">Section Breakdown</h2>
         <div className="space-y-3">
-          {Object.entries(result.section_scores).map(([section, score]) => (
+          {Object.entries(result.section_scores || {}).map(([section, score]) => (
             <div key={section} className="bg-tg-secondary rounded-xl p-4">
               <div className="flex items-center justify-between mb-2">
                 <span className="font-medium">{sectionNames[section] || section}</span>
@@ -174,7 +174,7 @@ export default function TestResults() {
                     <p className="text-xs text-tg-hint mb-2 line-clamp-2">{item.passage.substring(0, 200)}...</p>
                   )}
 
-                  {item.options.length > 0 && (
+                  {(item.options || []).length > 0 && (
                     <div className="space-y-1 mb-2">
                       {item.options.map((opt: any, i: number) => {
                         const letter = typeof opt === 'string' ? opt.charAt(0) : opt.key;

@@ -5,9 +5,17 @@ import { getAuthUser } from '../services/auth';
 export const progressRoutes = new Hono<{ Bindings: Env }>();
 
 progressRoutes.get('/overview', async (c) => {
-  // Use user 1 as fallback (MVP)
   const user = await getAuthUser(c.req.raw, c.env);
-  const userId = user?.id || 1;
+  if (!user?.id) {
+    return c.json({
+      total_tests: 0, total_questions_practiced: 0, correct_answers: 0, wrong_answers: 0,
+      overall_accuracy: 0, best_score: null, average_score: null, study_streak: 0,
+      section_stats: [], test_results: [], weaknesses: [],
+      spaced_repetition: { total: 0, due: 0, mastered: 0 },
+      time_per_question: [],
+    });
+  }
+  const userId = user.id;
 
   try {
     // 1. Total completed tests + practice sessions
@@ -54,7 +62,7 @@ progressRoutes.get('/overview', async (c) => {
        LIMIT 20`
     ).bind(userId).all();
 
-    const scores = testResults.results.map((r: any) => r.total_score as number);
+    const scores = testResults.results.map((r: any) => r.total_score as number).filter((s: number) => s != null && !isNaN(s));
     const bestScore = scores.length > 0 ? Math.max(...scores) : null;
     const avgScore = scores.length > 0
       ? Math.round((scores.reduce((a: number, b: number) => a + b, 0) / scores.length) * 10) / 10
@@ -95,13 +103,13 @@ progressRoutes.get('/overview', async (c) => {
       .sort(([, a], [, b]) => b - a)
       .map(([section, errorCount]) => {
         const sectionStat = sectionStats.results.find((s: any) => s.section === section);
-        const total = (sectionStat as any)?.total || 1;
+        const total = (sectionStat as any)?.total || 0;
         const correct = (sectionStat as any)?.correct || 0;
         return {
           section,
           error_count: errorCount,
           total_practiced: total,
-          accuracy: Math.round((correct / total) * 100),
+          accuracy: total > 0 ? Math.round((correct / total) * 100) : 0,
         };
       });
 
@@ -167,13 +175,17 @@ progressRoutes.get('/overview', async (c) => {
         wrong: s.wrong,
         accuracy: s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0,
       })),
-      test_results: testResults.results.map((r: any) => ({
-        attempt_id: r.attempt_id,
-        total_score: r.total_score,
-        band_score: r.band_score,
-        section_scores: JSON.parse(r.section_scores || '{}'),
-        date: r.created_at,
-      })),
+      test_results: testResults.results.map((r: any) => {
+        let sectionScores: Record<string, number> = {};
+        try { sectionScores = JSON.parse(r.section_scores || '{}'); } catch {}
+        return {
+          attempt_id: r.attempt_id,
+          total_score: r.total_score ?? 0,
+          band_score: r.band_score ?? null,
+          section_scores: sectionScores,
+          date: r.created_at,
+        };
+      }),
       weaknesses,
       spaced_repetition: srStats,
       time_per_question: timeStats.results.map((t: any) => ({

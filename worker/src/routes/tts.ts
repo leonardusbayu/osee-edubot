@@ -68,7 +68,8 @@ function detectSpeakerVoice(label: string): string {
 // Output: [{voice: "nova", text: "Hi there."}, {voice: "onyx", text: "Hello."}, ...]
 function parseDialogue(text: string): { voice: string; text: string }[] {
   // Split by speaker labels like "Woman:", "Man:", "Professor:", "Narrator:", etc.
-  const speakerPattern = /(?:^|\n|\.\s*)((?:Woman|Man|Male|Female|Professor|Instructor|Narrator|Announcer|Student|Advisor|Librarian|Receptionist|Girl|Boy|Speaker\s*\d?)[^:]*?):\s*/gi;
+  // Labels can appear after: start of string, newline, or sentence-ending punctuation (. ? !)
+  const speakerPattern = /(?:^|\n|[.?!]\s*)((?:Woman|Man|Male|Female|Professor|Instructor|Narrator|Announcer|Student|Advisor|Librarian|Receptionist|Girl|Boy|Speaker\s*\d?)[^:]*?):\s*/gi;
 
   const segments: { voice: string; text: string }[] = [];
   let lastIndex = 0;
@@ -124,6 +125,91 @@ async function fetchTTSAudio(apiKey: string, text: string, voice: string): Promi
   return response.arrayBuffer();
 }
 
+// Exported core function to generate TTS audio without an HTTP loopback
+export async function generateTTSAudioBuffer(env: Env, text: string, multi: boolean = false, voice: string = 'alloy'): Promise<ArrayBuffer | null> {
+  if (!env.OPENAI_API_KEY) return null;
+
+  const decoded = decodeURIComponent(text).trim();
+  if (decoded.length === 0) return null;
+  const cacheKey = await hashText(decoded + (multi ? 'true' : '') + voice);
+
+  // Check cache
+  const cached = await getCachedAudio(env.DB, cacheKey);
+  if (cached) return cached;
+
+  try {
+    if (multi) {
+      const segments = parseDialogue(decoded);
+      if (segments.length > 1) {
+        const audioBuffers: ArrayBuffer[] = [];
+        const batchSize = 4;
+        for (let i = 0; i < segments.length; i += batchSize) {
+          const batch = segments.slice(i, i + batchSize);
+          const results = await Promise.all(
+            batch.map((seg) => fetchTTSAudio(env.OPENAI_API_KEY, seg.text, seg.voice))
+          );
+          audioBuffers.push(...results);
+        }
+
+        const totalLength = audioBuffers.reduce((sum, buf) => sum + buf.byteLength, 0);
+        const combined = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const buf of audioBuffers) {
+          combined.set(new Uint8Array(buf), offset);
+          offset += buf.byteLength;
+        }
+
+        cacheAudio(env.DB, cacheKey, combined.buffer, 'multi');
+
+        // Log multi-speaker TTS cost
+        try {
+          const charCount = decoded.length;
+          const cost = (charCount / 1000) * 0.015;
+          await env.DB.prepare(
+            'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
+          ).bind('openai-tts', 'multi', charCount, cost).run();
+        } catch {}
+
+        return combined.buffer;
+      }
+    }
+
+    // Single voice
+    const response = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'tts-1',
+        input: decoded.substring(0, 4096),
+        voice,
+        response_format: 'mp3',
+      }),
+    });
+
+    if (!response.ok) return null;
+
+    const audioData = await response.arrayBuffer();
+    cacheAudio(env.DB, cacheKey, audioData, voice);
+
+    // Try logging cost silently
+    try {
+      const charCount = decoded.length;
+      const cost = (charCount / 1000) * 0.015;
+      await env.DB.prepare(
+        'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
+      ).bind('openai-tts', voice, charCount, cost).run();
+    } catch {}
+
+    return audioData;
+  } catch (e) {
+    console.error('TTS internal error:', e);
+    return null;
+  }
+}
+
 // Multi-speaker TTS — generates audio for each speaker segment and concatenates
 ttsRoutes.post('/dialogue', async (c) => {
   if (!c.env.OPENAI_API_KEY) {
@@ -133,39 +219,15 @@ ttsRoutes.post('/dialogue', async (c) => {
   const { text } = await c.req.json();
   if (!text) return c.json({ error: 'Missing text' }, 400);
 
-  try {
-    const segments = parseDialogue(text);
+  const audioBuffer = await generateTTSAudioBuffer(c.env, text, true);
+  if (!audioBuffer) return c.json({ error: 'TTS generation failed' }, 500);
 
-    // Generate audio for each segment in parallel (max 4 concurrent)
-    const audioBuffers: ArrayBuffer[] = [];
-    const batchSize = 4;
-
-    for (let i = 0; i < segments.length; i += batchSize) {
-      const batch = segments.slice(i, i + batchSize);
-      const results = await Promise.all(
-        batch.map((seg) => fetchTTSAudio(c.env.OPENAI_API_KEY, seg.text, seg.voice))
-      );
-      audioBuffers.push(...results);
-    }
-
-    // Concatenate MP3 buffers (MP3 frames are self-contained, so simple concat works)
-    const totalLength = audioBuffers.reduce((sum, buf) => sum + buf.byteLength, 0);
-    const combined = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const buf of audioBuffers) {
-      combined.set(new Uint8Array(buf), offset);
-      offset += buf.byteLength;
-    }
-
-    return new Response(combined, {
-      headers: {
-        'Content-Type': 'audio/mpeg',
-        'Cache-Control': 'public, max-age=86400',
-      },
-    });
-  } catch (e: any) {
-    return c.json({ error: e.message }, 500);
-  }
+  return new Response(audioBuffer, {
+    headers: {
+      'Content-Type': 'audio/mpeg',
+      'Cache-Control': 'public, max-age=86400',
+    },
+  });
 });
 
 // Simple single-voice GET endpoint
@@ -224,6 +286,15 @@ ttsRoutes.get('/speak', async (c) => {
         // Cache the result
         cacheAudio(c.env.DB, cacheKey, combined.buffer, 'multi');
 
+        // Log multi-speaker TTS cost
+        try {
+          const charCount = decoded.length;
+          const cost = (charCount / 1000) * 0.015;
+          await c.env.DB.prepare(
+            'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
+          ).bind('openai-tts', 'multi', charCount, cost).run();
+        } catch {}
+
         return new Response(combined, {
           headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=604800', 'X-Cache': 'MISS' },
         });
@@ -245,7 +316,7 @@ ttsRoutes.get('/speak', async (c) => {
       }),
     });
 
-    if (!response.ok) return new Response('TTS error', { status: 500 });
+    if (!response.ok) return c.json({ error: 'TTS generation failed' }, 500);
 
     // Cache single voice result + log cost
     const audioData = await response.arrayBuffer();
@@ -262,6 +333,6 @@ ttsRoutes.get('/speak', async (c) => {
       headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=604800', 'X-Cache': 'MISS' },
     });
   } catch {
-    return new Response('TTS error', { status: 500 });
+    return c.json({ error: 'TTS generation failed' }, 500);
   }
 });

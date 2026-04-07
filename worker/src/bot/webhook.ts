@@ -309,7 +309,9 @@ export async function handleWebhook(update: any, env: Env) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ chat_id: chatId, text: `Error: ${e.message || 'unknown'}` }),
         });
-      } catch {}
+      } catch (sendErr) {
+        console.error('Failed to send error message to user:', sendErr);
+      }
     }
   }
 }
@@ -361,7 +363,9 @@ async function handleVoiceMessage(message: any, env: Env) {
       const duration = (voice.duration || 5) / 60;
       await env.DB.prepare('INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd, user_id) VALUES (?, ?, ?, ?, ?)')
         .bind('openai-whisper', 'voice-input', voice.duration || 5, duration * 0.006, user.id).run();
-    } catch {}
+    } catch (e) {
+      console.error('Whisper cost tracking error:', e);
+    }
 
     // Process as text message
     message.text = transcription;
@@ -907,7 +911,9 @@ async function handleMessage(message: any, env: Env) {
           await env.DB.prepare(
             "INSERT INTO analytics (user_id, event, data) VALUES (?, 'study_plan_viewed', ?)"
           ).bind(user.id, JSON.stringify({ timestamp: new Date().toISOString() })).run();
-        } catch {}
+        } catch (e) {
+          console.error('Analytics insert error:', e);
+        }
         return;
       }
 
@@ -1832,7 +1838,7 @@ async function handleMessage(message: any, env: Env) {
 
       const weaknesses = JSON.parse(recentDiag.weaknesses || '[]');
       const { generateStudyPlan } = await import('../services/studyplan');
-      const plan = await generateStudyPlan(env, user.id, targetDate.toISOString(), weaknesses);
+      const plan = await generateStudyPlan(env, user.id, targetDate.toISOString(), weaknesses, user.target_test || undefined);
       await sendMessage(env, chatId, plan);
       return;
     }
@@ -2038,16 +2044,27 @@ async function handleCallbackQuery(query: any, env: Env) {
   const user = await getOrCreateUser(env, tgUser);
 
   // Settings changes
+  const VALID_TEST_TYPES = ['TOEFL_IBT', 'TOEFL_ITP', 'IELTS', 'TOEIC'];
+  const VALID_LEVELS = ['beginner', 'intermediate', 'advanced'];
+
   if (data.startsWith('setting_test_')) {
     const test = data.replace('setting_test_', '');
+    if (!VALID_TEST_TYPES.includes(test)) {
+      console.error(`Invalid test type from settings callback: ${test}`);
+      return;
+    }
     await env.DB.prepare('UPDATE users SET target_test = ? WHERE id = ?').bind(test, user.id).run();
     await editMessage(env, chatId, messageId,
-      `✅ Target tes diubah ke: ${test}\n\nKetik /help jika butuh bantuan.`
+      `✅ Target tes diubah ke: ${test.replace(/_/g, ' ')}\n\nKetik /help jika butuh bantuan.`
     );
     return;
   }
   if (data.startsWith('setting_level_')) {
     const level = data.replace('setting_level_', '');
+    if (!VALID_LEVELS.includes(level)) {
+      console.error(`Invalid proficiency level from settings callback: ${level}`);
+      return;
+    }
     await env.DB.prepare('UPDATE users SET proficiency_level = ? WHERE id = ?').bind(level, user.id).run();
     await editMessage(env, chatId, messageId,
       `✅ Level diubah ke: ${level}\n\nKetik /help jika butuh bantuan.`
@@ -2182,7 +2199,10 @@ async function handleCallbackQuery(query: any, env: Env) {
           });
           return;
         }
-      } catch {}
+      } catch (e) {
+        console.error('Prerequisite check error:', e);
+        // Continue with lesson even if prereq check fails
+      }
 
       await editMessage(env, chatId, messageId, '⏳ Sedang menyiapkan pelajaran...');
 
@@ -2246,6 +2266,20 @@ async function handleCallbackQuery(query: any, env: Env) {
 
     // General study session
     if (data === 'study_lesson' || data === 'study_start') {
+      // Track daily quota for free users
+      try {
+        const { trackQuestionAnswer, checkTestAccess } = await import('../services/premium');
+        const access = await checkTestAccess(env, freshUser.id);
+        if (!access.allowed) {
+          await editMessage(env, chatId, messageId,
+            `⚠️ Kuota harian habis (${access.used_today}/${access.daily_limit} soal).\n\n` +
+            `Reset besok jam 00:00 WIB.\nKetik /premium untuk unlimited akses.`);
+          return;
+        }
+        await trackQuestionAnswer(env, freshUser.id);
+      } catch (e) {
+        console.error('Quota tracking error in study_lesson:', e);
+      }
       await editMessage(env, chatId, messageId, '⏳ Menyiapkan pelajaran...');
       const prompt = `Pilih 1 topik (articles/tenses/prepositions/sv-agreement/passive-voice/conditionals). Kasih perbandingan Bahasa vs English (2 baris), 3 contoh kalimat, lalu 1 soal. Maks 8 baris. Plain text.`;
       const response = await getTutorResponse(env, freshUser, prompt);
@@ -2255,6 +2289,18 @@ async function handleCallbackQuery(query: any, env: Env) {
 
     // Mini Mock Test — 5 random questions from different sections
     if (data === 'study_minitest') {
+      // Track daily quota for free users
+      try {
+        const { trackQuestionAnswer, checkTestAccess } = await import('../services/premium');
+        const access = await checkTestAccess(env, freshUser.id);
+        if (!access.allowed) {
+          await editMessage(env, chatId, messageId,
+            `⚠️ Kuota harian habis (${access.used_today}/${access.daily_limit} soal).\n\n` +
+            `Reset besok jam 00:00 WIB.\nKetik /premium untuk unlimited akses.`);
+          return;
+        }
+        await trackQuestionAnswer(env, freshUser.id);
+      } catch {}
       await editMessage(env, chatId, messageId, '⏳ Membuat mini test...');
       const prompt = `Buat 1 soal TOEFL iBT (pilih acak: grammar/vocabulary/reading comprehension). Format: konteks singkat + 1 soal MCQ (A/B/C/D). Maks 8 baris. Plain text. Akhiri dengan "Jawab?"`;
       const response = await getTutorResponse(env, freshUser, prompt);
@@ -2321,6 +2367,18 @@ async function handleCallbackQuery(query: any, env: Env) {
 
     // Fallback: any remaining study_ callbacks
     if (data.startsWith('study_')) {
+      // Track daily quota for free users
+      try {
+        const { trackQuestionAnswer, checkTestAccess } = await import('../services/premium');
+        const access = await checkTestAccess(env, freshUser.id);
+        if (!access.allowed) {
+          await editMessage(env, chatId, messageId,
+            `⚠️ Kuota harian habis (${access.used_today}/${access.daily_limit} soal).\n\n` +
+            `Reset besok jam 00:00 WIB.\nKetik /premium untuk unlimited akses.`);
+          return;
+        }
+        await trackQuestionAnswer(env, freshUser.id);
+      } catch {}
       await editMessage(env, chatId, messageId, '⏳ Sedang berpikir...');
       const response = await getTutorResponse(env, freshUser, 'Aku mau belajar bahasa Inggris untuk TOEFL iBT. Kasih 1 soal. Maks 8 baris. Plain text.');
       await sendMessage(env, chatId, response);

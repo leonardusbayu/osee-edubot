@@ -218,11 +218,19 @@ export const MOTIVATION = {
   ],
 };
 
+export const TEST_NAMES: Record<string, string> = {
+  TOEFL_IBT: 'TOEFL iBT',
+  TOEFL_ITP: 'TOEFL ITP',
+  IELTS: 'IELTS Academic',
+  TOEIC: 'TOEIC',
+};
+
 // ============================================================
 // LESSON GENERATOR — Uses all methods above
 // ============================================================
 export async function generateLesson(env: Env, user: User, topic: string): Promise<string> {
-  const prompt = buildLessonPrompt(user, topic);
+  const testName = TEST_NAMES[user.target_test || 'TOEFL_IBT'] || 'English Test';
+  const prompt = buildLessonPrompt(user, topic, testName);
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -236,7 +244,7 @@ export async function generateLesson(env: Env, user: User, topic: string): Promi
         max_tokens: 400,
         temperature: 0.7,
         messages: [
-          { role: 'system', content: TEACHING_SYSTEM_PROMPT },
+          { role: 'system', content: getTeachingSystemPrompt(testName) },
           { role: 'user', content: prompt },
         ],
       }),
@@ -250,7 +258,8 @@ export async function generateLesson(env: Env, user: User, topic: string): Promi
 }
 
 export async function generateDrill(env: Env, user: User, section: string, drillType: string): Promise<string> {
-  const prompt = buildDrillPrompt(user, section, drillType);
+  const testName = TEST_NAMES[user.target_test || 'TOEFL_IBT'] || 'English Test';
+  const prompt = buildDrillPrompt(user, section, drillType, testName);
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -264,7 +273,7 @@ export async function generateDrill(env: Env, user: User, section: string, drill
         max_tokens: 300,
         temperature: 0.7,
         messages: [
-          { role: 'system', content: TEACHING_SYSTEM_PROMPT },
+          { role: 'system', content: getTeachingSystemPrompt(testName) },
           { role: 'user', content: prompt },
         ],
       }),
@@ -280,7 +289,7 @@ export async function generateDrill(env: Env, user: User, section: string, drill
 // ============================================================
 // SYSTEM PROMPT — The core teaching personality
 // ============================================================
-const TEACHING_SYSTEM_PROMPT = `PERAN: Tutor TOEFL iBT, OSEE. DIRI: "Aku". SISWA: "kamu".
+const getTeachingSystemPrompt = (testName: string) => `PERAN: Tutor ${testName}, OSEE. DIRI: "Aku". SISWA: "kamu".
 
 ATURAN FORMAT — WAJIB:
 1. MAKS 10 BARIS per pesan
@@ -293,7 +302,7 @@ ATURAN FORMAT — WAJIB:
 Bandingkan Bahasa Indonesia vs English di setiap penjelasan.
 Contoh + 1 soal. Tunggu jawaban. Feedback + soal berikutnya.`;
 
-function buildLessonPrompt(user: User, topic: string): string {
+function buildLessonPrompt(user: User, topic: string, testName: string): string {
   const level = user.proficiency_level || 'beginner';
 
   const topicContent: Record<string, string> = {
@@ -342,7 +351,6 @@ P2: Detail (2-3 kalimat)
 P3: "I would appreciate it if you could [request]..."
 Kasih 1 contoh email pendek (max 5 baris). Lalu kasih 1 prompt dan minta siswa tulis. Maks 12 baris.`,
 
-    // --- NEW GRAMMAR TOPICS ---
     passive_voice: `TOPIK: Passive Voice. Pembuka singkat maks 8 baris:
 Bahasa: "di-" prefix → "dibaca", "dimakan". English: be + V3 → "is read", "was eaten"
 Kasih 3 contoh: Active → Passive
@@ -365,50 +373,71 @@ The book WHICH I bought is interesting.
 Soal: "The girl ___ (who/which) sits next to me is smart." Jawab?`,
 
     word_formation: `TOPIK: Word Formation (prefix/suffix). Maks 8 baris:
-Ini penting buat section "Complete the Words" di TOEFL iBT.
+Ini penting buat section "Complete the Words" di ${testName}.
 happy → unhappy (un- = kebalikan)
 teach → teacher (-er = orang yang)
 care → careful (-ful = penuh dengan)
 care → careless (-less = tanpa)
 Soal: "She is very (help)___. She always helps others." Jawab?`,
 
-    // --- VOCABULARY TOPICS ---
-    word_of_day: `TOPIK: Kata Hari Ini. Pilih 1 academic word yang sering muncul di TOEFL.
-Format: kata + arti + 2 contoh kalimat + 1 soal (isi kata itu di kalimat baru).
-Maks 8 baris. Pilih kata yang jarang diketahui siswa Indonesia level beginner.`,
+    word_of_day: `TOPIK: Kata Hari Ini. Pilih 1 academic word yang sering muncul di ${testName}.
+Format: [Kata] - [Arti/Terjemahan]. Lalu 1 contoh kalimat.
+Lalu kasih 1 pertanyaan MCQ pendek (Fill in the blank) buat nge-test pemahaman.
+Tunggu jawaban.`,
 
-    academic_words: `TOPIK: Academic Word List. Kasih 3 kata akademik yang sering di TOEFL:
-Setiap kata: arti singkat + 1 contoh kalimat.
-Lalu 1 soal: kalimat dengan blank, siswa pilih kata mana yang cocok.
-Maks 10 baris. Plain text.`,
+    academic_words: `TOPIK: Academic Word List. Kasih 3 kata akademik yang sering di ${testName}:
+(Misal: Implement, Determine, Significant)
+Bahas artinya dengan gaya nyantai.
+Lalu kasih 1 quiz MCQ (A/B/C/D) fill in the blank.`,
 
-    collocations: `TOPIK: Collocations (pasangan kata yang natural). Maks 8 baris:
-Orang Indonesia sering salah:
-"make a decision" BUKAN "do a decision"
-"heavy rain" BUKAN "strong rain"
-"take a photo" BUKAN "make a photo"
-Soal: "Can you ___ (make/do) me a favor?" Jawab?`,
+    collocations: `TOPIK: Collocations. Banyak siswa ngomong "do a decision" padahal yang bener "make a decision".
+Bahas 3 collocation penting.
+Lalu kasih 1 pertanyaan tebak-tebakan.`,
 
     paraphrasing: `TOPIK: Paraphrasing (menulis ulang kalimat). Maks 8 baris:
-Ini skill KRITIS untuk Writing section TOEFL iBT.
+Ini skill KRITIS untuk Writing section ${testName}.
 Contoh: "Many students find math difficult."
 → "A large number of learners struggle with mathematics."
 Kasih 1 kalimat dan minta siswa paraphrase. Tunggu jawaban.`,
 
-    // --- STRATEGY TOPICS ---
-    reading_strategy: `TOPIK: Reading Strategy untuk TOEFL iBT. Maks 8 baris:
-Kasih 1 tips spesifik (bukan generic). Contoh:
-"Baca PERTANYAAN dulu sebelum baca passage. Underline keyword di pertanyaan. Lalu scan passage cari keyword itu."
+    reading_main_idea: `TOPIK: Reading - Main Idea.
+Ini skill KRITIS untuk Reading section ${testName}.
+Jelasin bahwa "Main Idea = Topik + Opini penulis".
+Kasih 1 paragraf pendek + pertanyaan MCQ "What is the main idea?".`,
+
+    reading_strategy: `TOPIK: Reading Strategy untuk ${testName}. Maks 8 baris:
+Kasih 1 tips spesifik. Contoh:
+"Jangan baca full paragraph dulu, baca kalimat pertama sama terakhir aja biar dapet idenya."
 Atau: "Untuk soal Main Idea, jawaban yang terlalu spesifik = SALAH."
 Kasih 1 contoh mini passage + 1 soal untuk praktek strategi ini.`,
 
-    listening_strategy: `TOPIK: Listening Strategy untuk TOEFL iBT. Maks 8 baris:
-Kasih 1 tips spesifik. Contoh:
-"Dengarkan kata TRANSISI: however, but, actually, in fact — biasanya jawaban ada setelah kata-kata ini."
-Atau: "Kalau speaker bilang 'The important thing is...' atau 'What I mean is...' — CATAT itu, biasanya jadi jawaban."
-Kasih 1 contoh situasi pendek untuk praktek.`,
+    listening_practice: `TOPIK: Listening Practice — soal listening dengan audio multi-speaker.
+Buat 1 dialog pendek (4-6 kalimat) antara 2 orang dalam konteks akademik (di kampus, perpustakaan, kelas, dll).
 
-    // --- SPEAKING & WRITING EXPAND ---
+FORMAT WAJIB — IKUTI PERSIS:
+
+[AUDIO] Man: Hey, are you going to the study group tonight? Woman: I can't, I have to finish my lab report. Man: When is it due? Woman: Tomorrow morning. I haven't even started the data analysis. Man: That's rough. Do you want me to send you the notes from today's lecture? Woman: That would be great, thanks!
+
+Soal: Why can't the woman go to the study group?
+A. She has a class
+B. She needs to finish a lab report
+C. She is going home
+D. She has a doctor's appointment
+
+Jawab?
+
+ATURAN:
+1. WAJIB pakai label speaker "Man:" dan "Woman:" sebelum setiap kalimat.
+2. Semua dialog dalam [AUDIO] HARUS dalam satu baris/paragraf (jangan pisah per baris).
+3. Dialog harus natural, akademik, dan relevan untuk ${testName}.
+4. Buat 1 soal MCQ (A/B/C/D) setelah dialog.
+5. Maks 12 baris total.`,
+
+    listening_strategy: `TOPIK: Listening Strategy untuk ${testName}. Maks 8 baris:
+Kasih 1 tips spesifik. Contoh:
+"Perhatiin kata-kata signal kayak 'However', 'But', 'Actually' — biasanya jawaban ada di situ!"
+Kasih 1 mini transkrip + soal praktek.`,
+
     pronunciation: `TOPIK: Pronunciation untuk orang Indonesia. Maks 10 baris:
 Suara yang PALING susah buat orang Indo:
 1. TH: "think" bukan "tink", "this" bukan "dis" — lidah di antara gigi
@@ -431,8 +460,8 @@ Soal: "She studied hard. ___, she passed the exam." (Therefore/However) Jawab?`,
 INGAT: Maks 8 baris. Plain text. Tanpa heading/bold/markdown. 1 soal saja. Langsung ke inti, jangan basa-basi.`;
 }
 
-function buildDrillPrompt(user: User, section: string, drillType: string): string {
-  return `Buat 1 soal ${section} (${drillType}) untuk level ${user.proficiency_level || 'beginner'}.
+function buildDrillPrompt(user: User, section: string, drillType: string, testName: string): string {
+  return `Buat 1 soal ${section} (${drillType}) untuk level ${user.proficiency_level || 'beginner'} buat latihan ${testName}.
 
 Plain text. Maks 6 baris. Langsung soalnya, jangan basa-basi. Akhiri dengan "Jawab?"`;
 }

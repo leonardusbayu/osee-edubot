@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTestStore } from '../stores/test';
 import Timer from '../components/Timer';
@@ -8,6 +8,26 @@ function stripHtml(str: string): string {
   if (!str) return '';
   return str.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
 }
+
+const AudioWithError = ({ src, className }: { src: string; className?: string }) => {
+  const [err, setErr] = useState(false);
+  if (!src) return null;
+  if (err) {
+    return (
+      <div className="bg-tg-secondary rounded-lg p-3 text-sm text-tg-hint">
+        Audio tidak dapat diputar — coba refresh halaman
+      </div>
+    );
+  }
+  return (
+    <audio
+      controls
+      src={src}
+      className={className}
+      onError={() => setErr(true)}
+    />
+  );
+};
 
 export default function TestRunner() {
   const { attemptId } = useParams<{ attemptId: string }>();
@@ -29,6 +49,10 @@ export default function TestRunner() {
   const [transitioning, setTransitioning] = useState(false);
   const [showExplanation, setShowExplanation] = useState(false);
   const [currentExplanation, setCurrentExplanation] = useState('');
+  const [audioLoadError, setAudioLoadError] = useState(false);
+  const [questionsLoading, setQuestionsLoading] = useState(false);
+  const [sessionId, setSessionId] = useState<number | null>(null);
+  const questionStartTimeRef = useRef<number>(Date.now());
 
   const currentQuestion = questions[currentQuestionIndex];
   const currentSectionInfo = sections.find((s) => s.id === currentSection);
@@ -43,6 +67,7 @@ export default function TestRunner() {
   }, [currentSection]);
 
   async function loadSectionQuestions() {
+    setQuestionsLoading(true);
     try {
       const qType = useTestStore.getState().questionType;
       const url = `/api/tests/questions/${currentSection}?limit=10${qType ? '&question_type=' + qType : ''}`;
@@ -67,6 +92,8 @@ export default function TestRunner() {
       }
     } catch {
       setQuestions(getFallbackQuestions());
+    } finally {
+      setQuestionsLoading(false);
     }
   }
 
@@ -166,6 +193,7 @@ export default function TestRunner() {
         return '_'.repeat(Math.max(letters.length, 3));
       });
       return {
+        id: q.id,
         type: 'complete_the_words',
         instruction: c.direction || 'Fill in the missing letters.',
         passage: displayPassage,
@@ -183,6 +211,7 @@ export default function TestRunner() {
         for (const sq of c.questions) {
           const opts = (sq.options || []).map((o: any) => `${o.key}. ${stripHtml(o.text || '')}`);
           items.push({
+            id: q.id,
             type: 'multiple_choice',
             passage,
             question: stripHtml(sq.question_text || ''),
@@ -195,6 +224,7 @@ export default function TestRunner() {
       }
       // Fallback
       return {
+        id: q.id,
         type: 'multiple_choice',
         passage: stripHtml(c.passage || c.passage_text || ''),
         question: stripHtml(c.question_text || ''),
@@ -211,6 +241,7 @@ export default function TestRunner() {
         for (const sq of c.questions) {
           const opts = (sq.options || []).map((o: any) => ({ key: o.key, text: stripHtml(o.text || '') }));
           items.push({
+            id: q.id,
             type: 'error_identification',
             instruction: stripHtml(c.direction || 'Find the error in this sentence.'),
             sentence: stripHtml(sq.question_text || ''),
@@ -223,6 +254,7 @@ export default function TestRunner() {
       }
       // Fallback single question
       return {
+        id: q.id,
         type: 'error_identification',
         instruction: stripHtml(c.direction || 'Find the error in this sentence.'),
         sentence: stripHtml(c.question_text || ''),
@@ -233,13 +265,19 @@ export default function TestRunner() {
     }
 
     if (['read_in_daily_life', 'read_academic_passage'].includes(type)) {
+      const passageText = c.passage_text || '';
+      const audioUrl = passageText.length > 10 && passageText.length <= 2000
+        ? `/api/tts/speak?text=${encodeURIComponent(passageText.substring(0, 2000))}`
+        : null;
       return {
+        id: q.id,
         type: 'multiple_choice',
-        passage: c.passage_text || '',
+        passage: passageText,
         question: c.question_text || '',
         options: getOptions(c),
         correct: (c.answers?.[0] || '').toUpperCase(),
         explanation: c.explanation || '',
+        audio_url: audioUrl,
       };
     }
 
@@ -255,6 +293,7 @@ export default function TestRunner() {
 
         // First item: listen to the passage
         items.push({
+          id: q.id,
           type: 'listening_passage',
           instruction: stripHtml(c.direction || 'Listen to the audio.'),
           passage: passageScript,
@@ -272,6 +311,7 @@ export default function TestRunner() {
           }
 
           items.push({
+            id: q.id,
             type: 'listening',
             instruction: '',
             question: stripHtml(sq.question_text || ''),
@@ -297,6 +337,7 @@ export default function TestRunner() {
       }
 
       return {
+        id: q.id,
         type: 'listening',
         instruction: c.direction || 'Listen to the audio, then answer the question.',
         passage: audioText,
@@ -321,6 +362,7 @@ export default function TestRunner() {
 
           if (type === 'listen_and_repeat') {
             items.push({
+              id: q.id,
               type: 'listen_and_repeat',
               instruction: stripHtml(c.direction || 'Listen and repeat the sentence.'),
               prompt: script,
@@ -329,6 +371,7 @@ export default function TestRunner() {
             });
           } else {
             items.push({
+              id: q.id,
               type: 'take_interview',
               instruction: stripHtml(c.direction || 'Answer the question naturally.'),
               prompt: script,
@@ -344,6 +387,7 @@ export default function TestRunner() {
       // Fallback single question
       const prompt = stripHtml(c.passage_text || c.question_text || '');
       return {
+        id: q.id,
         type,
         instruction: stripHtml(c.direction || ''),
         prompt,
@@ -371,6 +415,7 @@ export default function TestRunner() {
             }
 
             items.push({
+              id: q.id,
               type: 'build_sentence',
               instruction: stripHtml(c.direction || 'Susun kata menjadi kalimat yang tepat.'),
               passage: passage.replace(/\{\{[^}]+\}\}/g, '____'),  // Show blanks
@@ -388,6 +433,7 @@ export default function TestRunner() {
               ? `/api/tts/speak?voice=alloy&text=${encodeURIComponent(prompt.substring(0, 2000))}`
               : null;
             items.push({
+              id: q.id,
               type: 'write_email',
               instruction: stripHtml(c.direction || 'Write an email.'),
               prompt: prompt || 'Write an email response.',
@@ -407,6 +453,7 @@ export default function TestRunner() {
               ? `/api/tts/speak?multi=true&text=${encodeURIComponent(contexts[0].text.substring(0, 2000))}`
               : null;
             items.push({
+              id: q.id,
               type: 'write_academic_discussion',
               instruction: stripHtml(c.direction || 'Write your response.'),
               prompt: prompt || 'Write a contribution to the discussion.',
@@ -424,6 +471,7 @@ export default function TestRunner() {
       if (type === 'build_sentence') {
         const words = (c.passage_text || '').replace(/\{\{.*?\}\}/g, '').split(/\s+/).filter(Boolean);
         return {
+          id: q.id,
           type: 'build_sentence',
           instruction: stripHtml(c.direction || 'Arrange the words correctly.'),
           words: words.length > 1 ? words.sort(() => Math.random() - 0.5) : ['arrange', 'these', 'words'],
@@ -431,6 +479,7 @@ export default function TestRunner() {
         };
       }
       return {
+        id: q.id,
         type,
         instruction: stripHtml(c.direction || ''),
         prompt: stripHtml(c.question_text || c.passage_text || 'Write your response.'),
@@ -438,13 +487,241 @@ export default function TestRunner() {
       };
     }
 
+    // fill_blank (TOEFL ITP style)
+    if (type === 'fill_blank' || type === 'fill_in_blank' || type === 'sentence_completion' || type === 'summary_completion') {
+      // All are text-fill question types rendered as textarea
+      return {
+        id: q.id,
+        type: 'fill_blank',
+        instruction: stripHtml(c.direction || type === 'fill_in_blank' ? 'Complete the sentence with the correct word.' : 'Fill in the blanks to complete the text.'),
+        passage: c.passage_text || c.passage || '',
+        question: c.question_text || '',
+        time_limit: 420,
+      };
+    }
+
+    // IELTS True/False/Not Given
+    if (type === 'true_false_not_given') {
+      return {
+        id: q.id,
+        type: 'true_false_not_given',
+        passage: c.passage_text || c.passage || '',
+        question: c.question_text || '',
+        options: (c.options || []).length >= 2
+          ? c.options.map((o: any) => o.text || o)
+          : ['True', 'False', 'Not Given'],
+        correct: (c.answers?.[0] || '').toUpperCase(),
+        explanation: c.explanation || '',
+      };
+    }
+
+    // IELTS Matching headings / Matching information / Matching features
+    if (['matching_headings', 'matching_information', 'matching_features', 'matching'].includes(type)) {
+      return {
+        id: q.id,
+        type: 'matching',
+        instruction: stripHtml(c.direction || 'Match each item to its correct match.'),
+        passage: c.passage_text || c.passage || '',
+        question: c.question_text || '',
+        options: (c.options || []).map((o: any) => ({
+          key: o.key || o,
+          text: o.text || o,
+        })),
+        correct: (c.answers?.[0] || '').toUpperCase(),
+        explanation: c.explanation || '',
+      };
+    }
+
+    // IELTS Note completion
+    if (type === 'note_completion') {
+      return {
+        id: q.id,
+        type: 'fill_blank',
+        instruction: stripHtml(c.direction || 'Complete the notes with the correct word or number.'),
+        passage: c.passage_text || c.passage || '',
+        question: c.question_text || '',
+        time_limit: 420,
+      };
+    }
+
+    // IELTS Map / Diagram labeling
+    if (type === 'map_diagram_labeling') {
+      return {
+        id: q.id,
+        type: 'fill_blank',
+        instruction: stripHtml(c.direction || 'Label the diagram with the correct answer.'),
+        passage: c.passage_text || c.passage || '',
+        question: c.question_text || '',
+        image_url: c.image_url || null,
+        time_limit: 420,
+      };
+    }
+
+    // IELTS Writing Task 1 (graphs/charts) — premium only
+    if (type === 'task1') {
+      const contexts = (c.illustrated_passages || []).map((ip: any) => ({
+        text: stripHtml(ip.text || ''),
+        label: stripHtml(ip.label || ''),
+        image_url: ip.image_url || null,
+      }));
+      return {
+        id: q.id,
+        type: 'write_email',
+        instruction: stripHtml(c.direction || 'Describe the chart in at least 150 words.'),
+        passage: c.passage_text || '',
+        contexts,
+        prompt: c.question_text || 'Describe the chart below.',
+        time_limit: 600,
+        model_answer: stripHtml(c.model_answer || ''),
+        premium_only: true,
+      };
+    }
+
+    // IELTS Writing Task 2 (essay)
+    if (type === 'task2') {
+      return {
+        id: q.id,
+        type: 'write_academic_discussion',
+        instruction: stripHtml(c.direction || 'Write an essay of at least 250 words addressing the topic below.'),
+        passage: c.passage_text || '',
+        prompt: c.question_text || '',
+        contexts: [],
+        time_limit: 1200,
+        model_answer: stripHtml(c.model_answer || ''),
+        premium_only: true,
+      };
+    }
+
+    // IELTS Speaking Part 1 (Q&A)
+    if (type === 'part1') {
+      const script = stripHtml(c.passage_text || c.question_text || '');
+      return {
+        id: q.id,
+        type: 'take_interview',
+        instruction: stripHtml(c.direction || 'Answer the following questions naturally.'),
+        prompt: script,
+        audio_url: script.length > 3
+          ? `/api/tts/speak?text=${encodeURIComponent(script.substring(0, 2000))}`
+          : null,
+        premium_only: true,
+      };
+    }
+
+    // IELTS Speaking Part 2 (Long turn) — premium
+    if (type === 'part2') {
+      return {
+        id: q.id,
+        type: 'take_interview',
+        instruction: stripHtml(c.direction || 'Speak for 1-2 minutes about the topic.'),
+        prompt: stripHtml(c.passage_text || c.question_text || ''),
+        time_limit: 120,
+        premium_only: true,
+      };
+    }
+
+    // IELTS Speaking Part 3 (Discussion) — premium
+    if (type === 'part3') {
+      return {
+        id: q.id,
+        type: 'take_interview',
+        instruction: stripHtml(c.direction || 'Discuss the topic in detail.'),
+        prompt: stripHtml(c.passage_text || c.question_text || ''),
+        premium_only: true,
+      };
+    }
+
+    // TOEFL iBT Insert text / Prose summary
+    if (type === 'insert_text' || type === 'prose_summary') {
+      return {
+        id: q.id,
+        type: 'multiple_choice',
+        instruction: stripHtml(c.direction || 'Select the correct answer.'),
+        passage: c.passage_text || c.passage || '',
+        question: c.question_text || '',
+        options: getOptions(c),
+        correct: (c.answers?.[0] || '').toUpperCase(),
+        explanation: c.explanation || '',
+      };
+    }
+
+    // TOEIC Listening Part 1 — Photographs (multiple choice, no audio)
+    if (type === 'photographs') {
+      return {
+        id: q.id,
+        type: 'multiple_choice',
+        passage: '',
+        question: c.question_text || 'Look at the photograph and choose the best response.',
+        options: getOptions(c),
+        correct: (c.answers?.[0] || '').toUpperCase(),
+        explanation: c.explanation || '',
+      };
+    }
+
+    // TOEIC Listening Part 2 — Question-Response (audio + choices)
+    if (type === 'question_response') {
+      const audioText = c.passage_text || c.question_text || '';
+      return {
+        id: q.id,
+        type: 'listening',
+        instruction: c.direction || 'Listen to the question and choose the best response.',
+        passage: '',
+        question: '',
+        options: getOptions(c),
+        correct: (c.answers?.[0] || '').toUpperCase(),
+        audio_url: audioText.length > 3
+          ? `/api/tts/speak?text=${encodeURIComponent(audioText.substring(0, 1000))}`
+          : null,
+        explanation: c.explanation || '',
+      };
+    }
+
+    // TOEIC Reading Part 5 — Incomplete Sentences
+    if (type === 'incomplete_sentences') {
+      return {
+        id: q.id,
+        type: 'multiple_choice',
+        instruction: stripHtml(c.direction || 'Select the best answer to complete the sentence.'),
+        passage: '',
+        question: c.question_text || '',
+        options: getOptions(c),
+        correct: (c.answers?.[0] || '').toUpperCase(),
+        explanation: c.explanation || '',
+      };
+    }
+
+    // TOEIC Reading Part 6 — Text Completion
+    if (type === 'text_completion') {
+      return {
+        id: q.id,
+        type: 'fill_blank',
+        instruction: stripHtml(c.direction || 'Fill in the blanks to complete the text.'),
+        passage: c.passage_text || c.passage || '',
+        question: c.question_text || '',
+        time_limit: 420,
+      };
+    }
+
+    // TOEIC Reading Part 7 — Reading Comprehension
+    if (type === 'reading_comprehension') {
+      return {
+        id: q.id,
+        type: 'multiple_choice',
+        passage: c.passage_text || c.passage || '',
+        question: c.question_text || '',
+        options: getOptions(c),
+        correct: (c.answers?.[0] || '').toUpperCase(),
+        explanation: c.explanation || '',
+      };
+    }
+
     // Default: multiple choice
     return {
+      id: q.id,
       type: 'multiple_choice',
       question: c.question_text || 'Question',
-      options: c.options?.length > 0 ? c.options : ['A', 'B', 'C', 'D'],
+      options: c.options?.length > 0 ? c.options : ['A', 'B.', 'C.', 'D.'],
       correct: c.answers?.[0] || '',
-      passage: c.passage_text || '',
+      passage: c.passage_text || c.passage || '',
     };
   }
 
@@ -472,7 +749,47 @@ export default function TestRunner() {
     setSpeakingResult(null);
     setSpeakingLoading(false);
     setSubmitting(false);
+    questionStartTimeRef.current = Date.now();
   }, [currentQuestionIndex, currentSection]);
+
+  // Start session on mount
+  useEffect(() => {
+    let activeSessionId: number | null = null;
+    (async () => {
+      try {
+        const res = await fetch('/api/analytics/session/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ platform: 'mini_app', source: 'test' }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          activeSessionId = data.session_id;
+          setSessionId(data.session_id);
+        }
+      } catch {}
+    })();
+    return () => {
+      if (activeSessionId) {
+        fetch('/api/analytics/session/end', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: activeSessionId, questions_answered: currentQuestionIndex }),
+        }).catch(() => {});
+      }
+    };
+  }, []);
+
+  // Track message on each question load
+  useEffect(() => {
+    if (currentQuestion) {
+      fetch('/api/analytics/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_type: 'question_view', content_length: 0 }),
+      }).catch(() => {});
+    }
+  }, [currentQuestionIndex]);
 
   const handleSubmitAnswer = useCallback(async () => {
     if (!currentSection || !currentQuestion || submitting) return;
@@ -493,7 +810,7 @@ export default function TestRunner() {
       return;
     }
 
-    if (currentQuestion.type === 'multiple_choice' || currentQuestion.type === 'listening' || currentQuestion.type === 'error_identification') {
+    if (currentQuestion.type === 'multiple_choice' || currentQuestion.type === 'listening' || currentQuestion.type === 'error_identification' || currentQuestion.type === 'true_false_not_given' || currentQuestion.type === 'matching') {
       answerData = { selected: selectedAnswer, correct_answer: currentQuestion.correct };
     } else if (currentQuestion.type === 'write_email' || currentQuestion.type === 'write_academic_discussion') {
       answerData = { text: writingText };
@@ -507,6 +824,8 @@ export default function TestRunner() {
 
     saveAnswer(currentSection, currentQuestionIndex, answerData);
 
+    const timeSpentSeconds = Math.round((Date.now() - questionStartTimeRef.current) / 1000);
+
     try {
       const response = await fetch(`/api/tests/attempt/${attemptId}/answer`, {
         method: 'POST',
@@ -514,7 +833,9 @@ export default function TestRunner() {
         body: JSON.stringify({
           section: currentSection,
           question_index: currentQuestionIndex,
+          content_id: currentQuestion?.id || null,
           answer_data: answerData,
+          time_spent_seconds: timeSpentSeconds,
         }),
       });
 
@@ -551,9 +872,7 @@ export default function TestRunner() {
         if (currentIdx + 1 < sections.length) {
           const nextSection = sections[currentIdx + 1].id;
           advanceWithTransition(() => setCurrentSection(nextSection));
-          try {
-            const response = fetch(`/api/tests/attempt/${attemptId}/section/${nextSection}`, { method: 'POST' });
-          } catch {}
+          fetch(`/api/tests/attempt/${attemptId}/section/${nextSection}`, { method: 'POST' }).catch(() => {});
         } else {
           handleFinish();
         }
@@ -562,7 +881,17 @@ export default function TestRunner() {
   }, [selectedAnswer, writingText, sentenceOrder, currentSection, currentQuestionIndex, questions, submitting, currentQuestion]);
 
   async function handleFinish() {
-    try { await fetch(`/api/tests/attempt/${attemptId}/finish`, { method: 'POST' }); } catch {}
+    // Retry up to 3 times to ensure the backend marks the test as completed
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch(`/api/tests/attempt/${attemptId}/finish`, { method: 'POST' });
+        if (res.ok) break;
+        // Wait before retry
+        if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+      } catch {
+        if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+      }
+    }
     navigate(`/test/${attemptId}/results`);
   }
 
@@ -612,6 +941,7 @@ export default function TestRunner() {
             body: JSON.stringify({
               section: currentSection,
               question_index: currentQuestionIndex,
+              content_id: currentQuestion?.id || null,
               answer_data: { audio: true, transcription: result.transcription, score: result.score },
             }),
           });
@@ -648,7 +978,7 @@ export default function TestRunner() {
     }
   }
 
-  if (!currentSection || !currentQuestion) {
+  if (!currentSection || !currentQuestion || questionsLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen p-4">
         <div className="text-center">
@@ -701,7 +1031,10 @@ export default function TestRunner() {
               <div className="bg-tg-secondary rounded-xl p-6 mb-4 text-center">
                 <p className="text-4xl mb-3">🎧</p>
                 <p className="text-sm font-medium mb-4">Dengarkan audio berikut dengan seksama</p>
-                <audio controls src={currentQuestion.audio_url} className="w-full" />
+                {currentQuestion.passage && currentQuestion.passage.length > 4000 && (
+                  <p className="text-xs text-orange-500 mb-2">⚠️ Audio panjang — bagian akhir mungkin terpotong</p>
+                )}
+                <AudioWithError src={currentQuestion.audio_url} className="w-full" />
               </div>
             ) : (
               <div className="bg-tg-secondary rounded-xl p-4 mb-4">
@@ -731,7 +1064,7 @@ export default function TestRunner() {
             {currentQuestion.audio_url && (
               <div className="bg-tg-secondary rounded-xl p-4 mb-4">
                 <p className="text-sm font-medium mb-2">🎧 Dengarkan:</p>
-                <audio controls src={currentQuestion.audio_url} className="w-full" />
+                <AudioWithError src={currentQuestion.audio_url} className="w-full" />
               </div>
             )}
             {currentQuestion.question && (
@@ -761,7 +1094,7 @@ export default function TestRunner() {
             )}
 
             {currentQuestion.audio_url && (
-              <audio controls src={currentQuestion.audio_url} className="w-full mb-4" />
+              <AudioWithError src={currentQuestion.audio_url} className="w-full mb-4" />
             )}
 
             {currentQuestion.prompt && (
@@ -772,6 +1105,63 @@ export default function TestRunner() {
 
             {currentQuestion.question && (
               <p className="font-medium mb-4">{currentQuestion.question}</p>
+            )}
+
+            {/* Premium-only lock for IELTS Writing/Speaking tasks */}
+            {currentQuestion.premium_only && (
+              <div className="bg-gradient-to-r from-yellow-400/20 to-orange-500/20 border border-yellow-500/30 rounded-xl p-4 mb-4 text-center">
+                <p className="text-2xl mb-1">🔒</p>
+                <p className="font-semibold text-sm">Premium Content</p>
+                <p className="text-xs text-tg-hint mt-1">Upgrade untuk akses soal ini</p>
+                <a
+                  href="https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=premium"
+                  className="block mt-3 bg-yellow-500 text-black font-bold py-2 px-4 rounded-lg text-sm"
+                >
+                  ⭐ Upgrade Premium
+                </a>
+              </div>
+            )}
+
+            {/* IELTS True/False/Not Given */}
+            {currentQuestion.type === 'true_false_not_given' && (
+              <div className="space-y-2 mb-4">
+                {['TRUE', 'FALSE', 'NOT GIVEN'].map((opt) => {
+                  const letter = opt.charAt(0);
+                  return (
+                    <button
+                      key={opt}
+                      onClick={() => setSelectedAnswer(letter)}
+                      className={`w-full text-left p-3 rounded-lg border-2 transition-colors ${
+                        selectedAnswer === letter ? 'border-tg-button bg-tg-button/10' : 'border-tg-secondary bg-tg-secondary'
+                      }`}
+                    >
+                      <span className="font-bold mr-2">{opt}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Matching UI */}
+            {currentQuestion.type === 'matching' && currentQuestion.options && (
+              <div className="space-y-2 mb-4">
+                {currentQuestion.options.map((option: any, i: number) => {
+                  const key = typeof option === 'string' ? option.charAt(0) : option.key;
+                  const text = typeof option === 'string' ? option : option.text;
+                  return (
+                    <button
+                      key={key || i}
+                      onClick={() => setSelectedAnswer(String(key))}
+                      className={`w-full text-left p-3 rounded-lg border-2 transition-colors ${
+                        selectedAnswer === String(key) ? 'border-tg-button bg-tg-button/10' : 'border-tg-secondary bg-tg-secondary'
+                      }`}
+                    >
+                      <span className="font-bold mr-2">({key})</span>
+                      <span className="text-sm">{text}</span>
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </>
         )}
@@ -842,9 +1232,9 @@ export default function TestRunner() {
                       newInputs[i] = e.target.value;
                       setBlankInputs(newInputs);
                     }}
-                    placeholder={'_'.repeat(answer.length)}
+                    placeholder={'_'.repeat((answer || '').length)}
                     className="flex-1 p-2 rounded-lg border border-tg-secondary bg-tg-bg text-sm font-mono focus:outline-none focus:border-tg-button"
-                    maxLength={answer.length + 5}
+                    maxLength={(answer || '').length + 5}
                   />
                   <span className="text-xs text-tg-hint">{answer.length} huruf</span>
                 </div>
@@ -879,7 +1269,7 @@ export default function TestRunner() {
             {currentQuestion.audio_url && (
               <div className="bg-tg-secondary rounded-xl p-3 mb-3">
                 <p className="text-xs text-tg-hint mb-2">🔊 Dengarkan instruksi:</p>
-                <audio controls src={currentQuestion.audio_url} className="w-full" />
+                <AudioWithError src={currentQuestion.audio_url} className="w-full" />
               </div>
             )}
             {/* Context panels — professor's lecture, student opinions, email scenario */}
@@ -934,7 +1324,7 @@ export default function TestRunner() {
                 <p className="text-sm font-medium mb-3">
                   {currentQuestion.type === 'listen_and_repeat' ? 'Dengarkan kalimat ini:' : 'Dengarkan pertanyaan:'}
                 </p>
-                <audio controls src={currentQuestion.audio_url} className="w-full mb-3" />
+                <AudioWithError src={currentQuestion.audio_url} className="w-full mb-3" />
               </div>
             )}
 

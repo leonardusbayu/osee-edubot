@@ -7,6 +7,9 @@ import TestResults from './pages/TestResults';
 import Progress from './pages/Progress';
 import Dashboard from './pages/Dashboard';
 import AdminContent from './pages/AdminContent';
+import AdminStudents from './pages/AdminStudents';
+import AdminAnalytics from './pages/AdminAnalytics';
+import WeaknessDashboard from './pages/WeaknessDashboard';
 
 declare global {
   interface Window {
@@ -27,16 +30,14 @@ declare global {
   }
 }
 
-window.onerror = () => true;
-window.onunhandledrejection = () => true;
-
 function App() {
   const { setTokens } = useAuthStore();
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let tg: any;
     try {
-      const tg = window.Telegram?.WebApp;
+      tg = window.Telegram?.WebApp;
       if (tg) {
         tg.ready();
         tg.expand();
@@ -45,9 +46,35 @@ function App() {
       // ignore
     }
 
-    // Don't authenticate — just show the app
-    // Auth will happen lazily when needed
-    setLoading(false);
+    async function authenticateWithRetry(retryCount = 3) {
+      for (let i = 0; i < retryCount; i++) {
+        try {
+          const initData = window.Telegram?.WebApp?.initData;
+          if (initData) {
+            const response = await fetch('/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ init_data: initData }),
+            });
+            if (response.ok) {
+              const data = await response.json();
+              setTokens(data.access_token, data.refresh_token, data.user);
+              return;
+            }
+          }
+          if (i < retryCount - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        } catch (e) {
+          console.error('Auth attempt failed:', e);
+          if (i < retryCount - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+      }
+    }
+
+    authenticateWithRetry().finally(() => setLoading(false));
   }, []);
 
   if (loading) {
@@ -69,7 +96,11 @@ function App() {
         <Route path="/test/:attemptId" element={<TestRunner />} />
         <Route path="/test/:attemptId/results" element={<TestResults />} />
         <Route path="/progress" element={<Progress />} />
-        <Route path="/admin/*" element={<AdminContent />} />
+        <Route path="/admin/content" element={<AdminContent />} />
+        <Route path="/admin/students" element={<AdminStudents />} />
+        <Route path="/admin/analytics" element={<AdminAnalytics />} />
+        <Route path="/admin" element={<AdminContent />} />
+        <Route path="/admin/weaknesses" element={<WeaknessDashboard />} />
         <Route path="/dashboard" element={<Dashboard />} />
       </Routes>
     </div>

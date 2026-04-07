@@ -16,6 +16,7 @@ import { analyticsRoutes } from './routes/analytics';
 import { channelAnalyticsRoutes } from './routes/channel-analytics';
 import { premiumRoutes } from './routes/premium';
 import { handbookRoutes } from './routes/handbook';
+import { weaknessRoutes } from './routes/weakness';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -30,7 +31,7 @@ app.use('/api/*', cors({
     return allowed.includes(origin) ? origin : '';
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Telegram-User-Id'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Telegram-User-Id', 'x-admin-secret'],
   credentials: true,
 }));
 
@@ -62,6 +63,7 @@ app.route('/api/ai-generate', aiGenRoutes);
 app.route('/api/writing', writingRoutes);
 app.route('/api/analytics', analyticsRoutes);
 app.route('/api/channel-analytics', channelAnalyticsRoutes);
+app.route('/api/weakness', weaknessRoutes);
 app.route('/api/premium', premiumRoutes);
 app.route('/api/handbook', handbookRoutes);
 
@@ -425,8 +427,12 @@ async function generateTeacherWeeklyReport(env: Env): Promise<string> {
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    // Check which cron triggered
-    if (event.cron === '7 1 * * 1') {
+    // Check which cron triggered — explicit match for all patterns
+    if (event.cron === '3 1 * * *') {
+      // Morning cron (8:03 AM WIB) — study reminders + daily quiz + channel posts
+      ctx.waitUntil(handleCron(env));
+    } else if (event.cron === '7 1 * * 1') {
+      // Monday weekly leaderboard (8:07 AM WIB)
       ctx.waitUntil(handleWeeklyCron(env));
     } else if (event.cron === '0 11 * * *') {
       // Evening channel post (6 PM WIB = 11 AM UTC)
@@ -436,8 +442,7 @@ export default {
       ctx.waitUntil(handleHourlyChannelCron(env));
       ctx.waitUntil(handlePaymentExpiryCron(env));
     } else {
-      // Morning cron (8 AM WIB = 1 AM UTC) + channel morning post
-      ctx.waitUntil(handleCron(env));
+      console.warn(`Unknown cron pattern: ${event.cron}`);
     }
   },
 };

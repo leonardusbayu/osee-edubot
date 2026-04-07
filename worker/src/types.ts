@@ -20,6 +20,12 @@ export interface User {
   target_test: string | null;
   proficiency_level: string | null;
   onboarding_complete: number;
+  is_premium: number;
+  premium_until: string | null;
+  referred_by: number | null;
+  referral_code: string | null;
+  referral_count: number;
+  is_founding_student: number;
   created_at: string;
 }
 

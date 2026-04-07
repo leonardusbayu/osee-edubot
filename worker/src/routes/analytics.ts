@@ -2,66 +2,103 @@ import { Hono } from 'hono';
 import type { Env } from '../types';
 import { getAuthUser } from '../services/auth';
 
+export function isAdminRequest(c: any): boolean {
+  const secret = c.req.header('x-admin-secret');
+  return secret === c.env.ADMIN_SECRET;
+}
+import {
+  trackMessage,
+  startSession,
+  endSession,
+  incrementDailyStudyLog,
+  trackSkillProgress,
+  updateStreak,
+  getStudentAnalytics,
+  backfillDailyLogs,
+} from '../services/analytics';
+
 export const analyticsRoutes = new Hono<{ Bindings: Env }>();
 
 // Teacher dashboard — full class analytics
 analyticsRoutes.get('/dashboard', async (c) => {
-  const user = await getAuthUser(c.req.raw, c.env);
-  if (!user || (user.role !== 'teacher' && user.role !== 'admin')) {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || (user.role !== 'teacher' && user.role !== 'admin'))) {
     return c.json({ error: 'Teacher access required' }, 403);
   }
 
   const classId = c.req.query('class_id');
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  const today = new Date().toISOString().split('T')[0];
+
+  // Build user filter: when classId provided, only enrolled students
+  let userFilterClause = '';
+  let userFilterParams: any[] = [];
+  if (classId) {
+    userFilterClause = ' AND ta.user_id IN (SELECT user_id FROM class_enrollments WHERE class_id = ? AND status = ?)';
+    userFilterParams = [classId, 'active'];
+  }
 
   // Total students
   const students = classId
     ? await c.env.DB.prepare("SELECT COUNT(*) as c FROM class_enrollments WHERE class_id = ? AND status = 'active'").bind(classId).first() as any
     : await c.env.DB.prepare('SELECT COUNT(*) as c FROM users WHERE role = ?').bind('student').first() as any;
 
-  // Active today
-  const today = new Date().toISOString().split('T')[0];
+  // Active today (filtered by class if classId)
   const activeToday = await c.env.DB.prepare(
     `SELECT COUNT(DISTINCT ta.user_id) as c FROM attempt_answers aa
-     JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= ?`
-  ).bind(today).first() as any;
+     JOIN test_attempts ta ON aa.attempt_id = ta.id
+     WHERE aa.submitted_at >= ?${userFilterClause}`
+  ).bind(today, ...userFilterParams).first() as any;
 
-  // Total questions answered this week
-  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  // Total questions answered this week (filtered by class)
   const weekActivity = await c.env.DB.prepare(
     `SELECT COUNT(*) as total, SUM(CASE WHEN is_correct=1 THEN 1 ELSE 0 END) as correct
-     FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id=ta.id WHERE aa.submitted_at >= ?`
-  ).bind(weekAgo).first() as any;
+     FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id=ta.id
+     WHERE aa.submitted_at >= ?${userFilterClause}`
+  ).bind(weekAgo, ...userFilterParams).first() as any;
 
-  // Average band score
+  // Average band score (last 7 days, filtered by class)
   const avgScore = await c.env.DB.prepare(
-    'SELECT AVG(band_score) as avg FROM test_results WHERE band_score IS NOT NULL'
-  ).first() as any;
+    `SELECT AVG(tr.band_score) as avg FROM test_results tr
+     JOIN test_attempts ta ON tr.attempt_id = ta.id
+     WHERE tr.band_score IS NOT NULL AND tr.created_at >= ?${userFilterClause}`
+  ).bind(weekAgo, ...userFilterParams).first() as any;
 
-  // Weakest sections across all students
+  // Weakest sections (filtered by class)
   const weakSections = await c.env.DB.prepare(
     `SELECT aa.section, COUNT(*) as total,
      SUM(CASE WHEN aa.is_correct=1 THEN 1 ELSE 0 END) as correct
      FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id=ta.id
+     WHERE aa.submitted_at >= ?${userFilterClause}
      GROUP BY aa.section ORDER BY (CAST(correct AS FLOAT)/total) ASC`
-  ).all();
+  ).bind(weekAgo, ...userFilterParams).all();
 
-  // Top students
+  // Top students (filtered by class, this week)
   const topStudents = await c.env.DB.prepare(
-    `SELECT u.name, COUNT(aa.id) as questions, SUM(CASE WHEN aa.is_correct=1 THEN 1 ELSE 0 END) as correct
-     FROM users u JOIN test_attempts ta ON u.id=ta.user_id JOIN attempt_answers aa ON ta.id=aa.attempt_id
+    `SELECT COALESCE(u.name, u.username, 'Student ' || u.id) as name,
+            COUNT(aa.id) as questions,
+            SUM(CASE WHEN aa.is_correct=1 THEN 1 ELSE 0 END) as correct
+     FROM users u
+     JOIN test_attempts ta ON u.id=ta.user_id
+     JOIN attempt_answers aa ON ta.id=aa.attempt_id
+     WHERE aa.submitted_at >= ?${userFilterClause}
      GROUP BY u.id ORDER BY correct DESC LIMIT 10`
-  ).all();
+  ).bind(weekAgo, ...userFilterParams).all();
 
-  // API costs
+  // API costs (no filter — system-wide)
   const costs = await c.env.DB.prepare(
     "SELECT SUM(cost_usd) as total FROM api_usage"
   ).first() as any;
 
+  const weekCorrect = weekActivity?.correct || 0;
+  const weekTotal = weekActivity?.total || 0;
+
   return c.json({
     total_students: students?.c || 0,
     active_today: activeToday?.c || 0,
-    week_questions: weekActivity?.total || 0,
-    week_accuracy: weekActivity?.total > 0 ? Math.round(((weekActivity?.correct || 0) / weekActivity.total) * 100) : 0,
+    week_questions: weekTotal,
+    week_accuracy: weekTotal > 0 ? Math.round((weekCorrect / weekTotal) * 100) : 0,
     avg_band_score: avgScore?.avg ? Math.round(avgScore.avg * 10) / 10 : null,
     weak_sections: weakSections.results.map((s: any) => ({
       section: s.section,
@@ -69,7 +106,7 @@ analyticsRoutes.get('/dashboard', async (c) => {
       total: s.total,
     })),
     top_students: topStudents.results.map((s: any) => ({
-      name: s.name,
+      name: s.name || 'Unknown',
       questions: s.questions,
       accuracy: s.questions > 0 ? Math.round((s.correct / s.questions) * 100) : 0,
     })),
@@ -79,21 +116,31 @@ analyticsRoutes.get('/dashboard', async (c) => {
 
 // Student activity heatmap — hours × days
 analyticsRoutes.get('/heatmap', async (c) => {
-  const user = await getAuthUser(c.req.raw, c.env);
-  if (!user || (user.role !== 'teacher' && user.role !== 'admin')) {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || (user.role !== 'teacher' && user.role !== 'admin'))) {
     return c.json({ error: 'Teacher access required' }, 403);
   }
 
-  // Count activity by hour and day of week (last 30 days)
+  const classId = c.req.query('class_id');
   const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
+
+  let userFilterClause = '';
+  let userFilterParams: any[] = [];
+  if (classId) {
+    userFilterClause = ' AND ta.user_id IN (SELECT user_id FROM class_enrollments WHERE class_id = ? AND status = ?)';
+    userFilterParams = [classId, 'active'];
+  }
+
+  // Count activity by hour and day of week (last 30 days)
   const activity = await c.env.DB.prepare(
     `SELECT strftime('%w', aa.submitted_at) as day_of_week,
             strftime('%H', aa.submitted_at) as hour,
             COUNT(*) as count
      FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id=ta.id
-     WHERE aa.submitted_at >= ?
+     WHERE aa.submitted_at >= ?${userFilterClause}
      GROUP BY day_of_week, hour`
-  ).bind(monthAgo).all();
+  ).bind(monthAgo, ...userFilterParams).all();
 
   // Build 7x24 grid
   const grid: number[][] = Array(7).fill(null).map(() => Array(24).fill(0));
@@ -114,8 +161,9 @@ analyticsRoutes.get('/heatmap', async (c) => {
 
 // Auto question difficulty — recalculate from student performance
 analyticsRoutes.post('/calibrate-difficulty', async (c) => {
-  const user = await getAuthUser(c.req.raw, c.env);
-  if (!user || user.role !== 'admin') return c.json({ error: 'Admin only' }, 403);
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || user.role !== 'admin')) return c.json({ error: 'Admin only' }, 403);
 
   // For each question, calculate accuracy → set difficulty
   // This is a heavy operation — update in batches
@@ -149,13 +197,22 @@ analyticsRoutes.post('/calibrate-difficulty', async (c) => {
 
 // Churn prediction — find inactive students to re-engage
 analyticsRoutes.get('/churn-risk', async (c) => {
-  const user = await getAuthUser(c.req.raw, c.env);
-  if (!user || (user.role !== 'teacher' && user.role !== 'admin')) {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || (user.role !== 'teacher' && user.role !== 'admin'))) {
     return c.json({ error: 'Teacher access required' }, 403);
   }
 
+  const classId = c.req.query('class_id');
   const threeDaysAgo = new Date(Date.now() - 3 * 86400000).toISOString();
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+
+  let userFilterClause = '';
+  let userFilterParams: any[] = [];
+  if (classId) {
+    userFilterClause = ' AND u.id IN (SELECT user_id FROM class_enrollments WHERE class_id = ? AND status = ?)';
+    userFilterParams = [classId, 'active'];
+  }
 
   // Students with no activity in 3+ days
   const atRisk = await c.env.DB.prepare(
@@ -164,11 +221,11 @@ analyticsRoutes.get('/churn-risk', async (c) => {
      FROM users u
      LEFT JOIN test_attempts ta ON u.id = ta.user_id
      LEFT JOIN attempt_answers aa ON ta.id = aa.attempt_id
-     WHERE u.role = 'student'
+     WHERE u.role = 'student'${userFilterClause}
      GROUP BY u.id
      HAVING last_active < ? OR last_active IS NULL
      ORDER BY last_active ASC`
-  ).bind(threeDaysAgo).all();
+  ).bind(...userFilterParams, threeDaysAgo).all();
 
   return c.json({
     at_risk: atRisk.results.map((s: any) => ({
@@ -185,8 +242,9 @@ analyticsRoutes.get('/churn-risk', async (c) => {
 
 // Re-engage inactive students (send reminder)
 analyticsRoutes.post('/re-engage', async (c) => {
-  const user = await getAuthUser(c.req.raw, c.env);
-  if (!user || (user.role !== 'teacher' && user.role !== 'admin')) {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || (user.role !== 'teacher' && user.role !== 'admin'))) {
     return c.json({ error: 'Teacher access required' }, 403);
   }
 
@@ -214,8 +272,9 @@ analyticsRoutes.post('/re-engage', async (c) => {
 
 // A/B testing — store and compare prompt variants
 analyticsRoutes.post('/ab-test', async (c) => {
-  const user = await getAuthUser(c.req.raw, c.env);
-  if (!user || user.role !== 'admin') return c.json({ error: 'Admin only' }, 403);
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || user.role !== 'admin')) return c.json({ error: 'Admin only' }, 403);
 
   const { test_name, variant_a, variant_b } = await c.req.json();
 
@@ -229,12 +288,156 @@ analyticsRoutes.post('/ab-test', async (c) => {
 
 // Get A/B test results
 analyticsRoutes.get('/ab-results', async (c) => {
-  const user = await getAuthUser(c.req.raw, c.env);
-  if (!user || user.role !== 'admin') return c.json({ error: 'Admin only' }, 403);
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || user.role !== 'admin')) return c.json({ error: 'Admin only' }, 403);
 
   const tests = await c.env.DB.prepare(
     "SELECT data FROM analytics WHERE event = 'ab_test_created' ORDER BY created_at DESC LIMIT 10"
   ).all();
 
   return c.json({ tests: tests.results.map((t: any) => JSON.parse(t.data || '{}')) });
+});
+
+// ─── Tracking Endpoints ───────────────────────────────────────────────
+
+// Track a user message / interaction
+analyticsRoutes.post('/message', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user?.id) return c.json({ error: 'Unauthorized' }, 401);
+
+  const { message_type = 'text', content_length = 0 } = await c.req.json();
+  await trackMessage(c.env, user.id, message_type, content_length);
+  await incrementDailyStudyLog(c.env, user.id, 0, 0, 0, 0, 1);
+  return c.json({ ok: true });
+});
+
+// Start a session (mini app open)
+analyticsRoutes.post('/session/start', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user?.id) return c.json({ error: 'Unauthorized' }, 401);
+
+  const { platform = 'mini_app', source = 'unknown' } = await c.req.json();
+  const sessionId = await startSession(c.env, user.id, platform, source);
+  return c.json({ session_id: sessionId });
+});
+
+// End a session (mini app close)
+analyticsRoutes.post('/session/end', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user?.id) return c.json({ error: 'Unauthorized' }, 401);
+
+  const { session_id, questions_answered = 0 } = await c.req.json();
+  if (session_id) {
+    await endSession(c.env, session_id, questions_answered);
+  }
+  return c.json({ ok: true });
+});
+
+// ─── Rich Student Analytics (Teacher/Admin) ────────────────────────
+
+analyticsRoutes.get('/student/:userId', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || (user.role !== 'teacher' && user.role !== 'admin'))) {
+    return c.json({ error: 'Teacher or admin access required' }, 403);
+  }
+
+  const targetUserId = parseInt(c.req.param('userId'));
+  if (!targetUserId) return c.json({ error: 'Invalid user ID' }, 400);
+
+  const analytics = await getStudentAnalytics(c.env, targetUserId);
+  return c.json(analytics);
+});
+
+// Class student list with key metrics (for teacher dashboard)
+analyticsRoutes.get('/class/:classId/students', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || (user.role !== 'teacher' && user.role !== 'admin'))) {
+    return c.json({ error: 'Teacher or admin access required' }, 403);
+  }
+
+  const classId = parseInt(c.req.param('classId'));
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+
+  // Get all enrolled students in this class
+  const students = await c.env.DB.prepare(`
+    SELECT
+      u.id, u.name, u.username, u.target_test,
+      u.current_streak, u.longest_streak, u.last_study_date,
+      ug.xp, ug.level, ug.total_questions, ug.is_premium,
+      (SELECT COUNT(*) FROM test_attempts ta
+       JOIN attempt_answers aa ON ta.id = aa.attempt_id
+       WHERE ta.user_id = u.id AND aa.submitted_at >= ?) as week_questions,
+      (SELECT CAST(SUM(aa.is_correct) AS FLOAT) / NULLIF(COUNT(*), 0) * 100
+       FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
+       WHERE ta.user_id = u.id AND aa.submitted_at >= ?) as week_accuracy,
+      (SELECT SUM(time_spent_seconds) FROM daily_study_logs WHERE user_id = u.id AND log_date >= ?) as week_minutes,
+      (SELECT COUNT(DISTINCT date(started_at)) FROM user_sessions WHERE user_id = u.id AND started_at >= ?) as active_days,
+      (SELECT MAX(diagnostic.estimated_band) FROM diagnostic_results diagnostic WHERE diagnostic.user_id = u.id) as estimated_band
+    FROM users u
+    JOIN class_enrollments ce ON ce.user_id = u.id
+    LEFT JOIN user_gamification ug ON ug.user_id = u.id
+    WHERE ce.class_id = ? AND ce.status = 'active' AND u.role = 'student'
+    ORDER BY week_questions DESC
+  `).bind(sevenDaysAgo, sevenDaysAgo, sevenDaysAgo, sevenDaysAgo, classId).all() as any;
+
+  return c.json({
+    class_id: classId,
+    students: (students.results || []).map((s: any) => ({
+      id: s.id,
+      name: s.name || s.username || 'Student ' + s.id,
+      target_test: s.target_test,
+      current_streak: s.current_streak || 0,
+      longest_streak: s.longest_streak || 0,
+      last_study_date: s.last_study_date,
+      xp: s.xp || 0,
+      level: s.level || 1,
+      total_questions: s.total_questions || 0,
+      is_premium: !!s.is_premium,
+      estimated_band: s.estimated_band || null,
+      week_stats: {
+        questions: s.week_questions || 0,
+        accuracy: Math.round(s.week_accuracy || 0),
+        minutes: Math.round((s.week_minutes || 0) / 60),
+        active_days: s.active_days || 0,
+      },
+    })),
+  });
+});
+
+// ─── Backfill Analytics (Admin only) ────────────────────────────────
+
+analyticsRoutes.post('/backfill/:userId', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || user.role !== 'admin')) return c.json({ error: 'Admin only' }, 403);
+
+  const targetUserId = parseInt(c.req.param('userId'));
+  if (!targetUserId) return c.json({ error: 'Invalid user ID' }, 400);
+
+  await backfillDailyLogs(c.env, targetUserId, 90);
+  return c.json({ ok: true, user_id: targetUserId });
+});
+
+// Bulk backfill for all students
+analyticsRoutes.post('/backfill-all', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || user.role !== 'admin')) return c.json({ error: 'Admin only' }, 403);
+
+  const allStudents = await c.env.DB.prepare(
+    "SELECT id FROM users WHERE role = 'student'"
+  ).all() as any;
+
+  let processed = 0;
+  for (const s of (allStudents.results || [])) {
+    try {
+      await backfillDailyLogs(c.env, s.id, 90);
+      processed++;
+    } catch {}
+  }
+
+  return c.json({ success: true, processed });
 });

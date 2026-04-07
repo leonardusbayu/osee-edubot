@@ -153,8 +153,27 @@ export async function verifyJWT(token: string, secret: string): Promise<JWTPaylo
 }
 
 export async function getAuthUser(request: Request, env: Env) {
+  // Extract tg_id from URL query params (passed via web_app URL from bot keyboard)
+  const url = new URL(request.url);
+  let tgIdFromQuery = url.searchParams.get('tg_id');
+  // Strip .0 suffix if present (D1 sometimes returns floats)
+  if (tgIdFromQuery) {
+    tgIdFromQuery = tgIdFromQuery.replace('.0', '');
+  }
+
+  // Build headers map (lowercase keys)
+  const headers: Record<string, string> = {};
+  request.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+
+  // If tg_id in URL but not in headers, inject it
+  if (tgIdFromQuery && !headers['x-telegram-user-id']) {
+    headers['x-telegram-user-id'] = tgIdFromQuery;
+  }
+
   // Try JWT first
-  const authHeader = request.headers.get('Authorization');
+  const authHeader = headers['authorization'];
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
     const payload = await verifyJWT(token, env.JWT_SECRET);
@@ -167,9 +186,21 @@ export async function getAuthUser(request: Request, env: Env) {
 
   // Fallback: Telegram user ID header (from initDataUnsafe — not cryptographically verified,
   // but sufficient for a practice test app since there's no sensitive data)
-  const tgUserId = request.headers.get('X-Telegram-User-Id');
+  let tgUserId = headers['x-telegram-user-id'];
   if (tgUserId) {
-    const result = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(tgUserId).first();
+    // Strip .0 suffix if present
+    tgUserId = tgUserId.replace('.0', '');
+    // Try as integer first (most common D1 type)
+    const tgIdInt = parseInt(tgUserId);
+    let result = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(tgIdInt).first();
+    if (!result) {
+      // Try as string
+      result = await env.DB.prepare('SELECT * FROM users WHERE CAST(telegram_id AS TEXT) = ?').bind(tgUserId).first();
+    }
+    if (!result) {
+      // Try with the raw value as-is
+      result = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(tgUserId).first();
+    }
     return result as any;
   }
 

@@ -484,7 +484,7 @@ export async function generateStudentSpotlight(env: Env): Promise<string | null>
   const testName = formatTestName(student.test_type);
 
   let text = `🏆 STUDENT SPOTLIGHT\n\n`;
-  text += `🎉 ${student.name} baru aja достиг результат:\n\n`;
+  text += `🎉 ${student.name} baru aja mencapai skor bagus:\n\n`;
   text += `${testEmoji} Test: ${testName}\n`;
   text += `📊 Band Score: ${student.band_score}\n`;
   text += `📝 Total Score: ${student.total_score}\n\n`;

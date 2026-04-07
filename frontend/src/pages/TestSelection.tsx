@@ -37,6 +37,7 @@ const SECTION_INFO: Record<string, { icon: string; name: string; color: string; 
   listening: { icon: '🎧', name: 'Listening', color: 'bg-green-500', desc: 'Conversations, lectures, announcements' },
   speaking: { icon: '🗣', name: 'Speaking', color: 'bg-orange-500', desc: 'Repeat, interview responses' },
   writing: { icon: '✍️', name: 'Writing', color: 'bg-purple-500', desc: 'Emails, academic discussions, sentences' },
+  structure: { icon: '📝', name: 'Structure', color: 'bg-yellow-500', desc: 'Sentence completion, error identification' },
 };
 
 const QUESTION_TYPE_LABELS: Record<string, string> = {
@@ -220,7 +221,7 @@ export default function TestSelection() {
           <div className="mt-3 bg-tg-bg rounded-full h-2">
             <div
               className="bg-tg-button rounded-full h-2 transition-all"
-              style={{ width: `${Math.min(100, (quota.used_today / quota.daily_limit) * 100)}%` }}
+              style={{ width: `${Math.min(100, quota.daily_limit > 0 ? (quota.used_today / quota.daily_limit) * 100 : 0)}%` }}
             />
           </div>
         </div>
@@ -332,7 +333,7 @@ export default function TestSelection() {
           <div className="bg-tg-bg rounded-full h-2">
             <div
               className="bg-tg-button rounded-full h-2 transition-all"
-              style={{ width: `${Math.min(100, (quota.used_today / quota.daily_limit) * 100)}%` }}
+              style={{ width: `${Math.min(100, quota.daily_limit > 0 ? (quota.used_today / quota.daily_limit) * 100 : 0)}%` }}
             />
           </div>
           {quota.bonus_quota > 0 && (
@@ -356,7 +357,7 @@ export default function TestSelection() {
         </button>
         <button
           onClick={() => { setTestType('TOEIC'); setSelectedSection(null); }}
-          className={`flex-1 py-2 rounded-lg font-medium text-sm ${testType === 'TOEFL_ITP' ? 'bg-tg-button text-tg-button-text' : 'bg-tg-secondary text-tg-text'}`}
+          className={`flex-1 py-2 rounded-lg font-medium text-sm ${testType === 'TOEIC' ? 'bg-tg-button text-tg-button-text' : 'bg-tg-secondary text-tg-text'}`}
         >
           🏢 TOEIC
         </button>

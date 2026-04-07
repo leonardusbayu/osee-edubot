@@ -25,6 +25,12 @@ speakingRoutes.post('/evaluate', async (c) => {
     return c.json({ error: 'No audio file' }, 400);
   }
 
+  // Validate MIME type — reject image files sent as audio
+  const validAudioTypes = ['audio/webm', 'audio/mp3', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/aac', 'audio/m4a'];
+  if (!validAudioTypes.includes(audioFile.type)) {
+    return c.json({ error: `File type '${audioFile.type}' is not supported. Please record using the in-app recorder.` }, 400);
+  }
+
   try {
     // Step 1: Transcribe with Whisper
     const whisperForm = new FormData();

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '../stores/auth';
+import { authedFetch } from '../api/authedFetch';
 
 interface ContentItem {
   id: number;
@@ -35,10 +36,7 @@ export default function AdminContent() {
 
   async function loadContent() {
     try {
-      const { accessToken } = useAuthStore.getState();
-      const res = await fetch('/api/admin/content/', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      const res = await authedFetch('/api/admin/content/');
       if (res.ok) {
         setContents(await res.json());
       }
@@ -63,12 +61,10 @@ export default function AdminContent() {
     if (formOptions) content.options = formOptions.split('\n').filter(Boolean);
 
     try {
-      const { accessToken } = useAuthStore.getState();
-      const res = await fetch('/api/admin/content/', {
+      const res = await authedFetch('/api/admin/content/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
           test_type: formTestType,

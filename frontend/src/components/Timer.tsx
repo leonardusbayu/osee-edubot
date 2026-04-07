@@ -31,7 +31,7 @@ export default function Timer({ initialSeconds, onExpire, className = '' }: Time
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [seconds > 0]);
+  }, []);
 
   const minutes = Math.floor(seconds / 60);
   const secs = seconds % 60;

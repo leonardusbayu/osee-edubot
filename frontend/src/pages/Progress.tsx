@@ -130,7 +130,7 @@ export default function Progress() {
           <div className="w-full bg-tg-bg rounded-full h-2.5 mb-2">
             <div
               className={`h-2.5 rounded-full transition-all ${quota.remaining > 0 ? 'bg-tg-button' : 'bg-red-500'}`}
-              style={{ width: `${Math.min((quota.used_today / (quota.daily_limit + quota.bonus_quota)) * 100, 100)}%` }}
+              style={{ width: `${Math.min(((quota.daily_limit + quota.bonus_quota) > 0 ? (quota.used_today / (quota.daily_limit + quota.bonus_quota)) * 100 : 0), 100)}%` }}
             />
           </div>
           {quota.remaining > 0 ? (
@@ -297,7 +297,7 @@ export default function Progress() {
                       </div>
                     </div>
                     <div className="flex gap-1 flex-wrap">
-                      {Object.entries(result.section_scores).map(([section, score]) => {
+                      {Object.entries(result.section_scores || {}).map(([section, score]) => {
                         const info = SECTION_LABELS[section];
                         return (
                           <span key={section} className="text-xs bg-tg-bg px-2 py-1 rounded">
