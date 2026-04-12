@@ -10,6 +10,7 @@ import AdminContent from './pages/AdminContent';
 import AdminStudents from './pages/AdminStudents';
 import AdminAnalytics from './pages/AdminAnalytics';
 import WeaknessDashboard from './pages/WeaknessDashboard';
+import AdminPanel from './pages/AdminPanel';
 
 declare global {
   interface Window {
@@ -51,7 +52,8 @@ function App() {
         try {
           const initData = window.Telegram?.WebApp?.initData;
           if (initData) {
-            const response = await fetch('/api/auth/login', {
+            const apiBase = (import.meta.env.VITE_API_URL as string) || 'https://edubot-api.edubot-leonardus.workers.dev/api';
+            const response = await fetch(`${apiBase}/auth/login`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ init_data: initData }),
@@ -99,9 +101,10 @@ function App() {
         <Route path="/admin/content" element={<AdminContent />} />
         <Route path="/admin/students" element={<AdminStudents />} />
         <Route path="/admin/analytics" element={<AdminAnalytics />} />
-        <Route path="/admin" element={<AdminContent />} />
+        <Route path="/admin" element={<AdminPanel />} />
         <Route path="/admin/weaknesses" element={<WeaknessDashboard />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/admin/panel" element={<AdminPanel />} />
       </Routes>
     </div>
   );

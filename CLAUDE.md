@@ -37,10 +37,16 @@ worker/          — Cloudflare Worker (TypeScript/Hono)
       diagnostic.ts — Placement test (20 questions)
       studyplan.ts  — Personalized study plan
       prerequisites.ts — Skill dependency tree
-      spaced-repetition.ts — Review scheduling
+      fsrs-engine.ts — FSRS adaptive spaced repetition (replaces spaced-repetition.ts)
+      spaced-repetition.ts — Legacy review scheduling (deprecated, use fsrs-engine)
+      private-tutor.ts — Ranedeer-style adaptive tutor with mental model
+      student-profile.ts — Cognitive profile + learning preferences
+      mental-model.ts — Theory-of-Mind: student knowledge tracking
+      lesson-engine.ts — Guided learning: personalized + classroom lesson plans
       classroom.ts  — Group quiz, leaderboard, challenges
       premium.ts   — Freemium gating, quota tracking, referral bonuses
       commercial.ts — Referral processing, gamification
+      student-report.ts — Comprehensive student intelligence report (JSON + AI context)
 
 frontend/        — React/Vite Mini App
   src/
@@ -53,6 +59,7 @@ frontend/        — React/Vite Mini App
       AdminContent.tsx  — Teacher content panel
       AdminStudents.tsx — Student management panel
       Dashboard.tsx     — Admin dashboard
+      AdminPanel.tsx   — Comprehensive admin panel (v1 API)
     api/
       authedFetch.ts    — Authenticated API fetch helper
       client.ts        — API client functions
@@ -91,11 +98,12 @@ Set via `npx wrangler secret put <NAME>`:
 - `OPENAI_API_KEY` — OpenAI API key (GPT + TTS + Whisper)
 - `JWT_SECRET` — JWT signing key
 - `TEACHER_CODE` — Invite code for teacher registration
+- `ADMIN_API_KEY` — API key for external app integration (admin API v1)
 
 ### D1 Database
 - Name: `edubot-db`
 - ID: `d501b671-128e-4a45-9d90-74b22e6691ce`
-- 40 tables (see schema.json)
+- 43 tables (see schema.json)
 
 ## Bot Commands
 
@@ -105,7 +113,11 @@ Set via `npx wrangler secret put <NAME>`:
 | /study | All | 22 study topics |
 | /diagnostic | All | 20-question placement test |
 | /today | All | Today's study plan lesson |
-| /review | All | Spaced repetition review |
+| /review | All | FSRS adaptive spaced repetition review |
+| /lesson | All | AI-generated personalized lesson plan |
+| /plan | All | View all lesson plans + progress |
+| /profile | All | Full learning profile + mental model |
+| /mystyle | All | Set learning style, comm style, depth |
 | /settings | All | Change target test + level |
 | /challenge @user | All | Peer duel (5 questions) |
 | /join CODE | All | Join class by invite code |
@@ -145,6 +157,35 @@ Set via `npx wrangler secret put <NAME>`:
 - `GET/POST /api/admin/content` — CRUD test content
 - `GET/POST /api/classes` — Class management
 
+### Admin API v1 (supports API key auth via X-API-Key header)
+- `GET /api/v1/admin/students` — List students (paginated, searchable, sortable)
+- `GET /api/v1/admin/students/:id` — Deep student profile (mastery, mental model, SRS, lessons)
+- `GET /api/v1/admin/students/:id/report` — Full student intelligence report (JSON)
+- `GET /api/v1/admin/students/:id/report/ai` — AI-optimized context string for lesson planning
+- `PUT /api/v1/admin/students/:id/role` — Update role
+- `PUT /api/v1/admin/students/:id/profile` — Update profile fields
+- `DELETE /api/v1/admin/students/:id` — Ban student (soft delete)
+- `GET /api/v1/admin/analytics/overview` — System-wide dashboard stats
+- `GET /api/v1/admin/analytics/trends` — Daily activity trends (configurable days)
+- `GET /api/v1/admin/analytics/content-coverage` — Question bank distribution
+- `GET /api/v1/admin/mental-model/:userId` — Student mental model
+- `PUT /api/v1/admin/mental-model/:userId/:concept` — Adjust mental model
+- `GET /api/v1/admin/lessons` — List lesson plans (filterable)
+- `GET /api/v1/admin/lessons/:id` — Lesson plan detail with step results
+- `DELETE /api/v1/admin/lessons/:id` — Archive lesson plan
+- `GET /api/v1/admin/content` — List content (filtered, paginated)
+- `POST /api/v1/admin/content/bulk-status` — Bulk update content status
+- `POST /api/v1/admin/content/bulk-insert` — Bulk insert questions
+- `GET /api/v1/admin/classes` — List classes with member counts
+- `GET /api/v1/admin/classes/:id/students` — Class students with accuracy
+- `GET /api/v1/admin/srs/overview` — SRS system-wide stats
+- `GET /api/v1/admin/premium/overview` — Premium/revenue dashboard
+- `GET /api/v1/admin/system/tables` — All D1 tables + row counts
+- `GET /api/v1/admin/system/health` — Deep health check
+- `POST /api/v1/admin/system/query` — Read-only SQL console
+- `GET /api/v1/admin/export/students?format=csv` — Export students
+- `GET /api/v1/admin/export/content?format=csv` — Export content
+
 ## Freemium Model
 
 ### Free Tier
@@ -170,13 +211,21 @@ Set via `npx wrangler secret put <NAME>`:
 ### Database Tables
 - `daily_question_logs` — Tracks daily question usage per user
 - `referral_bonus_quota` — Accumulates bonus questions from referrals
+- `student_mental_model` — Theory-of-Mind: per-concept understanding tracking
+- `lesson_plans` — AI-generated personalized + classroom lesson plans
+- `lesson_step_results` — Individual lesson step completion tracking
 
 ## Key Features
 - 3,036+ TOEFL iBT questions (Reading, Listening, Speaking, Writing)
 - Multi-speaker TTS audio for listening (Man/Woman/Professor voices)
 - Speaking evaluation via Whisper transcription + AI scoring
-- Spaced repetition for wrong answers (1h → 1d → 3d → 7d intervals)
-- Skill dependency tree with prerequisite detection
+- FSRS adaptive spaced repetition (ts-fsrs, replaces fixed intervals)
+- Theory-of-Mind engine: tracks what tutor believes student knows/doesn't know
+- Ranedeer-style personalization: learning style, communication style, depth level
+- AI-generated personalized lesson plans with progressive difficulty
+- Classroom lesson plans calibrated to class average skill level
+- Skill dependency tree with prerequisite detection + topological ordering
+- Mental model: misconception detection, knowledge gap analysis
 - Diagnostic test → personalized study plan
 - Class groups with daily quiz, leaderboard, peer challenges
 - Role management (student/teacher/admin)

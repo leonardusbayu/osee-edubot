@@ -9,6 +9,7 @@ export interface Env {
   TEACHER_CODE?: string;
   JWT_SECRET: string;
   WEBAPP_URL: string;
+  ADMIN_API_KEY?: string;
 }
 
 export interface User {

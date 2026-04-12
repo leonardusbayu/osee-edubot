@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { authedFetch } from '../api/authedFetch';
 
 interface ProgressData {
   total_tests: number;
@@ -74,7 +75,7 @@ export default function Progress() {
 
   async function loadProgress() {
     try {
-      const response = await fetch('/api/progress/overview');
+      const response = await authedFetch('/api/progress/overview');
       if (response.ok) {
         setData(await response.json());
       }
@@ -84,7 +85,7 @@ export default function Progress() {
 
   async function loadQuota() {
     try {
-      const response = await fetch('/api/tests/available');
+      const response = await authedFetch('/api/tests/available');
       if (response.ok) {
         const result = await response.json();
         if (result.quota) {

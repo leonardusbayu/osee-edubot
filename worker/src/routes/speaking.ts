@@ -179,7 +179,7 @@ Respond in JSON only:
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'gpt-4o',
         max_tokens: 500,
         temperature: 0.3,
         messages: [

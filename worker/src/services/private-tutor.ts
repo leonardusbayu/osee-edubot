@@ -23,6 +23,8 @@ import {
   type TopicMastery,
 } from './student-profile';
 import { TEST_NAMES } from './teaching';
+import { buildMentalModelContext, recordEvidence } from './mental-model';
+import { getActivePlan, formatLessonStepMessage, formatTopicName } from './lesson-engine';
 
 // ═══════════════════════════════════════════════════════
 // PERSONA — Mojok.com-style academic expert
@@ -60,22 +62,69 @@ FORMAT KETAT:
 
 // ═══════════════════════════════════════════════════════
 // ADAPTIVE CONTEXT BUILDER — Injected per conversation
+// With Ranedeer-style personalization + Mental Model
 // ═══════════════════════════════════════════════════════
-function buildFullSystemPrompt(
+async function buildFullSystemPrompt(
+  env: Env,
   user: User,
   profile: StudentProfile,
   masteries: TopicMastery[],
   targetTest: string,
-): string {
+): Promise<string> {
   const persona = PERSONA_PROMPT.split('{target_test}').join(targetTest);
+
+  // ── Ranedeer-style learning preferences ──
+  const learningStyle = (profile as any).learning_style || 'balanced';
+  const commStyle = (profile as any).communication_style || 'socratic';
+  const depthLevel = (profile as any).depth_level || 'intermediate';
+  const studyGoal = (profile as any).study_goal || null;
+  const targetBand = (profile as any).target_band_score || null;
+
+  const prefsContext = `
+PREFERENSI BELAJAR (Ranedeer-adapted):
+- Learning Style: ${LEARNING_STYLE_DESC[learningStyle] || learningStyle}
+- Communication: ${COMM_STYLE_DESC[commStyle] || commStyle}
+- Depth Level: ${DEPTH_LEVEL_DESC[depthLevel] || depthLevel}
+${targetBand ? `- Target Score: ${targetBand}` : ''}
+${studyGoal ? `- Tujuan: ${studyGoal}` : ''}
+
+ADAPTASI BERDASARKAN PREFERENSI:
+${getStyleAdaptation(learningStyle, commStyle, depthLevel)}`;
 
   const studentContext = `
 PROFIL MURID — {name}:
-Target: ${targetTest}. Level: ${user.proficiency_level || 'belum diketahui'}.
+Target: ${targetTest}. Level: ${user.proficiency_level || depthLevel}.
 Sesi ke-${profile.total_tutor_sessions + 1}. Total pesan: ${profile.total_tutor_messages}.
 ${profile.last_tutor_topic ? `Terakhir belajar: ${profile.last_tutor_topic}.` : 'Belum pernah belajar sebelumnya.'}`.split('{name}').join(user.name);
 
   const adaptiveContext = buildAdaptiveContext(profile, masteries);
+
+  // ── Full Student Intelligence Report (for richer AI context) ──
+  let studentReportCtx = '';
+  try {
+    const { buildStudentReportForAI } = await import('./student-report');
+    studentReportCtx = await buildStudentReportForAI(env, user.id);
+  } catch {}
+
+  // ── Theory-of-Mind: Mental Model Context ──
+  let mentalModelCtx = '';
+  try {
+    mentalModelCtx = await buildMentalModelContext(env, user.id);
+  } catch {}
+
+  // ── Active Lesson Plan Context ──
+  let lessonPlanCtx = '';
+  try {
+    const activePlan = await getActivePlan(env, user.id);
+    if (activePlan && activePlan.current_step < activePlan.total_steps) {
+      const currentLesson = activePlan.lessons[activePlan.current_step];
+      lessonPlanCtx = `
+ACTIVE LESSON PLAN: "${activePlan.title}" (step ${activePlan.current_step + 1}/${activePlan.total_steps})
+Current step: ${currentLesson.title} (${currentLesson.type})
+Instruction: ${currentLesson.content}
+Progress: ${activePlan.progress_percent}%`;
+    }
+  } catch {}
 
   // Tutor mode-specific instructions
   let modeInstructions = '';
@@ -105,9 +154,17 @@ Kalau mereka terlihat bosan/random, suggest topik yang perlu diperbaiki.`;
 
   return `${persona}
 
+${prefsContext}
+
 ${studentContext}
 
 ${adaptiveContext}
+
+${mentalModelCtx}
+
+${studentReportCtx ? `\n--- FULL STUDENT INTELLIGENCE ---\n${studentReportCtx}\n--- END REPORT ---` : ''}
+
+${lessonPlanCtx}
 
 ${modeInstructions}
 
@@ -116,7 +173,73 @@ Kalau konteks latihan listening, bisa kasih dialog multi-speaker dalam format:
 [AUDIO] Man: kalimat. Woman: kalimat.
 Ini akan dikonversi jadi audio suara untuk murid.
 
+AFTER EACH RESPONSE:
+Jika murid menjawab soal, tentukan apakah jawabannya menunjukkan pemahaman konsep.
+Di akhir response, tambahkan tag invisible untuk tracking (JANGAN ditampilkan ke murid):
+[CONCEPT:nama_konsep|UNDERSTANDING:solid/partial/misconception|DETAIL:penjelasan singkat]
+
 INFO: osee.co.id | WA +62 811-2647-784`;
+}
+
+// ═══════════════════════════════════════════════════════
+// RANEDEER-STYLE PREFERENCE DESCRIPTIONS
+// ═══════════════════════════════════════════════════════
+const LEARNING_STYLE_DESC: Record<string, string> = {
+  visual: 'VISUAL — Suka diagram, tabel, contoh visual. Gunakan format yang bisa "dilihat": before/after, side-by-side comparison, highlight patterns.',
+  verbal: 'VERBAL — Suka penjelasan naratif, cerita, analogi. Jelaskan lewat kalimat mengalir, bukan list.',
+  active: 'ACTIVE — Suka langsung praktek. Kasih soal duluan, baru jelaskan setelahnya. Learning by doing.',
+  reflective: 'REFLECTIVE — Suka mikir dulu. Kasih waktu untuk proses. Tanya "kenapa menurut kamu?" sebelum kasih jawaban.',
+  balanced: 'BALANCED — Mix semua pendekatan. Variasikan antara penjelasan, contoh visual, dan latihan.',
+};
+
+const COMM_STYLE_DESC: Record<string, string> = {
+  socratic: 'SOCRATIC — Jangan kasih jawaban langsung. Selalu balik tanya. Guide mereka ke jawaban sendiri.',
+  storytelling: 'STORYTELLING — Frame pelajaran sebagai cerita atau skenario real-life. "Bayangkan kamu lagi interview di Google..."',
+  formal: 'FORMAL — Akademis tapi tetap hangat. Strukturnya jelas: konsep → contoh → latihan → summary.',
+  casual: 'CASUAL — Kayak ngobrol sama teman yang jago English. Santai tapi substansi tetap dalam.',
+  direct: 'DIRECT — To the point. Minimal basa-basi. Kasih aturan, contoh, soal. Efisien.',
+};
+
+const DEPTH_LEVEL_DESC: Record<string, string> = {
+  beginner: 'BEGINNER — Pakai bahasa Indonesia dominan. Jelaskan dari nol. Vocabulary dasar. Jangan assume prior knowledge.',
+  elementary: 'ELEMENTARY — Sudah tahu basic grammar. Fokus ke pattern recognition. Mix English 30%.',
+  intermediate: 'INTERMEDIATE — Bisa paham penjelasan English. Fokus ke nuance dan common mistakes. Mix English 50%.',
+  advanced: 'ADVANCED — Diskusi mostly in English. Fokus ke fine-tuning, academic register, scoring strategies.',
+  expert: 'EXPERT — Full English. Fokus ke test-taking strategies, time management, perfect score tips.',
+};
+
+function getStyleAdaptation(learningStyle: string, commStyle: string, depthLevel: string): string {
+  const adaptations: string[] = [];
+
+  // Learning style adaptations
+  if (learningStyle === 'visual') {
+    adaptations.push('- Gunakan contoh side-by-side (Salah vs Benar)');
+    adaptations.push('- Format pattern: [Pattern] → [Example 1] / [Example 2] / [Example 3]');
+  } else if (learningStyle === 'active') {
+    adaptations.push('- Kasih soal DULU, baru jelaskan setelah mereka coba');
+    adaptations.push('- Challenge: "Coba tebak mana yang benar sebelum aku jelaskan"');
+  } else if (learningStyle === 'reflective') {
+    adaptations.push('- Setelah kasih contoh, tanya: "Menurut kamu kenapa yang ini benar?"');
+    adaptations.push('- Beri jeda antara penjelasan dan soal');
+  }
+
+  // Communication style adaptations
+  if (commStyle === 'storytelling') {
+    adaptations.push('- Mulai tiap topik baru dengan skenario: "Kamu lagi ngerjain essay untuk apply beasiswa..."');
+  } else if (commStyle === 'direct') {
+    adaptations.push('- Format: Aturan → Contoh → Soal. Maksimal 5 baris.');
+  }
+
+  // Depth adaptations
+  if (depthLevel === 'beginner' || depthLevel === 'elementary') {
+    adaptations.push('- SELALU terjemahkan istilah grammar ke Bahasa Indonesia');
+    adaptations.push('- Soal mulai dari yang paling basic');
+  } else if (depthLevel === 'advanced' || depthLevel === 'expert') {
+    adaptations.push('- Jelaskan exceptions dan edge cases');
+    adaptations.push('- Fokus ke nuances yang membedakan band 7 vs 8+');
+  }
+
+  return adaptations.join('\n');
 }
 
 // ═══════════════════════════════════════════════════════
@@ -177,9 +300,9 @@ export async function getPrivateTutorResponse(
     // The LLM's response will contain whether it was correct; we'll parse that afterward
   }
 
-  // 4. Build adaptive system prompt
+  // 4. Build adaptive system prompt (now async — includes mental model + lesson plan)
   const targetTest = TEST_NAMES[user.target_test || 'TOEFL_IBT'] || 'English Test';
-  const systemPrompt = buildFullSystemPrompt(user, profile, masteries, targetTest);
+  const systemPrompt = await buildFullSystemPrompt(env, user, profile, masteries, targetTest);
 
   // 5. Load conversation history
   const history = await env.DB.prepare(
@@ -212,7 +335,21 @@ export async function getPrivateTutorResponse(
     responseText = 'Maaf, ada gangguan teknis. Coba kirim ulang pesanmu ya.';
   }
 
-  // 7. Save conversation
+  // 7. Extract mental model signals from response & strip tags
+  try {
+    const conceptMatch = responseText.match(/\[CONCEPT:([^|]+)\|UNDERSTANDING:([^|]+)\|DETAIL:([^\]]+)\]/);
+    if (conceptMatch) {
+      const [, concept, understanding, detail] = conceptMatch;
+      const evidenceType = understanding.trim() === 'solid' || understanding.trim() === 'mastered'
+        ? 'correct_answer' as const
+        : 'wrong_answer' as const;
+      await recordEvidence(env, user.id, concept.trim(), evidenceType, detail.trim(), 0.6);
+      // Strip the tag from visible response
+      responseText = responseText.replace(/\[CONCEPT:[^\]]+\]/g, '').trim();
+    }
+  } catch {}
+
+  // 8. Save conversation
   try {
     await env.DB.prepare(
       'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
@@ -222,7 +359,7 @@ export async function getPrivateTutorResponse(
     ).bind(user.id, 'assistant', responseText).run();
   } catch {}
 
-  // 8. Update profile message count
+  // 9. Update profile message count
   profile.total_tutor_messages += 1;
   profile.last_tutor_topic = profile.current_topic;
   try {
@@ -233,10 +370,10 @@ export async function getPrivateTutorResponse(
     ).bind(profile.current_topic, user.id).run();
   } catch {}
 
-  // 9. Log API usage
+  // 10. Log API usage
   try {
     const tokens = Math.ceil((message.length + responseText.length + systemPrompt.length) / 4);
-    const cost = tokens * 0.00000015; // gpt-4o-mini rate
+    const cost = tokens * 0.0000025; // gpt-4o rate
     await env.DB.prepare(
       'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd, user_id) VALUES (?, ?, ?, ?, ?)'
     ).bind('openai', 'private-tutor', tokens, cost, user.id).run();
@@ -477,7 +614,7 @@ async function callLLM(
   messages: { role: string; content: string }[],
   maxTokens: number,
 ): Promise<string> {
-  // Try OpenAI first (gpt-4o-mini — fast + cheap)
+  // Try OpenAI first (gpt-4o — smarter multimodal)
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -486,7 +623,7 @@ async function callLLM(
         'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'gpt-4o',
         max_tokens: maxTokens,
         temperature: 0.75,
         messages: [

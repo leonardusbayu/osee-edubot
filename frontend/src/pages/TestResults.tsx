@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
+import { authedFetch } from '../api/authedFetch';
 import { useTestStore } from '../stores/test';
 import type { TestResult } from '../types';
 
@@ -37,7 +38,7 @@ export default function TestResults() {
       setResult(data);
       // Load review data
       try {
-        const reviewRes = await fetch(`/api/tests/attempt/${attemptId}/review`);
+        const reviewRes = await authedFetch(`/api/tests/attempt/${attemptId}/review`);
         if (reviewRes.ok) {
           const reviewData = await reviewRes.json();
           setReview(reviewData.review || []);

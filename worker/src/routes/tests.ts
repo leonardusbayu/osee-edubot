@@ -288,7 +288,7 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
     // Spaced repetition: add wrong answers to review queue
     if (isCorrect === false) {
       try {
-        const { addToReview } = await import('../services/spaced-repetition');
+        const { addToReview } = await import('../services/fsrs-engine');
         await addToReview(
           c.env, userId, section, '',
           JSON.stringify(answer_data), answer_data.correct_answer || '', answer_data.selected || '',
@@ -362,8 +362,10 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
 
     for (const section of config?.sections || []) {
       const sectionAnswers = (answers.results || []).filter((a: any) => a.section === section.id);
-      const correct = sectionAnswers.filter((a: any) => a.is_correct === 1).length;
-      const total = sectionAnswers.length;
+      // Only count objectively scored answers (is_correct not null) for band calculation
+      const scoredAnswers = sectionAnswers.filter((a: any) => a.is_correct !== null);
+      const correct = scoredAnswers.filter((a: any) => a.is_correct === 1).length;
+      const total = scoredAnswers.length;
       const maxBand = config?.max_band || 6;
       if (total === 0) {
         sectionScores[section.id] = 0;
@@ -510,7 +512,7 @@ testRoutes.get('/attempt/:id/review', async (c) => {
   if (!attempt) return c.json({ error: 'Not found' }, 404);
 
   const answers = await c.env.DB.prepare(
-    'SELECT aa.*, tc.content, tc.question_type, tc.section FROM attempt_answers aa LEFT JOIN test_contents tc ON aa.question_id = tc.id WHERE aa.attempt_id = ? ORDER BY aa.section, aa.question_index'
+    'SELECT aa.*, tc.content, tc.question_type, tc.section AS tc_section FROM attempt_answers aa LEFT JOIN test_contents tc ON aa.content_id = tc.id WHERE aa.attempt_id = ? ORDER BY aa.section, aa.question_index'
   ).bind(attemptId).all();
 
   const review = answers.results.map((a: any) => {

@@ -178,7 +178,7 @@ async function executeStep(env: Env, user: User, step: any): Promise<string> {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
           body: JSON.stringify({
-            model: 'gpt-4o-mini', max_tokens: 1500,
+            model: 'gpt-4o', max_tokens: 1500,
             messages: [
               { role: 'system', content: 'Generate IELTS/TOEFL practice questions. JSON array only.' },
               { role: 'user', content: `Generate ${count} ${testType} reading MCQ about "${topic}". Each: {question_text, options: [{key,text}], answers: [letter], explanation}` },
@@ -240,7 +240,7 @@ async function executeStep(env: Env, user: User, step: any): Promise<string> {
       case 'calibrate_difficulty': {
         const qs = await env.DB.prepare(
           `SELECT tc.id, COUNT(aa.id) as att, SUM(CASE WHEN aa.is_correct=1 THEN 1 ELSE 0 END) as cor
-           FROM test_contents tc LEFT JOIN attempt_answers aa ON aa.question_id=tc.id
+           FROM test_contents tc LEFT JOIN attempt_answers aa ON aa.content_id=tc.id
            WHERE tc.status='published' GROUP BY tc.id HAVING att >= 5`
         ).all();
         let updated = 0;

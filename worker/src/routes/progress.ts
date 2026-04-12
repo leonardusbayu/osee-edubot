@@ -146,7 +146,7 @@ progressRoutes.get('/overview', async (c) => {
     // 8. Spaced repetition stats
     let srStats = { total: 0, due: 0, mastered: 0 };
     try {
-      const { getReviewStats } = await import('../services/spaced-repetition');
+      const { getReviewStats } = await import('../services/fsrs-engine');
       srStats = await getReviewStats(c.env, userId);
     } catch {}
 
@@ -192,6 +192,156 @@ progressRoutes.get('/overview', async (c) => {
         section: t.section,
         avg_seconds: Math.round(t.avg_time || 0),
         count: t.count,
+      })),
+    });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+// Deep Student Analysis — individual student report + personalized recommendations
+// ═══════════════════════════════════════════════════════
+progressRoutes.get('/analysis', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user?.id) return c.json({ error: 'Unauthorized' }, 401);
+  const userId = user.id;
+
+  try {
+    const { getStudentAnalytics } = await import('../services/analytics');
+    const analytics = await getStudentAnalytics(c.env, userId);
+
+    // Generate AI-powered personalized recommendations
+    let aiRecommendations: any = null;
+    try {
+      // Build context for AI analysis
+      const weakestSection = analytics.weakest_section;
+      const accuracy = analytics.overall_accuracy;
+      const diagnostic = analytics.diagnostic;
+      const skills = analytics.skills;
+      const totalQ = analytics.total_questions;
+
+      if (totalQ >= 5 || diagnostic) {
+        const prompt = `Analyze this student's TOEFL/IELTS preparation data and give 3 specific, actionable study recommendations in Indonesian. Be concise (max 3 lines each).
+
+Student Profile:
+- Target: ${user.target_test || 'TOEFL_IBT'}
+- Level: ${user.proficiency_level}
+- Total questions practiced: ${totalQ}
+- Overall accuracy: ${accuracy}%
+- Weakest section: ${weakestSection} (${analytics.weakest_accuracy}%)
+- Study frequency: ${analytics.study_tendency.weekly_frequency} days/week
+${diagnostic ? `- Diagnostic: Grammar ${diagnostic.grammar.score}/${diagnostic.grammar.total}, Vocab ${diagnostic.vocab.score}/${diagnostic.vocab.total}, Reading ${diagnostic.reading.score}/${diagnostic.reading.total}, Listening ${diagnostic.listening.score}/${diagnostic.listening.total}` : ''}
+${skills.length > 0 ? `- Skills: ${skills.map((s: any) => `${s.skill}=${s.accuracy}%`).join(', ')}` : ''}
+
+Return JSON: {"recommendations": [{"title": "...", "description": "...", "priority": "high|medium|low", "section": "reading|listening|writing|speaking|grammar|vocabulary"}], "next_focus": "...", "estimated_days_to_improve": N}`;
+
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 500,
+            response_format: { type: 'json_object' },
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json() as any;
+          const content = data.choices?.[0]?.message?.content;
+          if (content) {
+            aiRecommendations = JSON.parse(content);
+          }
+        }
+      }
+    } catch (e) { console.error('AI recommendations error:', e); }
+
+    // Get personalized practice materials based on weakness
+    let recommendedMaterials: any[] = [];
+    if (analytics.weakest_section) {
+      const materials = await c.env.DB.prepare(
+        `SELECT id, question_type, title, difficulty FROM test_contents
+         WHERE section = ? AND test_type = ? AND status = 'published'
+         AND id NOT IN (
+           SELECT COALESCE(aa.content_id, 0) FROM attempt_answers aa
+           JOIN test_attempts ta ON aa.attempt_id = ta.id
+           WHERE ta.user_id = ?
+         )
+         ORDER BY difficulty ASC LIMIT 10`
+      ).bind(analytics.weakest_section, user.target_test || 'TOEFL_IBT', userId).all();
+
+      recommendedMaterials = (materials.results as any[]).map((m: any) => ({
+        id: m.id,
+        type: m.question_type,
+        title: m.title,
+        difficulty: m.difficulty,
+      }));
+    }
+
+    return c.json({
+      ...analytics,
+      ai_recommendations: aiRecommendations,
+      recommended_materials: recommendedMaterials,
+      user: {
+        name: user.name,
+        target_test: user.target_test,
+        proficiency_level: user.proficiency_level,
+      },
+    });
+  } catch (e: any) {
+    console.error('Analysis error:', e);
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+// Admin: Student analysis for a specific student
+// ═══════════════════════════════════════════════════════
+progressRoutes.get('/analysis/:userId', async (c) => {
+  const admin = await getAuthUser(c.req.raw, c.env);
+  if (!admin || (admin.role !== 'admin' && admin.role !== 'teacher')) {
+    return c.json({ error: 'Admin/teacher access required' }, 403);
+  }
+
+  const targetUserId = parseInt(c.req.param('userId'));
+  const targetUser = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(targetUserId).first() as any;
+  if (!targetUser) return c.json({ error: 'Student not found' }, 404);
+
+  try {
+    const { getStudentAnalytics } = await import('../services/analytics');
+    const analytics = await getStudentAnalytics(c.env, targetUserId);
+
+    // Get conversation summary for admin
+    const recentChats = await c.env.DB.prepare(
+      `SELECT role, content, created_at FROM conversation_messages
+       WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`
+    ).bind(targetUserId).all();
+
+    // Get weakness summary
+    const weakness = await c.env.DB.prepare(
+      'SELECT * FROM skill_weakness_summary WHERE user_id = ?'
+    ).bind(targetUserId).first();
+
+    return c.json({
+      ...analytics,
+      student: {
+        id: targetUser.id,
+        name: targetUser.name,
+        username: targetUser.username,
+        target_test: targetUser.target_test,
+        proficiency_level: targetUser.proficiency_level,
+        is_premium: targetUser.is_premium,
+        created_at: targetUser.created_at,
+      },
+      weakness_summary: weakness,
+      recent_conversations: (recentChats.results as any[]).reverse().map((m: any) => ({
+        role: m.role,
+        content: (m.content as string).substring(0, 200),
+        at: m.created_at,
       })),
     });
   } catch (e: any) {

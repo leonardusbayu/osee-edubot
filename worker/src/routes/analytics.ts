@@ -171,7 +171,7 @@ analyticsRoutes.post('/calibrate-difficulty', async (c) => {
     `SELECT tc.id, COUNT(aa.id) as attempts,
      SUM(CASE WHEN aa.is_correct=1 THEN 1 ELSE 0 END) as correct
      FROM test_contents tc
-     LEFT JOIN attempt_answers aa ON aa.question_id = tc.id
+     LEFT JOIN attempt_answers aa ON aa.content_id = tc.id
      WHERE tc.status = 'published'
      GROUP BY tc.id
      HAVING attempts >= 5`

@@ -151,11 +151,8 @@ export async function getTutorResponse(
     .replaceAll('{target_test}', targetTest)
     .replaceAll('{proficiency_level}', user.proficiency_level || 'Unknown');
 
-  // gpt-4o-mini for simple queries (~$0.15/1M tokens), gpt-4o for complex (~$2.50/1M tokens)
-  const simpleKeywords = ['define', 'meaning of', 'what does', 'translate', 'synonym'];
-  const model = simpleKeywords.some((kw) => message.toLowerCase().includes(kw))
-    ? 'gpt-4o-mini'
-    : 'gpt-4o-mini'; // Use mini for everything to keep costs low; switch to gpt-4o for scoring
+  // gpt-4o for AI tutor tasks (smarter, multimodal)
+  const model = 'gpt-4o';
 
   try {
     const text = await openaiChat(env.OPENAI_API_KEY, model, systemPrompt, messages);
@@ -171,7 +168,7 @@ export async function getTutorResponse(
     // Log API usage for cost tracking
     try {
       const tokens = Math.ceil((message.length + text.length) / 4); // rough estimate
-      const cost = model === 'gpt-4o-mini' ? tokens * 0.00000015 : tokens * 0.0000025;
+      const cost = tokens * 0.0000025; // gpt-4o ~$2.50/1M tokens
       await env.DB.prepare(
         'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd, user_id) VALUES (?, ?, ?, ?, ?)'
       ).bind('openai', model, tokens, cost, user.id).run();
@@ -204,7 +201,7 @@ export async function scoreEssay(
     .replace('{essay}', essay);
 
   try {
-    // Use gpt-4o for scoring accuracy
+    // Use gpt-4o for scoring (smarter, more accurate)
     const text = await openaiChat(
       env.OPENAI_API_KEY,
       'gpt-4o',

@@ -1,5 +1,6 @@
 import type { Env, User } from '../types';
 import { getTutorResponse } from '../services/ai';
+import { getPrivateTutorResponse } from '../services/private-tutor';
 
 // Telegram Bot API helper
 function cleanForTelegram(text: string): string {
@@ -59,25 +60,58 @@ async function getOrCreateUser(env: Env, tgUser: any): Promise<User> {
 async function sendTTSAudio(env: Env, chatId: number, text: string) {
   try {
     const { generateTTSAudioBuffer } = await import('../routes/tts');
-    const audioBuffer = await generateTTSAudioBuffer(env, text, true);
+
+    // Detect if text has speaker labels (Man:, Woman:, Professor:, etc.)
+    const hasMultiSpeaker = /(?:Woman|Man|Male|Female|Professor|Instructor|Narrator|Student|Speaker)\s*[^:]*:/i.test(text);
+    const audioBuffer = await generateTTSAudioBuffer(env, text, hasMultiSpeaker);
 
     if (!audioBuffer) {
-      console.log('generateTTSAudioBuffer returned null');
+      console.error('TTS: generateTTSAudioBuffer returned null for text:', text.substring(0, 80));
+      // Fallback: send text description so user knows audio was intended
+      await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
       return;
     }
 
-    // Send as voice message via Telegram
+    // Send as voice message via Telegram (sendVoice = inline playable, sendAudio = music player)
+    // Use sendVoice for short clips, sendAudio for longer ones
+    const isShort = audioBuffer.byteLength < 500000; // ~30 seconds
+    const endpoint = isShort ? 'sendVoice' : 'sendAudio';
+    const fieldName = isShort ? 'voice' : 'audio';
+
     const formData = new FormData();
     formData.append('chat_id', String(chatId));
-    formData.append('audio', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
-    formData.append('caption', '🎧 Dengarkan audio ini:');
+    formData.append(fieldName, new File([audioBuffer], 'audio.mp3', { type: 'audio/mpeg' }));
 
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendAudio`, {
+    const resp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${endpoint}`, {
       method: 'POST',
       body: formData,
     });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      console.error(`TTS: Telegram ${endpoint} failed:`, err);
+      // Fallback: try the other method
+      const fallbackEndpoint = isShort ? 'sendAudio' : 'sendVoice';
+      const fallbackField = isShort ? 'audio' : 'voice';
+      const fallbackForm = new FormData();
+      fallbackForm.append('chat_id', String(chatId));
+      fallbackForm.append(fallbackField, new File([audioBuffer], 'audio.mp3', { type: 'audio/mpeg' }));
+      const resp2 = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${fallbackEndpoint}`, {
+        method: 'POST',
+        body: fallbackForm,
+      });
+      if (!resp2.ok) {
+        console.error(`TTS: Fallback ${fallbackEndpoint} also failed:`, await resp2.text());
+        // Last resort: send the text so user can still answer
+        await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
+      }
+    }
   } catch (e) {
     console.error('TTS audio send error:', e);
+    // Fallback: send text so the diagnostic doesn't get stuck
+    try {
+      await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
+    } catch {}
   }
 }
 
@@ -128,6 +162,12 @@ function mainMenuKeyboard(webappUrl: string) {
     resize_keyboard: true,
     is_persistent: true,
   };
+}
+
+function buildProgressBarInline(percent: number): string {
+  const filled = Math.round(percent / 10);
+  const empty = 10 - filled;
+  return '[' + '█'.repeat(filled) + '░'.repeat(empty) + '] ' + percent + '%';
 }
 
 function studyTopicKeyboard() {
@@ -223,8 +263,10 @@ function practiceKeyboard() {
 function adminKeyboard(webappUrl: string, tgId: number) {
   return {
     keyboard: [
+      [{ text: '🎛️ Admin Panel', web_app: { url: `${webappUrl}/admin/panel?tg_id=${tgId}` } }],
       [{ text: '📋 Manage Content', web_app: { url: `${webappUrl}/admin/content?tg_id=${tgId}` } }],
       [{ text: '👥 Students', web_app: { url: `${webappUrl}/admin/students?tg_id=${tgId}` } }],
+      [{ text: '📊 Dashboard', web_app: { url: `${webappUrl}/dashboard?tg_id=${tgId}` } }],
       [{ text: '📖 Belajar' }],
     ],
     resize_keyboard: true,
@@ -524,12 +566,16 @@ async function handleMessage(message: any, env: Env) {
         const studentHelp = `📚 *Perintah Belajar*\n\n` +
           `/diagnostic — Tes penempatan dulu\n` +
           `/study — Pilih topik belajar\n` +
+          `/lesson — Lesson plan personal (AI)\n` +
           `/today — Pelajaran hari ini\n` +
-          `/review — Review soal yang salah\n` +
+          `/review — Review soal (FSRS adaptive)\n` +
           `/challenge @user — Duel 5 soal\n\n` +
           `💡 *Tips:* Kirim voice message untuk latihan speaking!`;
 
         const progressHelp = `📊 *Progress & Profile*\n\n` +
+          `/profile — Profil lengkap + mental model\n` +
+          `/plan — Lihat semua lesson plans\n` +
+          `/mystyle — Atur gaya belajar & komunikasi\n` +
           `/role — Lihat XP, level, badges\n` +
           `/settings — Ubah target tes & level\n` +
           `/certificate — Download sertifikat\n\n` +
@@ -594,7 +640,7 @@ async function handleMessage(message: any, env: Env) {
           if (info.is_founding_student) {
             await sendMessage(env, chatId,
               `🏆 *Founding Student*\n\n` +
-              `Kamu adalah bagian dari第一批 siswa pilot! Akses premium gratis selamanya.\n\n` +
+              `Kamu adalah siswa pilot pertama kami! Akses premium gratis selamanya.\n\n` +
               `Terima kasih sudah percaya EduBot dari awal! 🎉`
             );
           } else {
@@ -780,11 +826,195 @@ async function handleMessage(message: any, env: Env) {
         await sendMessage(env, chatId, 'Mau belajar apa?', studyTopicKeyboard());
         return;
 
+      // ═══════════════════════════════════════════════════════
+      // PERSONALIZED LEARNING COMMANDS
+      // ═══════════════════════════════════════════════════════
+
+      case '/mystyle': {
+        // Set learning preferences (Ranedeer-style)
+        await sendMessage(env, chatId,
+          `🎨 *Personalisasi Gaya Belajar*\n\n` +
+          `Pilih gaya belajar yang paling cocok buat kamu:`,
+          {
+            inline_keyboard: [
+              [
+                { text: '👁️ Visual', callback_data: 'style_learn_visual' },
+                { text: '💬 Verbal', callback_data: 'style_learn_verbal' },
+              ],
+              [
+                { text: '🏃 Active', callback_data: 'style_learn_active' },
+                { text: '🤔 Reflective', callback_data: 'style_learn_reflective' },
+              ],
+              [
+                { text: '⚖️ Balanced (default)', callback_data: 'style_learn_balanced' },
+              ],
+            ],
+          }
+        );
+        return;
+      }
+
+      case '/profile': {
+        // Show student profile with all learning metrics
+        const { getStudentProfile } = await import('../services/student-profile');
+        const { getReviewStats, getReviewForecast } = await import('../services/fsrs-engine');
+        const { getKnowledgeGaps, getMisconceptions } = await import('../services/mental-model');
+
+        const studentProfile = await getStudentProfile(env, user.id);
+        const srStats = await getReviewStats(env, user.id);
+        const gaps = await getKnowledgeGaps(env, user.id);
+        const misconceptions = await getMisconceptions(env, user.id);
+        const forecast = await getReviewForecast(env, user.id, 7);
+
+        const learningStyle = (studentProfile as any).learning_style || 'balanced';
+        const commStyle = (studentProfile as any).communication_style || 'socratic';
+        const depthLevel = (studentProfile as any).depth_level || 'intermediate';
+        const studyGoal = (studentProfile as any).study_goal || 'belum diset';
+
+        const styleEmoji: Record<string, string> = {
+          visual: '👁️', verbal: '💬', active: '🏃', reflective: '🤔', balanced: '⚖️',
+        };
+        const depthEmoji: Record<string, string> = {
+          beginner: '🌱', elementary: '🌿', intermediate: '🌳', advanced: '🏔️', expert: '⭐',
+        };
+
+        // Forecast summary
+        const forecastStr = forecast.filter(f => f.count > 0).slice(0, 3)
+          .map(f => `${f.date.slice(5)}: ${f.count}`).join(' | ');
+
+        let msg = `📋 *Profil Belajar — ${user.name}*\n\n`;
+        msg += `*Gaya Belajar*\n`;
+        msg += `${styleEmoji[learningStyle] || '⚖️'} Style: ${learningStyle}\n`;
+        msg += `💬 Komunikasi: ${commStyle}\n`;
+        msg += `${depthEmoji[depthLevel] || '🌳'} Level: ${depthLevel}\n`;
+        msg += `🎯 Tujuan: ${studyGoal}\n\n`;
+
+        msg += `*Statistik*\n`;
+        msg += `📊 Confidence: ${Math.round(studentProfile.confidence_score * 100)}%\n`;
+        msg += `🔥 Streak terbaik: ${studentProfile.longest_correct_streak}\n`;
+        msg += `💬 Total pesan tutor: ${studentProfile.total_tutor_messages}\n`;
+        msg += `⚡ Pace: ${studentProfile.learning_pace}\n\n`;
+
+        msg += `*Spaced Repetition (FSRS)*\n`;
+        msg += `📦 Total items: ${srStats.total}\n`;
+        msg += `📅 Due sekarang: ${srStats.due}\n`;
+        msg += `✅ Mastered: ${srStats.mastered}\n`;
+        msg += `🧠 Avg retention: ${srStats.avgRetention}%\n`;
+        if (forecastStr) msg += `📆 Jadwal: ${forecastStr}\n`;
+        msg += '\n';
+
+        if (misconceptions.length > 0) {
+          msg += `*Misconceptions (perlu dikoreksi!)*\n`;
+          msg += misconceptions.slice(0, 3).map(m => `⚠️ ${m.concept}`).join('\n') + '\n\n';
+        }
+
+        if (gaps.length > 0) {
+          msg += `*Knowledge Gaps*\n`;
+          msg += gaps.slice(0, 5).map(g => {
+            const icon = g.believed_understanding === 'misconception' ? '🔴' :
+                        g.believed_understanding === 'partial' ? '🟡' : '⚪';
+            return `${icon} ${g.concept}: ${g.believed_understanding}`;
+          }).join('\n') + '\n';
+        }
+
+        await sendMessage(env, chatId, msg, {
+          inline_keyboard: [
+            [
+              { text: '🎨 Ubah Gaya Belajar', callback_data: 'profile_change_style' },
+              { text: '🎯 Set Target Score', callback_data: 'profile_set_target' },
+            ],
+            [
+              { text: '📝 Mulai Lesson Plan', callback_data: 'start_lesson_plan' },
+            ],
+          ],
+        });
+        return;
+      }
+
+      case '/lesson': {
+        // Generate or continue personalized lesson plan
+        const { getActivePlan, generatePersonalizedPlan, formatTopicName } = await import('../services/lesson-engine');
+
+        const activePlan = await getActivePlan(env, user.id);
+
+        if (activePlan && activePlan.current_step < activePlan.total_steps) {
+          // Continue existing plan
+          const step = activePlan.lessons[activePlan.current_step];
+          const progressBar = buildProgressBarInline(activePlan.progress_percent);
+
+          let msg = `📖 *${activePlan.title}*\n`;
+          msg += `Step ${step.index + 1}/${activePlan.total_steps} ${progressBar}\n\n`;
+          msg += `*${step.title}*\n`;
+          msg += `(${step.expected_minutes} menit)\n\n`;
+          msg += `Ketik sesuatu untuk mulai step ini, atau "skip" untuk lanjut ke step berikutnya.`;
+
+          await sendMessage(env, chatId, msg, {
+            inline_keyboard: [
+              [
+                { text: '▶️ Mulai Step Ini', callback_data: `lesson_start_${activePlan.id}` },
+                { text: '⏭️ Skip', callback_data: `lesson_skip_${activePlan.id}` },
+              ],
+              [
+                { text: '⏸️ Pause Plan', callback_data: `lesson_pause_${activePlan.id}` },
+              ],
+            ],
+          });
+        } else {
+          // Generate new plan
+          await sendMessage(env, chatId, '🤖 Generating lesson plan berdasarkan analisis profilmu...');
+          try {
+            const plan = await generatePersonalizedPlan(env, user);
+            const skills = plan.target_skills.map(s => formatTopicName(s)).join(', ');
+
+            let msg = `📖 *Lesson Plan Baru!*\n\n`;
+            msg += `*${plan.title}*\n`;
+            msg += `${plan.description}\n\n`;
+            msg += `📚 Skills: ${skills}\n`;
+            msg += `⏱️ Estimasi: ${plan.estimated_minutes} menit\n`;
+            msg += `📝 ${plan.total_steps} steps\n\n`;
+            msg += `Ketik /lesson lagi untuk mulai!`;
+
+            await sendMessage(env, chatId, msg);
+          } catch (e: any) {
+            console.error('Lesson plan error:', e);
+            await sendMessage(env, chatId, 'Gagal generate lesson plan. Coba lagi nanti ya.');
+          }
+        }
+        return;
+      }
+
+      case '/plan': {
+        // Show all lesson plans (active and completed)
+        const plans = await env.DB.prepare(
+          `SELECT id, title, plan_type, status, progress_percent, total_steps, current_step, estimated_minutes, created_at
+           FROM lesson_plans WHERE user_id = ? ORDER BY created_at DESC LIMIT 10`
+        ).bind(user.id).all();
+
+        if (!plans.results || plans.results.length === 0) {
+          await sendMessage(env, chatId,
+            `📋 Belum ada lesson plan.\n\nKetik /lesson untuk generate plan pertamamu!`
+          );
+          return;
+        }
+
+        let msg = `📋 *Lesson Plans*\n\n`;
+        for (const p of plans.results as any[]) {
+          const statusIcon = p.status === 'completed' ? '✅' : p.status === 'active' ? '▶️' : '⏸️';
+          const progress = buildProgressBarInline(p.progress_percent);
+          msg += `${statusIcon} *${p.title}*\n`;
+          msg += `   ${progress} (${p.current_step}/${p.total_steps} steps)\n`;
+          msg += `   ${p.plan_type} | ${p.estimated_minutes}min\n\n`;
+        }
+
+        await sendMessage(env, chatId, msg);
+        return;
+      }
+
       case '/review': {
         // Cancel any existing review session first
         await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
 
-        const { getDueReviews, getReviewStats } = await import('../services/spaced-repetition');
+        const { getDueReviews, getReviewStats } = await import('../services/fsrs-engine');
         const stats = await getReviewStats(env, user.id);
         if (stats.due === 0) {
           const masteredNote = stats.mastered > 0 ? ` Kamu udah kuasai ${stats.mastered} item — keren!` : '';
@@ -1212,22 +1442,109 @@ async function handleMessage(message: any, env: Env) {
           await sendMessage(env, chatId, '⛔ Hanya admin.');
           return;
         }
-        const userCount = await env.DB.prepare('SELECT COUNT(*) as c FROM users').first() as any;
-        const questionCount = await env.DB.prepare('SELECT COUNT(*) as c FROM test_contents').first() as any;
-        const attemptCount = await env.DB.prepare("SELECT COUNT(*) as c FROM test_attempts WHERE status = 'completed'").first() as any;
-        const answerCount = await env.DB.prepare('SELECT COUNT(*) as c FROM attempt_answers').first() as any;
-        const costTotal = await env.DB.prepare('SELECT SUM(cost_usd) as c FROM api_usage').first() as any;
-        const teachers = await env.DB.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'teacher'").first() as any;
-        const classes = await env.DB.prepare('SELECT COUNT(*) as c FROM classes').first() as any;
+
+        // --- Core counts ---
+        const [userCount, questionCount, attemptCount, answerCount, costTotal, teachers, classes] = await Promise.all([
+          env.DB.prepare('SELECT COUNT(*) as c FROM users').first() as Promise<any>,
+          env.DB.prepare('SELECT COUNT(*) as c FROM test_contents').first() as Promise<any>,
+          env.DB.prepare("SELECT COUNT(*) as c FROM test_attempts WHERE status = 'completed'").first() as Promise<any>,
+          env.DB.prepare('SELECT COUNT(*) as c FROM attempt_answers').first() as Promise<any>,
+          env.DB.prepare('SELECT SUM(cost_usd) as c FROM api_usage').first() as Promise<any>,
+          env.DB.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'teacher'").first() as Promise<any>,
+          env.DB.prepare('SELECT COUNT(*) as c FROM classes').first() as Promise<any>,
+        ]);
+
+        // --- Extended analytics ---
+        const [accuracy, activeToday, active7d, premiumCount, todayCost, sectionBreakdown, topStudents] = await Promise.all([
+          // Overall accuracy
+          env.DB.prepare(
+            `SELECT COUNT(*) as total,
+                    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct
+             FROM attempt_answers WHERE is_correct IS NOT NULL`
+          ).first() as Promise<any>,
+          // Active today — check multiple activity sources
+          env.DB.prepare(
+            `SELECT COUNT(DISTINCT user_id) as c FROM (
+               SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE date(aa.submitted_at) = date('now')
+               UNION SELECT user_id FROM user_messages WHERE date(created_at) = date('now')
+               UNION SELECT user_id FROM tutor_interactions WHERE date(created_at) = date('now')
+               UNION SELECT user_id FROM daily_study_logs WHERE log_date = date('now')
+             )`
+          ).first() as Promise<any>,
+          // Active last 7 days — check multiple activity sources
+          env.DB.prepare(
+            `SELECT COUNT(DISTINCT user_id) as c FROM (
+               SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= datetime('now', '-7 days')
+               UNION SELECT user_id FROM user_messages WHERE created_at >= datetime('now', '-7 days')
+               UNION SELECT user_id FROM tutor_interactions WHERE created_at >= datetime('now', '-7 days')
+               UNION SELECT user_id FROM daily_study_logs WHERE log_date >= date('now', '-7 days')
+             )`
+          ).first() as Promise<any>,
+          // Premium users
+          env.DB.prepare(
+            `SELECT COUNT(*) as c FROM users WHERE is_premium = 1`
+          ).first() as Promise<any>,
+          // Today's API cost
+          env.DB.prepare(
+            `SELECT SUM(cost_usd) as c FROM api_usage WHERE created_at >= date('now')`
+          ).first() as Promise<any>,
+          // Answers by section
+          env.DB.prepare(
+            `SELECT section, COUNT(*) as total,
+                    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct
+             FROM attempt_answers WHERE section IS NOT NULL AND is_correct IS NOT NULL
+             GROUP BY section ORDER BY total DESC`
+          ).all() as Promise<any>,
+          // Top 5 students by questions answered (last 7 days)
+          env.DB.prepare(
+            `SELECT u.name, COUNT(*) as answered,
+                    SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct
+             FROM attempt_answers aa
+             JOIN test_attempts ta ON aa.attempt_id = ta.id
+             JOIN users u ON ta.user_id = u.id
+             WHERE aa.submitted_at >= datetime('now', '-7 days') AND aa.is_correct IS NOT NULL
+             GROUP BY ta.user_id ORDER BY answered DESC LIMIT 5`
+          ).all() as Promise<any>,
+        ]);
+
+        const overallAcc = accuracy?.total > 0
+          ? Math.round((accuracy.correct / accuracy.total) * 100)
+          : 0;
+
+        // Format section stats
+        let sectionMsg = '';
+        for (const s of (sectionBreakdown?.results || [])) {
+          const acc = s.total > 0 ? Math.round((s.correct as number / (s.total as number)) * 100) : 0;
+          const icon = acc >= 70 ? '🟢' : acc >= 50 ? '🟡' : '🔴';
+          sectionMsg += `  ${icon} ${(s.section as string).charAt(0).toUpperCase() + (s.section as string).slice(1)}: ${(s.total as number).toLocaleString('id-ID')} soal (${acc}%)\n`;
+        }
+
+        // Format top students
+        let topMsg = '';
+        for (let i = 0; i < (topStudents?.results || []).length; i++) {
+          const st = topStudents.results[i] as any;
+          const acc = st.answered > 0 ? Math.round((st.correct / st.answered) * 100) : 0;
+          topMsg += `  ${i + 1}. ${st.name} — ${st.answered} soal (${acc}%)\n`;
+        }
 
         await sendMessage(env, chatId,
-          `📊 *Statistik EduBot* (All Time)\n\n` +
-          `👥 Pengguna: ${(userCount?.c || 0).toLocaleString('id-ID')} (${(teachers?.c || 0).toLocaleString('id-ID')} guru)\n` +
-          `🏫 Kelas: ${(classes?.c || 0).toLocaleString('id-ID')}\n` +
+          `📊 *Statistik EduBot*\n\n` +
+          `*— Pengguna —*\n` +
+          `👥 Total: ${(userCount?.c || 0).toLocaleString('id-ID')} (${(teachers?.c || 0).toLocaleString('id-ID')} guru)\n` +
+          `⭐ Premium: ${(premiumCount?.c || 0).toLocaleString('id-ID')}\n` +
+          `🟢 Aktif hari ini: ${(activeToday?.c || 0).toLocaleString('id-ID')}\n` +
+          `📅 Aktif 7 hari: ${(active7d?.c || 0).toLocaleString('id-ID')}\n` +
+          `🏫 Kelas: ${(classes?.c || 0).toLocaleString('id-ID')}\n\n` +
+          `*— Konten & Latihan —*\n` +
           `📝 Soal di database: ${(questionCount?.c || 0).toLocaleString('id-ID')}\n` +
           `✅ Tes selesai: ${(attemptCount?.c || 0).toLocaleString('id-ID')}\n` +
           `💬 Jawaban total: ${(answerCount?.c || 0).toLocaleString('id-ID')}\n` +
-          `💰 Biaya API total: $${Number(costTotal?.c || 0).toFixed(2)}`
+          `🎯 Akurasi keseluruhan: ${overallAcc}%\n\n` +
+          (sectionMsg ? `*— Per Section —*\n${sectionMsg}\n` : '') +
+          (topMsg ? `*— Top Students (7 Hari) —*\n${topMsg}\n` : '') +
+          `*— Biaya API —*\n` +
+          `💰 Hari ini: $${Number(todayCost?.c || 0).toFixed(3)}\n` +
+          `💰 Total: $${Number(costTotal?.c || 0).toFixed(2)}`
         );
         return;
       }
@@ -1644,7 +1961,7 @@ async function handleMessage(message: any, env: Env) {
   ).bind(user.id).first() as any;
 
   if (reviewSession) {
-    const { markReviewed, getDueReviews, getReviewStats } = await import('../services/spaced-repetition');
+    const { markReviewed, getDueReviews, getReviewStats } = await import('../services/fsrs-engine');
     const item = await env.DB.prepare('SELECT * FROM spaced_repetition WHERE id = ?').bind(reviewSession.current_review_id).first() as any;
 
     if (item) {
@@ -1786,7 +2103,7 @@ async function handleMessage(message: any, env: Env) {
         ''
       );
       await sendMessage(env, chatId,
-        resultsText + `\n\n🎯 *下一步?*\n\nMau langsung buat study plan personal?`,
+        resultsText + `\n\n🎯 Langkah Selanjutnya?\n\nMau langsung buat study plan personal?`,
         {
           inline_keyboard: [
             [{ text: '📚 Buat Study Plan', callback_data: 'diag_start_studyplan' }],
@@ -1921,7 +2238,16 @@ async function handleMessage(message: any, env: Env) {
     }
   }
 
-  const response = await getTutorResponse(env, user, text);
+  // Use private tutor for rich tracking (student profiles, topic mastery, tutor interactions)
+  let response: string;
+  try {
+    const result = await getPrivateTutorResponse(env, user, text);
+    response = result.text;
+  } catch (e) {
+    console.error('Private tutor error, falling back to generic:', e);
+    response = await getTutorResponse(env, user, text);
+    await saveToHistory(env, user.id, text, response);
+  }
 
   // Check if AI tutor response contains [AUDIO] tag (e.g., follow-up listening exercises)
   const audioMatch = response.match(/\[AUDIO\]\s*([\s\S]+?)(?=\n\s*Soal:|\n\s*Question:|$)/i);
@@ -2069,6 +2395,200 @@ async function handleCallbackQuery(query: any, env: Env) {
     await editMessage(env, chatId, messageId,
       `✅ Level diubah ke: ${level}\n\nKetik /help jika butuh bantuan.`
     );
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // LEARNING STYLE CALLBACKS
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('style_learn_')) {
+    const style = data.replace('style_learn_', '');
+    await env.DB.prepare(
+      'UPDATE student_profiles SET learning_style = ? WHERE user_id = ?'
+    ).bind(style, user.id).run();
+
+    // Now ask for communication style
+    await editMessage(env, chatId, messageId,
+      `✅ Gaya belajar: *${style}*\n\nSekarang pilih gaya komunikasi tutor:`,
+      {
+        inline_keyboard: [
+          [
+            { text: '🧠 Socratic (tanya balik)', callback_data: 'style_comm_socratic' },
+          ],
+          [
+            { text: '📖 Storytelling', callback_data: 'style_comm_storytelling' },
+            { text: '🎓 Formal', callback_data: 'style_comm_formal' },
+          ],
+          [
+            { text: '😎 Casual', callback_data: 'style_comm_casual' },
+            { text: '🎯 Direct', callback_data: 'style_comm_direct' },
+          ],
+        ],
+      }
+    );
+    return;
+  }
+
+  if (data.startsWith('style_comm_')) {
+    const commStyle = data.replace('style_comm_', '');
+    await env.DB.prepare(
+      'UPDATE student_profiles SET communication_style = ? WHERE user_id = ?'
+    ).bind(commStyle, user.id).run();
+
+    // Ask for depth level
+    await editMessage(env, chatId, messageId,
+      `✅ Komunikasi: *${commStyle}*\n\nTerakhir — level kedalaman materi:`,
+      {
+        inline_keyboard: [
+          [
+            { text: '🌱 Beginner', callback_data: 'style_depth_beginner' },
+            { text: '🌿 Elementary', callback_data: 'style_depth_elementary' },
+          ],
+          [
+            { text: '🌳 Intermediate', callback_data: 'style_depth_intermediate' },
+          ],
+          [
+            { text: '🏔️ Advanced', callback_data: 'style_depth_advanced' },
+            { text: '⭐ Expert', callback_data: 'style_depth_expert' },
+          ],
+        ],
+      }
+    );
+    return;
+  }
+
+  if (data.startsWith('style_depth_')) {
+    const depth = data.replace('style_depth_', '');
+    await env.DB.prepare(
+      'UPDATE student_profiles SET depth_level = ? WHERE user_id = ?'
+    ).bind(depth, user.id).run();
+
+    await editMessage(env, chatId, messageId,
+      `✅ *Profil belajar tersimpan!*\n\n` +
+      `Tutor sekarang akan menyesuaikan:\n` +
+      `- Cara menjelaskan sesuai gaya belajarmu\n` +
+      `- Gaya komunikasi yang kamu suka\n` +
+      `- Kedalaman materi sesuai levelmu\n\n` +
+      `Profil ini otomatis berkembang seiring interaksimu.\n` +
+      `Ketik /profile untuk lihat profil lengkap.`
+    );
+    return;
+  }
+
+  // Profile callbacks
+  if (data === 'profile_change_style') {
+    await editMessage(env, chatId, messageId,
+      `🎨 *Ubah Gaya Belajar*\n\nPilih:`,
+      {
+        inline_keyboard: [
+          [
+            { text: '👁️ Visual', callback_data: 'style_learn_visual' },
+            { text: '💬 Verbal', callback_data: 'style_learn_verbal' },
+          ],
+          [
+            { text: '🏃 Active', callback_data: 'style_learn_active' },
+            { text: '🤔 Reflective', callback_data: 'style_learn_reflective' },
+          ],
+          [
+            { text: '⚖️ Balanced', callback_data: 'style_learn_balanced' },
+          ],
+        ],
+      }
+    );
+    return;
+  }
+
+  if (data === 'profile_set_target') {
+    await editMessage(env, chatId, messageId,
+      `🎯 *Set Target Score*\n\nPilih target kamu:`,
+      {
+        inline_keyboard: [
+          [
+            { text: 'TOEFL 80+', callback_data: 'target_score_80' },
+            { text: 'TOEFL 90+', callback_data: 'target_score_90' },
+            { text: 'TOEFL 100+', callback_data: 'target_score_100' },
+          ],
+          [
+            { text: 'IELTS 6.0', callback_data: 'target_band_6.0' },
+            { text: 'IELTS 6.5', callback_data: 'target_band_6.5' },
+            { text: 'IELTS 7.0+', callback_data: 'target_band_7.0' },
+          ],
+        ],
+      }
+    );
+    return;
+  }
+
+  if (data.startsWith('target_score_')) {
+    const score = parseFloat(data.replace('target_score_', ''));
+    await env.DB.prepare(
+      'UPDATE student_profiles SET target_band_score = ? WHERE user_id = ?'
+    ).bind(score, user.id).run();
+    await editMessage(env, chatId, messageId, `✅ Target score diset ke: ${score}+`);
+    return;
+  }
+
+  if (data.startsWith('target_band_')) {
+    const band = parseFloat(data.replace('target_band_', ''));
+    await env.DB.prepare(
+      'UPDATE student_profiles SET target_band_score = ? WHERE user_id = ?'
+    ).bind(band, user.id).run();
+    await editMessage(env, chatId, messageId, `✅ Target band diset ke: ${band}`);
+    return;
+  }
+
+  // Lesson plan callbacks
+  if (data === 'start_lesson_plan') {
+    await editMessage(env, chatId, messageId, '🤖 Generating lesson plan...');
+    try {
+      const { generatePersonalizedPlan, formatTopicName } = await import('../services/lesson-engine');
+      const plan = await generatePersonalizedPlan(env, user);
+      const skills = plan.target_skills.map((s: string) => formatTopicName(s)).join(', ');
+
+      await sendMessage(env, chatId,
+        `📖 *${plan.title}*\n\n${plan.description}\n\n` +
+        `📚 Skills: ${skills}\n⏱️ ${plan.estimated_minutes} menit | 📝 ${plan.total_steps} steps\n\n` +
+        `Ketik /lesson untuk mulai!`
+      );
+    } catch (e: any) {
+      await sendMessage(env, chatId, 'Gagal generate plan. Coba lagi ya.');
+    }
+    return;
+  }
+
+  if (data.startsWith('lesson_start_') || data.startsWith('lesson_skip_')) {
+    const planId = parseInt(data.replace(/lesson_(start|skip)_/, ''));
+    const isSkip = data.startsWith('lesson_skip_');
+
+    if (isSkip) {
+      const { advanceLessonStep } = await import('../services/lesson-engine');
+      await advanceLessonStep(env, planId, user.id);
+    }
+
+    // Send the current step's instruction to tutor mode
+    const { getActivePlan } = await import('../services/lesson-engine');
+    const plan = await getActivePlan(env, user.id);
+    if (plan && plan.current_step < plan.total_steps) {
+      const step = plan.lessons[plan.current_step];
+      await editMessage(env, chatId, messageId,
+        `📖 *${step.title}*\n\nKirim pesan apapun untuk mulai step ini dengan tutor.`
+      );
+      // Set tutor mode to lesson with the step's topic
+      await env.DB.prepare(
+        `UPDATE student_profiles SET tutor_mode = 'lesson', current_topic = ?, current_lesson_step = ? WHERE user_id = ?`
+      ).bind(step.skill, step.index, user.id).run();
+    } else {
+      await editMessage(env, chatId, messageId, '✅ Lesson plan selesai! Ketik /lesson untuk plan baru.');
+    }
+    return;
+  }
+
+  if (data.startsWith('lesson_pause_')) {
+    const planId = parseInt(data.replace('lesson_pause_', ''));
+    await env.DB.prepare(
+      `UPDATE lesson_plans SET status = 'paused', updated_at = datetime('now') WHERE id = ? AND user_id = ?`
+    ).bind(planId, user.id).run();
+    await editMessage(env, chatId, messageId, '⏸️ Lesson plan di-pause. Ketik /lesson untuk lanjut kapan saja.');
     return;
   }
 
@@ -2706,7 +3226,7 @@ async function editMessage(env: Env, chatId: number, messageId: number, text: st
       chat_id: chatId,
       message_id: messageId,
       text,
-      parse_mode: 'HTML',
+      parse_mode: 'Markdown',
       reply_markup: replyMarkup,
     }),
   });

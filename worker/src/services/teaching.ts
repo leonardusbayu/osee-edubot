@@ -251,6 +251,10 @@ export async function generateLesson(env: Env, user: User, topic: string): Promi
     });
 
     const data: any = await response.json();
+    if (data.error) {
+      console.error('OpenAI lesson error:', data.error);
+      return `Error: ${data.error.message || 'API error'}`;
+    }
     return data.choices?.[0]?.message?.content || 'Gagal membuat pelajaran.';
   } catch {
     return 'Maaf, ada masalah. Coba lagi.';
@@ -345,11 +349,29 @@ Kasih 1 contoh lengkap (max 5 baris contoh jawabannya).
 Lalu kasih 1 pertanyaan dan minta siswa jawab pakai template OREO.
 Total pesan maks 12 baris.`,
 
-    writing_templates: `TOPIK: Writing Templates. Kasih 1 template email saja:
-P1: "I am writing to [tujuan]..."
-P2: Detail (2-3 kalimat)
-P3: "I would appreciate it if you could [request]..."
-Kasih 1 contoh email pendek (max 5 baris). Lalu kasih 1 prompt dan minta siswa tulis. Maks 12 baris.`,
+    writing_templates: `TOPIK: Writing Practice. Sesuaikan dengan target test siswa.
+
+JIKA target = TOEFL iBT:
+Kasih 1 prompt Writing for an Academic Discussion (format asli iBT):
+- Profesor memberi pertanyaan (2-3 baris, English)
+- 2 mahasiswa beri pendapat berbeda (masing-masing 2-3 baris, English)
+- Minta siswa tulis respons min 100 kata (English)
+Semua prompt dan contoh HARUS dalam BAHASA INGGRIS (ini simulasi tes asli).
+
+JIKA target = IELTS:
+Kasih 1 prompt Writing Task 2 (format asli IELTS Academic):
+- Beri statement/question tentang topik (English, 2-3 baris)
+- Contoh: "Some people believe... To what extent do you agree or disagree?"
+- Minta siswa tulis essay min 250 kata (English)
+Semua prompt HARUS dalam BAHASA INGGRIS (simulasi tes asli).
+
+JIKA target = TOEIC:
+Kasih 1 prompt email writing (format asli TOEIC):
+- Beri skenario kantor/bisnis (English)
+- Minta siswa tulis email respons (English)
+
+PENTING: Prompt soal WAJIB English. Instruksi/tips boleh Bahasa Indonesia tapi singkat.
+Maks 12 baris total.`,
 
     passive_voice: `TOPIK: Passive Voice. Pembuka singkat maks 8 baris:
 Bahasa: "di-" prefix → "dibaca", "dimakan". English: be + V3 → "is read", "was eaten"

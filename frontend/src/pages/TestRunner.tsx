@@ -1,8 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTestStore } from '../stores/test';
+import { authedFetch } from '../api/authedFetch';
 import Timer from '../components/Timer';
 import AudioRecorder from '../components/AudioRecorder';
+
+const API_URL = (import.meta.env.VITE_API_URL as string) || 'https://edubot-api.edubot-leonardus.workers.dev/api';
 
 function stripHtml(str: string): string {
   if (!str) return '';
@@ -71,7 +74,7 @@ export default function TestRunner() {
     try {
       const qType = useTestStore.getState().questionType;
       const url = `/api/tests/questions/${currentSection}?limit=10${qType ? '&question_type=' + qType : ''}`;
-      const response = await fetch(url);
+      const response = await authedFetch(url);
       if (response.ok) {
         const data = await response.json();
         const allQuestions: any[] = [];
@@ -184,6 +187,87 @@ export default function TestRunner() {
     const c = q.content || {};
     const type = q.question_type;
 
+    // ─── Universal grouped_listening handler ──────────────────
+    // Catches ALL listening question types from any test (TOEFL IBT/ITP, IELTS, TOEIC)
+    // as long as their content JSON has type: "grouped_listening"
+    if (c.type === 'grouped_listening' && c.questions?.length > 0) {
+      const passageScript = stripHtml(c.passage_script || '');
+      const ttsUrl = passageScript.length > 10
+        ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(passageScript.substring(0, 4000))}`
+        : null;
+
+      const items: any[] = [];
+
+      // First item: listen to the passage
+      items.push({
+        id: q.id,
+        type: 'listening_passage',
+        instruction: stripHtml(c.direction || 'Listen to the audio.'),
+        passage: passageScript,
+        audio_url: ttsUrl,
+        group_name: stripHtml(c.group_name || ''),
+      });
+
+      // Then each question
+      for (const sq of c.questions) {
+        const opts = (sq.options || []).map((o: any) => `${o.key}. ${stripHtml(o.text || '')}`);
+
+        // Some questions have their own audio (e.g., per-question scripts)
+        let qAudioUrl = null;
+        const qScript = stripHtml(sq.script || '');
+        if (qScript.length > 10) {
+          qAudioUrl = `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(qScript.substring(0, 2000))}`;
+        }
+
+        // Determine if it's fill-in-blank (no options) or multiple choice
+        if (opts.length >= 2) {
+          items.push({
+            id: q.id,
+            type: 'listening',
+            instruction: '',
+            question: stripHtml(sq.question_text || ''),
+            options: opts,
+            correct: (sq.answers?.[0] || '').toUpperCase(),
+            explanation: stripHtml(sq.explanation || ''),
+            audio_url: qAudioUrl,
+          });
+        } else {
+          // Fill-in-blank listening (e.g., IELTS Section 1 note completion)
+          items.push({
+            id: q.id,
+            type: 'fill_blank',
+            instruction: stripHtml(c.direction || 'Complete the notes.'),
+            question: stripHtml(sq.question_text || ''),
+            correct: sq.answers?.[0] || '',
+            explanation: stripHtml(sq.explanation || ''),
+            audio_url: qAudioUrl,
+          });
+        }
+      }
+
+      return { _grouped: true, items };
+    }
+
+    // ─── Universal grouped_reading handler ──────────────────
+    // Catches ALL reading question types with grouped format
+    if (c.type === 'grouped_reading' && c.questions?.length > 0 && !['reading_passage', 'error_identification'].includes(type)) {
+      const passage = stripHtml(c.passage || '');
+      const items: any[] = [];
+      for (const sq of c.questions) {
+        const opts = (sq.options || []).map((o: any) => `${o.key}. ${stripHtml(o.text || '')}`);
+        items.push({
+          id: q.id,
+          type: 'multiple_choice',
+          passage,
+          question: stripHtml(sq.question_text || ''),
+          options: opts.length >= 2 ? opts : getOptions(sq),
+          correct: (sq.answers?.[0] || '').toUpperCase(),
+          explanation: stripHtml(sq.explanation || ''),
+        });
+      }
+      return { _grouped: true, items };
+    }
+
     if (type === 'complete_the_words') {
       // Transform {{letters}} into blanks: "dama{{ges}}" → "dama___"
       const rawPassage = c.passage_text || '';
@@ -267,7 +351,7 @@ export default function TestRunner() {
     if (['read_in_daily_life', 'read_academic_passage'].includes(type)) {
       const passageText = c.passage_text || '';
       const audioUrl = passageText.length > 10 && passageText.length <= 2000
-        ? `/api/tts/speak?text=${encodeURIComponent(passageText.substring(0, 2000))}`
+        ? `${API_URL}/tts/speak?text=${encodeURIComponent(passageText.substring(0, 2000))}`
         : null;
       return {
         id: q.id,
@@ -281,12 +365,19 @@ export default function TestRunner() {
       };
     }
 
-    if (['listen_choose_response', 'listen_conversation', 'listen_announcement', 'listen_academic_talk'].includes(type)) {
+    if ([
+      // TOEFL iBT listening
+      'listen_choose_response', 'listen_conversation', 'listen_announcement', 'listen_academic_talk',
+      // TOEFL ITP listening
+      'listen_short_dialogue', 'listen_long_conversation', 'listen_talk',
+      // TOEIC listening
+      'photographs', 'question_response', 'conversations', 'talks',
+    ].includes(type)) {
       // NEW: Grouped listening — c has passage_script + questions array
       if (c.type === 'grouped_listening' && c.questions?.length > 0) {
         const passageScript = stripHtml(c.passage_script || '');
         const ttsUrl = passageScript.length > 10
-          ? `/api/tts/speak?multi=true&text=${encodeURIComponent(passageScript.substring(0, 4000))}`
+          ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(passageScript.substring(0, 4000))}`
           : null;
 
         const items: any[] = [];
@@ -307,7 +398,7 @@ export default function TestRunner() {
           let qAudioUrl = null;
           const qScript = stripHtml(sq.script || '');
           if (qScript.length > 10) {
-            qAudioUrl = `/api/tts/speak?multi=true&text=${encodeURIComponent(qScript.substring(0, 2000))}`;
+            qAudioUrl = `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(qScript.substring(0, 2000))}`;
           }
 
           items.push({
@@ -328,7 +419,7 @@ export default function TestRunner() {
       // Fallback: old single-question format
       const audioText = c.passage_text || c.passage_script || '';
       const ttsUrl = audioText.length > 10
-        ? `/api/tts/speak?multi=true&text=${encodeURIComponent(audioText.substring(0, 2000))}`
+        ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(audioText.substring(0, 2000))}`
         : null;
 
       let options = getOptions(c);
@@ -357,7 +448,7 @@ export default function TestRunner() {
         for (const sq of c.questions) {
           const script = stripHtml(sq.script || '');
           const ttsUrl = script.length > 3
-            ? `/api/tts/speak?multi=true&text=${encodeURIComponent(script.substring(0, 2000))}`
+            ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(script.substring(0, 2000))}`
             : null;
 
           if (type === 'listen_and_repeat') {
@@ -392,12 +483,12 @@ export default function TestRunner() {
         instruction: stripHtml(c.direction || ''),
         prompt,
         audio_url: prompt.length > 0
-          ? `/api/tts/speak?multi=true&text=${encodeURIComponent(prompt.substring(0, 2000))}`
+          ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(prompt.substring(0, 2000))}`
           : null,
       };
     }
 
-    if (type === 'build_sentence' || type === 'write_email' || type === 'write_academic_discussion') {
+    if (type === 'build_sentence' || type === 'write_email' || type === 'write_academic_discussion' || type === 'integrated_writing') {
       // Grouped writing
       if (c.type === 'grouped_writing' && c.questions?.length > 0) {
         const items: any[] = [];
@@ -422,6 +513,20 @@ export default function TestRunner() {
               words: [...words].sort(() => Math.random() - 0.5),
               correct: correctSentence,
             });
+          } else if (type === 'integrated_writing') {
+            // TOEFL iBT Integrated Writing: read passage + write summary
+            const passage = stripHtml(sq.passage || '');
+            const questionText = stripHtml(sq.question_text || 'Summarize the main points made in the passage.');
+            items.push({
+              id: q.id,
+              type: 'write_academic_discussion',
+              instruction: stripHtml(c.direction || 'Read the passage below. Then write a response that summarizes the main points. Your response should be between 150 and 225 words.'),
+              prompt: questionText,
+              contexts: [{ text: passage, label: 'Reading Passage' }],
+              audio_url: null,
+              time_limit: 1200,
+              model_answer: stripHtml(sq.model_answer || ''),
+            });
           } else if (type === 'write_email') {
             const prompt = stripHtml(sq.passage || sq.question_text || '');
             const contexts = (sq.illustrated_passages || []).map((ip: any) => ({
@@ -430,7 +535,7 @@ export default function TestRunner() {
             }));
             // Generate audio for the scenario
             const scenarioAudio = prompt.length > 10
-              ? `/api/tts/speak?voice=alloy&text=${encodeURIComponent(prompt.substring(0, 2000))}`
+              ? `${API_URL}/tts/speak?voice=alloy&text=${encodeURIComponent(prompt.substring(0, 2000))}`
               : null;
             items.push({
               id: q.id,
@@ -450,7 +555,7 @@ export default function TestRunner() {
             }));
             // Generate audio for professor's lecture (first context)
             const profAudio = contexts.length > 0 && contexts[0].text.length > 10
-              ? `/api/tts/speak?multi=true&text=${encodeURIComponent(contexts[0].text.substring(0, 2000))}`
+              ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(contexts[0].text.substring(0, 2000))}`
               : null;
             items.push({
               id: q.id,
@@ -493,7 +598,7 @@ export default function TestRunner() {
       return {
         id: q.id,
         type: 'fill_blank',
-        instruction: stripHtml(c.direction || type === 'fill_in_blank' ? 'Complete the sentence with the correct word.' : 'Fill in the blanks to complete the text.'),
+        instruction: stripHtml(c.direction || (type === 'fill_in_blank' ? 'Complete the sentence with the correct word.' : 'Fill in the blanks to complete the text.')),
         passage: c.passage_text || c.passage || '',
         question: c.question_text || '',
         time_limit: 420,
@@ -601,7 +706,7 @@ export default function TestRunner() {
         instruction: stripHtml(c.direction || 'Answer the following questions naturally.'),
         prompt: script,
         audio_url: script.length > 3
-          ? `/api/tts/speak?text=${encodeURIComponent(script.substring(0, 2000))}`
+          ? `${API_URL}/tts/speak?text=${encodeURIComponent(script.substring(0, 2000))}`
           : null,
         premium_only: true,
       };
@@ -644,36 +749,7 @@ export default function TestRunner() {
       };
     }
 
-    // TOEIC Listening Part 1 — Photographs (multiple choice, no audio)
-    if (type === 'photographs') {
-      return {
-        id: q.id,
-        type: 'multiple_choice',
-        passage: '',
-        question: c.question_text || 'Look at the photograph and choose the best response.',
-        options: getOptions(c),
-        correct: (c.answers?.[0] || '').toUpperCase(),
-        explanation: c.explanation || '',
-      };
-    }
-
-    // TOEIC Listening Part 2 — Question-Response (audio + choices)
-    if (type === 'question_response') {
-      const audioText = c.passage_text || c.question_text || '';
-      return {
-        id: q.id,
-        type: 'listening',
-        instruction: c.direction || 'Listen to the question and choose the best response.',
-        passage: '',
-        question: '',
-        options: getOptions(c),
-        correct: (c.answers?.[0] || '').toUpperCase(),
-        audio_url: audioText.length > 3
-          ? `/api/tts/speak?text=${encodeURIComponent(audioText.substring(0, 1000))}`
-          : null,
-        explanation: c.explanation || '',
-      };
-    }
+    // (photographs + question_response now handled by the grouped listening block above)
 
     // TOEIC Reading Part 5 — Incomplete Sentences
     if (type === 'incomplete_sentences') {
@@ -757,7 +833,7 @@ export default function TestRunner() {
     let activeSessionId: number | null = null;
     (async () => {
       try {
-        const res = await fetch('/api/analytics/session/start', {
+        const res = await authedFetch('/api/analytics/session/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ platform: 'mini_app', source: 'test' }),
@@ -771,7 +847,7 @@ export default function TestRunner() {
     })();
     return () => {
       if (activeSessionId) {
-        fetch('/api/analytics/session/end', {
+        authedFetch('/api/analytics/session/end', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: activeSessionId, questions_answered: currentQuestionIndex }),
@@ -783,7 +859,7 @@ export default function TestRunner() {
   // Track message on each question load
   useEffect(() => {
     if (currentQuestion) {
-      fetch('/api/analytics/message', {
+      authedFetch('/api/analytics/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_type: 'question_view', content_length: 0 }),
@@ -807,6 +883,7 @@ export default function TestRunner() {
       if (currentQuestionIndex + 1 < questions.length) {
         advanceWithTransition(() => setQuestionIndex(currentQuestionIndex + 1));
       }
+      setSubmitting(false);
       return;
     }
 
@@ -827,7 +904,7 @@ export default function TestRunner() {
     const timeSpentSeconds = Math.round((Date.now() - questionStartTimeRef.current) / 1000);
 
     try {
-      const response = await fetch(`/api/tests/attempt/${attemptId}/answer`, {
+      const response = await authedFetch(`/api/tests/attempt/${attemptId}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -845,8 +922,11 @@ export default function TestRunner() {
           navigate('/test?limit_reached=1');
           return;
         }
+        console.error('Answer submission failed:', response.status);
       }
-    } catch {}
+    } catch (err) {
+      console.error('Answer submission error:', err);
+    }
 
     // Types that have a definite correct answer and should show explanation
     const hasExplanation = currentQuestion.explanation &&
@@ -872,7 +952,7 @@ export default function TestRunner() {
         if (currentIdx + 1 < sections.length) {
           const nextSection = sections[currentIdx + 1].id;
           advanceWithTransition(() => setCurrentSection(nextSection));
-          fetch(`/api/tests/attempt/${attemptId}/section/${nextSection}`, { method: 'POST' }).catch(() => {});
+          authedFetch(`/api/tests/attempt/${attemptId}/section/${nextSection}`, { method: 'POST' }).catch(() => {});
         } else {
           handleFinish();
         }
@@ -884,7 +964,7 @@ export default function TestRunner() {
     // Retry up to 3 times to ensure the backend marks the test as completed
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const res = await fetch(`/api/tests/attempt/${attemptId}/finish`, { method: 'POST' });
+        const res = await authedFetch(`/api/tests/attempt/${attemptId}/finish`, { method: 'POST' });
         if (res.ok) break;
         // Wait before retry
         if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
@@ -917,7 +997,7 @@ export default function TestRunner() {
       formData.append('prompt', currentQuestion.prompt || '');
       formData.append('question_type', currentQuestion.type || 'interview');
 
-      const response = await fetch('/api/speaking/evaluate', {
+      const response = await authedFetch('/api/speaking/evaluate', {
         method: 'POST',
         body: formData,
       });
@@ -935,7 +1015,7 @@ export default function TestRunner() {
 
         // Submit to backend
         try {
-          const response = await fetch(`/api/tests/attempt/${attemptId}/answer`, {
+          const response = await authedFetch(`/api/tests/attempt/${attemptId}/answer`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -952,6 +1032,7 @@ export default function TestRunner() {
               navigate('/test?limit_reached=1');
               return;
             }
+            console.error('Speaking answer submission failed:', response.status);
           }
         } catch {}
       } else {
@@ -1073,8 +1154,8 @@ export default function TestRunner() {
           </>
         )}
 
-        {/* Non-listening types — show passage, instruction, audio, prompt, question */}
-        {currentQuestion.type !== 'listening' && currentQuestion.type !== 'listening_passage' && (
+        {/* Non-listening, non-writing types — show passage, instruction, audio, prompt, question */}
+        {currentQuestion.type !== 'listening' && currentQuestion.type !== 'listening_passage' && currentQuestion.type !== 'write_email' && currentQuestion.type !== 'write_academic_discussion' && currentQuestion.type !== 'fill_blank' && (
           <>
             {/* Image for IELTS graph/map/diagram questions */}
             {currentQuestion.image_url && (
@@ -1262,50 +1343,154 @@ export default function TestRunner() {
           </div>
         )}
 
-        {/* Writing */}
-        {(currentQuestion.type === 'write_email' || currentQuestion.type === 'write_academic_discussion' || currentQuestion.type === 'fill_blank') && (
+        {/* Writing — Redesigned with visual hierarchy */}
+        {(currentQuestion.type === 'write_email' || currentQuestion.type === 'write_academic_discussion') && (
           <div className="mb-4">
+
+            {/* Task type badge + timer header */}
+            <div className="flex items-center justify-between mb-3">
+              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${
+                currentQuestion.type === 'write_email'
+                  ? 'bg-green-100 text-green-700'
+                  : currentQuestion.type === 'write_academic_discussion'
+                  ? 'bg-purple-100 text-purple-700'
+                  : 'bg-orange-100 text-orange-700'
+              }`}>
+                {currentQuestion.type === 'write_email' ? '✉️ Email Writing' :
+                 currentQuestion.type === 'write_academic_discussion' ? '💬 Academic Discussion' :
+                 '📝 Fill in the Blank'}
+              </span>
+              {currentQuestion.time_limit && (
+                <span className="inline-flex items-center gap-1 text-xs text-tg-hint bg-tg-secondary px-2.5 py-1 rounded-full">
+                  ⏱ {Math.floor(currentQuestion.time_limit / 60)} min
+                </span>
+              )}
+            </div>
+
             {/* Audio for writing prompt */}
             {currentQuestion.audio_url && (
-              <div className="bg-tg-secondary rounded-xl p-3 mb-3">
-                <p className="text-xs text-tg-hint mb-2">🔊 Dengarkan instruksi:</p>
+              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 mb-3 border border-blue-100">
+                <p className="text-xs text-blue-600 font-medium mb-2">🔊 Listen to the instructions:</p>
                 <AudioWithError src={currentQuestion.audio_url} className="w-full" />
               </div>
             )}
-            {/* Context panels — professor's lecture, student opinions, email scenario */}
+
+            {/* Context panels — professor, students, email scenario */}
             {currentQuestion.contexts?.length > 0 && (
               <div className="space-y-3 mb-4">
-                {currentQuestion.contexts.map((ctx: any, i: number) => (
-                  <div key={i} className={`rounded-lg p-3 text-sm leading-relaxed text-gray-800 ${
-                    i === 0 ? 'bg-blue-50 border border-blue-200' :
-                    'bg-gray-50 border border-gray-200'
-                  }`}>
-                    {ctx.label && (
-                      <p className="text-xs font-semibold text-tg-hint mb-1">{ctx.label}</p>
-                    )}
-                    {!ctx.label && i === 0 && currentQuestion.type === 'write_academic_discussion' && (
-                      <p className="text-xs font-semibold text-blue-600 mb-1">Professor</p>
-                    )}
-                    {!ctx.label && i > 0 && currentQuestion.type === 'write_academic_discussion' && (
-                      <p className="text-xs font-semibold text-gray-500 mb-1">Student {i}</p>
-                    )}
-                    {!ctx.label && currentQuestion.type === 'write_email' && (
-                      <p className="text-xs font-semibold text-blue-600 mb-1">{i === 0 ? 'Email Template' : 'Context'}</p>
-                    )}
-                    <p className="whitespace-pre-line">{ctx.text}</p>
-                  </div>
-                ))}
+                {currentQuestion.contexts.map((ctx: any, i: number) => {
+                  // Determine role styling
+                  const label = ctx.label || (
+                    currentQuestion.type === 'write_academic_discussion'
+                      ? (i === 0 ? 'Professor' : `Student ${i}`)
+                      : currentQuestion.type === 'write_email'
+                      ? (i === 0 ? 'Scenario' : 'Context')
+                      : `Reading Passage`
+                  );
+                  const isProf = label.toLowerCase().includes('professor') || label.toLowerCase().includes('dr.') || label.toLowerCase().includes('dr ');
+                  const isStudent = label.toLowerCase().includes('student') || (!isProf && i > 0 && currentQuestion.type === 'write_academic_discussion');
+                  const isReading = label.toLowerCase().includes('reading') || label.toLowerCase().includes('passage');
+                  const isEmail = currentQuestion.type === 'write_email' && i === 0;
+
+                  // Avatar emoji
+                  const avatar = isProf ? '👨‍🏫' : isEmail ? '📧' : isReading ? '📖' : isStudent && i === 1 ? '🧑' : isStudent && i === 2 ? '👩' : '💬';
+
+                  // Card colors
+                  const cardStyle = isProf
+                    ? 'bg-gradient-to-br from-blue-50 to-indigo-50 border-blue-200'
+                    : isReading
+                    ? 'bg-gradient-to-br from-amber-50 to-yellow-50 border-amber-200'
+                    : isEmail
+                    ? 'bg-gradient-to-br from-green-50 to-emerald-50 border-green-200'
+                    : i === 1
+                    ? 'bg-gradient-to-br from-violet-50 to-purple-50 border-violet-200'
+                    : 'bg-gradient-to-br from-pink-50 to-rose-50 border-pink-200';
+
+                  const labelColor = isProf ? 'text-blue-700' : isReading ? 'text-amber-700' : isEmail ? 'text-green-700' : i === 1 ? 'text-violet-700' : 'text-pink-700';
+
+                  return (
+                    <div key={i} className={`rounded-xl p-4 text-sm leading-relaxed border ${cardStyle}`}>
+                      {/* Role header with avatar */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-lg">{avatar}</span>
+                        <span className={`font-bold text-sm ${labelColor}`}>{label}</span>
+                        {isProf && <span className="text-xs bg-blue-200 text-blue-800 px-1.5 py-0.5 rounded-full font-medium">Instructor</span>}
+                      </div>
+                      {/* Content with quotation styling for students */}
+                      <div className={`text-gray-700 ${isStudent ? 'border-l-3 border-l-gray-300 pl-3 italic' : ''}`}
+                        style={isStudent ? { borderLeftWidth: '3px' } : {}}>
+                        <p className="whitespace-pre-line">{ctx.text}</p>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
+            {/* Instruction prompt */}
+            {currentQuestion.prompt && currentQuestion.prompt.length > 5 && (
+              <div className="bg-gradient-to-r from-tg-secondary to-tg-bg rounded-xl p-4 mb-3 border border-tg-hint/20">
+                <p className="text-xs font-bold text-tg-button mb-1.5">📋 Your Task:</p>
+                <p className="text-sm text-gray-700 leading-relaxed">{currentQuestion.prompt}</p>
+              </div>
+            )}
+
+            {/* Word count requirement hint */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 mb-3 flex items-center gap-2">
+              <span className="text-yellow-600 text-sm">💡</span>
+              <span className="text-xs text-yellow-700">
+                {currentQuestion.type === 'write_email'
+                  ? 'Write a complete email response. Use formal language and address all points.'
+                  : currentQuestion.type === 'write_academic_discussion'
+                  ? 'Write at least 100 words. Express your opinion and support it with reasons.'
+                  : 'Complete the text with appropriate words or phrases.'}
+              </span>
+            </div>
+
+            {/* Writing area */}
+            <div className="relative">
+              <textarea value={writingText} onChange={(e) => setWritingText(e.target.value)}
+                placeholder={
+                  currentQuestion.type === 'write_email'
+                    ? "Dear Professor...\n\nI am writing to..."
+                    : currentQuestion.type === 'write_academic_discussion'
+                    ? "I believe that... The main reason is..."
+                    : "Type your answer here..."
+                }
+                className="w-full h-52 p-4 rounded-xl border-2 border-tg-secondary bg-white resize-none focus:outline-none focus:border-tg-button transition-colors text-sm leading-relaxed" />
+              {/* Word counter bar */}
+              <div className="flex items-center justify-between mt-2 px-1">
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                    writingText.split(/\s+/).filter(Boolean).length >= 100
+                      ? 'bg-green-100 text-green-700'
+                      : writingText.split(/\s+/).filter(Boolean).length >= 50
+                      ? 'bg-yellow-100 text-yellow-700'
+                      : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {writingText.split(/\s+/).filter(Boolean).length} words
+                  </span>
+                  {writingText.split(/\s+/).filter(Boolean).length >= 100 && (
+                    <span className="text-xs text-green-600">✓ Minimum reached</span>
+                  )}
+                </div>
+                <span className="text-xs text-tg-hint">
+                  {currentQuestion.type === 'write_email' ? 'Target: 150-200 words' :
+                   currentQuestion.type === 'write_academic_discussion' ? 'Min: 100 words' : ''}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Fill in the blank — textarea */}
+        {currentQuestion.type === 'fill_blank' && (
+          <div className="mb-4">
             <textarea value={writingText} onChange={(e) => setWritingText(e.target.value)}
-              placeholder="Tulis jawaban kamu di sini..."
-              className="w-full h-48 p-3 rounded-lg border border-tg-secondary bg-tg-bg resize-none focus:outline-none focus:border-tg-button" />
-            <div className="flex justify-between text-sm text-tg-hint mt-1">
-              <span>{writingText.split(/\s+/).filter(Boolean).length} kata</span>
-              {currentQuestion.time_limit && (
-                <span>Maks {Math.floor(currentQuestion.time_limit / 60)} menit</span>
-              )}
+              placeholder="Type your answer here..."
+              className="w-full h-32 p-3 rounded-lg border border-tg-secondary bg-tg-bg resize-none focus:outline-none focus:border-tg-button text-sm" />
+            <div className="flex justify-between text-xs text-tg-hint mt-1">
+              <span>{writingText.split(/\s+/).filter(Boolean).length} words</span>
             </div>
           </div>
         )}

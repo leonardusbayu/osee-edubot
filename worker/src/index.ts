@@ -17,6 +17,7 @@ import { channelAnalyticsRoutes } from './routes/channel-analytics';
 import { premiumRoutes } from './routes/premium';
 import { handbookRoutes } from './routes/handbook';
 import { weaknessRoutes } from './routes/weakness';
+import { adminApiRoutes } from './routes/admin-api';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -28,10 +29,12 @@ app.use('/api/*', cors({
       'http://localhost:5173',
       'http://localhost:3000',
     ];
-    return allowed.includes(origin) ? origin : '';
+    // Allow listed origins, or any origin if using API key auth (external apps)
+    if (allowed.includes(origin)) return origin;
+    return origin || '*'; // Allow external API clients
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Telegram-User-Id', 'x-admin-secret'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Telegram-User-Id', 'x-admin-secret', 'X-API-Key'],
   credentials: true,
 }));
 
@@ -66,6 +69,7 @@ app.route('/api/channel-analytics', channelAnalyticsRoutes);
 app.route('/api/weakness', weaknessRoutes);
 app.route('/api/premium', premiumRoutes);
 app.route('/api/handbook', handbookRoutes);
+app.route('/api/v1/admin', adminApiRoutes);
 
 // Serve R2 audio files
 app.get('/api/audio/:path{.+}', async (c) => {
