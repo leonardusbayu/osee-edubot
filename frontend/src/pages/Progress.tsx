@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { authedFetch } from '../api/authedFetch';
 
 interface ProgressData {
+  target_test: string;
   total_tests: number;
   total_questions_practiced: number;
   correct_answers: number;
@@ -36,6 +37,7 @@ interface TestScore {
   total_score: number;
   band_score: number | null;
   section_scores: Record<string, number>;
+  test_type: string | null;
   date: string;
 }
 
@@ -116,7 +118,7 @@ export default function Progress() {
   return (
     <div className="p-4 max-w-lg mx-auto pb-8">
       <h1 className="text-2xl font-bold mb-1">Progress Kamu</h1>
-      <p className="text-tg-hint text-sm mb-5">TOEFL iBT 2026</p>
+      <p className="text-tg-hint text-sm mb-5">{data?.target_test?.replace(/_/g, ' ') || 'TOEFL iBT'} {new Date().getFullYear()}</p>
 
       {/* Quota bar for non-premium users */}
       {quota && !quota.is_premium && (
@@ -201,16 +203,29 @@ export default function Progress() {
           </div>
 
           {/* Best Score */}
-          {data.best_score !== null && (
-            <div className="bg-gradient-to-r from-tg-button/20 to-tg-button/5 rounded-xl p-4 mb-6 text-center">
-              <p className="text-xs text-tg-hint mb-1">Skor Terbaik</p>
-              <p className="text-4xl font-bold text-tg-button">{data.best_score}</p>
-              <p className="text-xs text-tg-hint mt-1">Band Score (skala 1-6)</p>
-              {data.average_score !== null && (
-                <p className="text-sm text-tg-hint mt-2">Rata-rata: <b>{data.average_score}</b></p>
-              )}
-            </div>
-          )}
+          {data.best_score !== null && data.best_score > 0 && (() => {
+            const tt = data.target_test || 'TOEFL_IBT';
+            const scoreLabel = tt === 'TOEFL_ITP' ? `Skor TOEFL ITP (310-677)`
+              : tt === 'IELTS' ? `Band Score (skala 1-9)`
+              : tt === 'TOEIC' ? `Skor TOEIC (10-990)`
+              : `Skor TOEFL iBT (0-120)`;
+            // For ITP/TOEIC show as integer, for band scores show decimal
+            const isRawScore = tt === 'TOEFL_ITP' || tt === 'TOEIC';
+            const displayScore = isRawScore ? Math.round(data.best_score) : data.best_score;
+            const displayAvg = data.average_score !== null
+              ? (isRawScore ? Math.round(data.average_score) : data.average_score)
+              : null;
+            return (
+              <div className="bg-gradient-to-r from-tg-button/20 to-tg-button/5 rounded-xl p-4 mb-6 text-center">
+                <p className="text-xs text-tg-hint mb-1">Skor Terbaik</p>
+                <p className="text-4xl font-bold text-tg-button">{displayScore}</p>
+                <p className="text-xs text-tg-hint mt-1">{scoreLabel}</p>
+                {displayAvg !== null && (
+                  <p className="text-sm text-tg-hint mt-2">Rata-rata: <b>{displayAvg}</b></p>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Section Breakdown */}
           <div className="mb-6">
@@ -279,81 +294,109 @@ export default function Progress() {
             <div className="mb-6">
               <h2 className="font-semibold mb-3">Riwayat Skor Tes</h2>
               <div className="space-y-2">
-                {data.test_results.map((result, i) => (
-                  <div key={i} className="bg-tg-secondary rounded-xl p-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <div>
-                        <p className="font-medium">Band {result.band_score || result.total_score}</p>
-                        <p className="text-xs text-tg-hint">
-                          {result.date ? new Date(result.date).toLocaleDateString('id-ID', {
-                            day: 'numeric', month: 'short', year: 'numeric'
-                          }) : ''}
-                        </p>
+                {data.test_results.map((result, i) => {
+                  const score = result.band_score || result.total_score;
+                  const tt = result.test_type || data.target_test || 'TOEFL_IBT';
+                  const isRawScore = tt === 'TOEFL_ITP' || tt === 'TOEIC';
+                  const displayScore = isRawScore ? Math.round(score) : score;
+                  const testLabel = tt.replace(/_/g, ' ');
+                  // Color thresholds based on test type
+                  const scoreColor = isRawScore
+                    ? (score >= 500 ? 'text-green-500' : score >= 400 ? 'text-yellow-500' : 'text-red-500')
+                    : tt === 'IELTS'
+                    ? (score >= 6 ? 'text-green-500' : score >= 4.5 ? 'text-yellow-500' : 'text-red-500')
+                    : (score >= 4 ? 'text-green-500' : score >= 3 ? 'text-yellow-500' : 'text-red-500');
+                  return (
+                    <div key={i} className="bg-tg-secondary rounded-xl p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <p className="font-medium">{testLabel}: {displayScore}</p>
+                          <p className="text-xs text-tg-hint">
+                            {result.date ? new Date(result.date).toLocaleDateString('id-ID', {
+                              day: 'numeric', month: 'short', year: 'numeric'
+                            }) : ''}
+                          </p>
+                        </div>
+                        <div className={`text-2xl font-bold ${scoreColor}`}>
+                          {displayScore}
+                        </div>
                       </div>
-                      <div className={`text-2xl font-bold ${
-                        (result.band_score || result.total_score) >= 4 ? 'text-green-500' :
-                        (result.band_score || result.total_score) >= 3 ? 'text-yellow-500' : 'text-red-500'
-                      }`}>
-                        {result.band_score || result.total_score}
+                      <div className="flex gap-1 flex-wrap">
+                        {Object.entries(result.section_scores || {}).map(([section, sectionScore]) => {
+                          const info = SECTION_LABELS[section];
+                          const sDisplay = isRawScore ? Math.round(sectionScore) : sectionScore;
+                          return (
+                            <span key={section} className="text-xs bg-tg-bg px-2 py-1 rounded">
+                              {info?.icon || ''} {info?.name || section} {sDisplay}
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
-                    <div className="flex gap-1 flex-wrap">
-                      {Object.entries(result.section_scores || {}).map(([section, score]) => {
-                        const info = SECTION_LABELS[section];
-                        return (
-                          <span key={section} className="text-xs bg-tg-bg px-2 py-1 rounded">
-                            {info?.icon || ''} {score}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
 
           {/* Score History Chart */}
-          {data.test_results.length >= 2 && (
-            <div className="mb-6">
-              <h2 className="font-semibold mb-3">Grafik Skor</h2>
-              <div className="bg-tg-secondary rounded-xl p-4">
-                <svg viewBox="0 0 300 120" className="w-full h-32">
-                  {/* Grid lines */}
-                  {[1,2,3,4,5,6].map(band => (
-                    <g key={band}>
-                      <line x1="30" y1={100 - (band/6)*90} x2="290" y2={100 - (band/6)*90} stroke="#e5e7eb" strokeWidth="0.5" />
-                      <text x="5" y={104 - (band/6)*90} fontSize="8" fill="#9ca3af">{band}</text>
-                    </g>
-                  ))}
-                  {/* Target line */}
-                  <line x1="30" y1={100 - (4/6)*90} x2="290" y2={100 - (4/6)*90} stroke="#ef4444" strokeWidth="1" strokeDasharray="4" />
-                  <text x="250" y={97 - (4/6)*90} fontSize="7" fill="#ef4444">Target: 4</text>
-                  {/* Score line */}
-                  <polyline
-                    fill="none" stroke="#3b82f6" strokeWidth="2"
-                    points={data.test_results.slice(0, 10).reverse().map((r, i, arr) => {
-                      const x = 30 + (i / Math.max(arr.length - 1, 1)) * 260;
-                      const y = 100 - ((r.band_score || r.total_score) / 6) * 90;
-                      return `${x},${y}`;
-                    }).join(' ')}
-                  />
-                  {/* Score dots */}
-                  {data.test_results.slice(0, 10).reverse().map((r, i, arr) => {
-                    const x = 30 + (i / Math.max(arr.length - 1, 1)) * 260;
-                    const y = 100 - ((r.band_score || r.total_score) / 6) * 90;
-                    const score = r.band_score || r.total_score;
-                    return (
-                      <g key={i}>
-                        <circle cx={x} cy={y} r="4" fill={score >= 4 ? '#22c55e' : score >= 3 ? '#f59e0b' : '#ef4444'} />
-                        <text x={x} y={y - 7} fontSize="7" textAnchor="middle" fill="#374151">{score}</text>
+          {data.test_results.length >= 2 && (() => {
+            const tt = data.target_test || 'TOEFL_IBT';
+            const isRawScore = tt === 'TOEFL_ITP' || tt === 'TOEIC';
+            // Dynamic scale based on test type
+            const maxScale = tt === 'TOEFL_ITP' ? 677 : tt === 'TOEIC' ? 990 : tt === 'IELTS' ? 9 : 6;
+            const minScale = tt === 'TOEFL_ITP' ? 310 : tt === 'TOEIC' ? 10 : 0;
+            const targetScore = tt === 'TOEFL_ITP' ? 500 : tt === 'TOEIC' ? 600 : tt === 'IELTS' ? 6.5 : 4;
+            const gridSteps = isRawScore
+              ? [minScale, Math.round(minScale + (maxScale-minScale)*0.25), Math.round(minScale + (maxScale-minScale)*0.5), Math.round(minScale + (maxScale-minScale)*0.75), maxScale]
+              : Array.from({length: maxScale}, (_, i) => i + 1);
+            const scaleRange = maxScale - minScale;
+            const goodThreshold = tt === 'TOEFL_ITP' ? 500 : tt === 'TOEIC' ? 600 : tt === 'IELTS' ? 6 : 4;
+            const midThreshold = tt === 'TOEFL_ITP' ? 400 : tt === 'TOEIC' ? 450 : tt === 'IELTS' ? 4.5 : 3;
+
+            return (
+              <div className="mb-6">
+                <h2 className="font-semibold mb-3">Grafik Skor</h2>
+                <div className="bg-tg-secondary rounded-xl p-4">
+                  <svg viewBox="0 0 300 120" className="w-full h-32">
+                    {/* Grid lines */}
+                    {gridSteps.map(val => (
+                      <g key={val}>
+                        <line x1="40" y1={100 - ((val - minScale) / scaleRange) * 90} x2="290" y2={100 - ((val - minScale) / scaleRange) * 90} stroke="#e5e7eb" strokeWidth="0.5" />
+                        <text x="2" y={104 - ((val - minScale) / scaleRange) * 90} fontSize="7" fill="#9ca3af">{val}</text>
                       </g>
-                    );
-                  })}
-                </svg>
+                    ))}
+                    {/* Target line */}
+                    <line x1="40" y1={100 - ((targetScore - minScale) / scaleRange) * 90} x2="290" y2={100 - ((targetScore - minScale) / scaleRange) * 90} stroke="#ef4444" strokeWidth="1" strokeDasharray="4" />
+                    <text x="245" y={97 - ((targetScore - minScale) / scaleRange) * 90} fontSize="7" fill="#ef4444">Target: {targetScore}</text>
+                    {/* Score line */}
+                    <polyline
+                      fill="none" stroke="#3b82f6" strokeWidth="2"
+                      points={data.test_results.slice(0, 10).reverse().map((r, i, arr) => {
+                        const x = 40 + (i / Math.max(arr.length - 1, 1)) * 250;
+                        const score = r.band_score || r.total_score;
+                        const y = 100 - ((Math.max(score, minScale) - minScale) / scaleRange) * 90;
+                        return `${x},${y}`;
+                      }).join(' ')}
+                    />
+                    {/* Score dots */}
+                    {data.test_results.slice(0, 10).reverse().map((r, i, arr) => {
+                      const x = 40 + (i / Math.max(arr.length - 1, 1)) * 250;
+                      const score = r.band_score || r.total_score;
+                      const y = 100 - ((Math.max(score, minScale) - minScale) / scaleRange) * 90;
+                      const displayScore = isRawScore ? Math.round(score) : score;
+                      return (
+                        <g key={i}>
+                          <circle cx={x} cy={y} r="4" fill={score >= goodThreshold ? '#22c55e' : score >= midThreshold ? '#f59e0b' : '#ef4444'} />
+                          <text x={x} y={y - 7} fontSize="7" textAnchor="middle" fill="#374151">{displayScore}</text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Time Per Question */}
           {data.time_per_question?.length > 0 && (

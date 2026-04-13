@@ -72,7 +72,7 @@ speakingRoutes.post('/evaluate', async (c) => {
       return c.json(result);
     }
   } catch (e: any) {
-    return c.json({ error: e.message || 'Evaluation failed' }, 500);
+    return c.json({ error: 'Speaking evaluation failed' }, 500);
   }
 });
 
@@ -144,7 +144,7 @@ function scoreListenAndRepeat(transcription: string, original: string, maxBand: 
 }
 
 // Interview: AI-powered scoring
-async function scoreInterview(apiKey: string, transcription: string, prompt: string, testType: string = 'TOEFL_IBT', maxBand: number = 6) {
+export async function scoreInterview(apiKey: string, transcription: string, prompt: string, testType: string = 'TOEFL_IBT', maxBand: number = 6) {
   const bandScale = testType === 'IELTS' ? '1-9' : '1-6';
   const criteria = testType === 'IELTS'
     ? 'Fluency & Coherence, Lexical Resource, Grammatical Range & Accuracy, Pronunciation'

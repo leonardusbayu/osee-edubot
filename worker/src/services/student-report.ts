@@ -113,9 +113,20 @@ export interface StudentReport {
     total_questions_answered: number;
     total_correct: number;
     overall_accuracy: number;
-    daily_trend: { date: string; questions: number; correct: number; accuracy: number }[];
+    daily_trend: { date: string; questions: number; correct: number; accuracy: number; messages: number }[];
     recent_tests: { id: number; section: string; score: number; total: number; date: string }[];
     study_streak: number;
+    total_messages: number;
+  };
+
+  // Conversation analysis
+  conversation: {
+    total_messages: number;
+    user_messages: number;
+    topics_discussed: { topic: string; count: number }[];
+    first_message_at: string | null;
+    last_message_at: string | null;
+    avg_messages_per_active_day: number;
   };
 
   // Lesson plan history
@@ -159,6 +170,7 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
     profile, masteries, weakTopics, mentalModel, misconceptions, gaps,
     sectionStats, recentAttempts, dailyLogs, srStats, srItems,
     lessonPlans, activePlan, diagnosticResult, learningPrefs,
+    convStats, convTopics,
   ] = await Promise.all([
     getStudentProfile(env, userId),
     getAllTopicMasteries(env, userId),
@@ -166,35 +178,66 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
     getStudentMentalModel(env, userId),
     getMisconceptions(env, userId),
     getKnowledgeGaps(env, userId),
-    // Section-level performance
+    // Section-level performance — include speaking/writing (score-based)
     env.DB.prepare(
       `SELECT aa.section,
               COUNT(*) as total,
-              SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct,
-              AVG(aa.time_spent_sec) as avg_time,
+              SUM(CASE
+                WHEN aa.is_correct = 1 THEN 1
+                WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+                     AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+                ELSE 0
+              END) as correct,
+              AVG(aa.time_spent_seconds) as avg_time,
               AVG(tc.difficulty) as avg_difficulty
        FROM attempt_answers aa
        JOIN test_attempts ta ON aa.attempt_id = ta.id
-       LEFT JOIN test_contents tc ON aa.question_id = tc.id
-       WHERE ta.user_id = ? AND aa.is_correct IS NOT NULL
+       LEFT JOIN test_contents tc ON aa.content_id = tc.id
+       WHERE ta.user_id = ?
        GROUP BY aa.section`
     ).bind(userId).all(),
-    // Recent completed tests
+    // Recent completed tests (test_attempts has no score/section columns — compute from answers)
     env.DB.prepare(
-      `SELECT ta.id, ta.section, ta.score, ta.total_questions, ta.created_at
+      `SELECT ta.id, ta.current_section as section, ta.started_at as created_at,
+              ta.current_question_index as total_questions,
+              (SELECT SUM(CASE WHEN aa.is_correct = 1 THEN 1
+                WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+                     AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+                ELSE 0 END)
+               FROM attempt_answers aa WHERE aa.attempt_id = ta.id) as score
        FROM test_attempts ta WHERE ta.user_id = ? AND ta.status = 'completed'
-       ORDER BY ta.created_at DESC LIMIT 20`
+       ORDER BY ta.started_at DESC LIMIT 20`
     ).bind(userId).all(),
-    // Daily study logs (last 30 days)
+    // Daily activity logs (last 30 days) — combines attempt_answers + conversation_messages
     env.DB.prepare(
-      `SELECT DATE(aa.submitted_at) as date,
-              COUNT(*) as questions,
-              SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct
-       FROM attempt_answers aa
-       JOIN test_attempts ta ON aa.attempt_id = ta.id
-       WHERE ta.user_id = ? AND aa.submitted_at >= datetime('now', '-30 days') AND aa.is_correct IS NOT NULL
-       GROUP BY DATE(aa.submitted_at) ORDER BY date ASC`
-    ).bind(userId).all(),
+      `SELECT date,
+              SUM(questions) as questions,
+              SUM(correct) as correct,
+              SUM(messages) as messages
+       FROM (
+         SELECT DATE(aa.submitted_at) as date,
+                COUNT(*) as questions,
+                SUM(CASE
+                  WHEN aa.is_correct = 1 THEN 1
+                  WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+                       AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+                  ELSE 0
+                END) as correct,
+                0 as messages
+         FROM attempt_answers aa
+         JOIN test_attempts ta ON aa.attempt_id = ta.id
+         WHERE ta.user_id = ? AND aa.submitted_at >= datetime('now', '-30 days')
+         GROUP BY DATE(aa.submitted_at)
+         UNION ALL
+         SELECT DATE(created_at) as date,
+                0 as questions,
+                0 as correct,
+                COUNT(*) as messages
+         FROM conversation_messages
+         WHERE user_id = ? AND created_at >= datetime('now', '-30 days')
+         GROUP BY DATE(created_at)
+       ) GROUP BY date ORDER BY date ASC`
+    ).bind(userId, userId).all(),
     // SRS overview
     env.DB.prepare(
       `SELECT COUNT(*) as total,
@@ -228,6 +271,21 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
               daily_study_target_min, personality_notes
        FROM student_profiles WHERE user_id = ?`
     ).bind(userId).first(),
+    // Conversation stats
+    env.DB.prepare(
+      `SELECT COUNT(*) as total,
+              SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) as user_msgs,
+              MIN(created_at) as first_msg,
+              MAX(created_at) as last_msg
+       FROM conversation_messages WHERE user_id = ?`
+    ).bind(userId).first(),
+    // Conversation topics
+    env.DB.prepare(
+      `SELECT COALESCE(topic, 'other') as topic, COUNT(*) as count
+       FROM conversation_messages
+       WHERE user_id = ? AND role = 'user'
+       GROUP BY topic ORDER BY count DESC LIMIT 10`
+    ).bind(userId).all(),
   ]);
 
   // ── Compute section performance with trends ──
@@ -285,7 +343,15 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
   // ── Activity stats ──
   const totalQ = dailyData.reduce((s: number, d: any) => s + d.questions, 0);
   const totalCorrect = dailyData.reduce((s: number, d: any) => s + d.correct, 0);
+  const totalMsgs = dailyData.reduce((s: number, d: any) => s + (d.messages || 0), 0);
   const daysActive = dailyData.length;
+
+  // ── Conversation stats ──
+  const convStatsData = convStats as any;
+  const convTopicsData = (convTopics.results || []) as any[];
+
+  // ── Last active — use conversation_messages as primary, fallback to profile ──
+  const lastActive = convStatsData?.last_msg || profile.last_interaction_at || null;
 
   // Study streak (consecutive days ending today/yesterday)
   let streak = 0;
@@ -387,7 +453,7 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
       })),
     },
     activity: {
-      last_active: profile.last_interaction_at,
+      last_active: lastActive,
       days_active_last_30: daysActive,
       total_questions_answered: totalQ,
       total_correct: totalCorrect,
@@ -397,6 +463,7 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
         questions: d.questions,
         correct: d.correct,
         accuracy: d.questions > 0 ? Math.round((d.correct / d.questions) * 100) : 0,
+        messages: d.messages || 0,
       })),
       recent_tests: (recentAttempts.results || []).map((a: any) => ({
         id: a.id,
@@ -406,6 +473,15 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
         date: a.created_at,
       })),
       study_streak: streak,
+      total_messages: totalMsgs,
+    },
+    conversation: {
+      total_messages: convStatsData?.total || 0,
+      user_messages: convStatsData?.user_msgs || 0,
+      topics_discussed: convTopicsData.map((t: any) => ({ topic: t.topic, count: t.count })),
+      first_message_at: convStatsData?.first_msg || null,
+      last_message_at: convStatsData?.last_msg || null,
+      avg_messages_per_active_day: daysActive > 0 ? Math.round((convStatsData?.total || 0) / daysActive) : 0,
     },
     lessons: {
       total_plans: allPlans.length,
@@ -550,10 +626,23 @@ export async function buildStudentReportForAI(env: Env, userId: number): Promise
   lines.push(`ACTIVITY (last 30 days):`);
   lines.push(`  Days active: ${report.activity.days_active_last_30}/30 | Streak: ${report.activity.study_streak} days`);
   lines.push(`  Questions: ${report.activity.total_questions_answered} | Accuracy: ${report.activity.overall_accuracy}%`);
+  lines.push(`  Bot messages: ${report.activity.total_messages} | Last active: ${report.activity.last_active || 'Unknown'}`);
   if (report.activity.days_active_last_30 < 5) {
     lines.push(`  ⚠️ LOW ACTIVITY — keep lessons short and engaging to rebuild habit`);
   }
   lines.push('');
+
+  // ── Conversation Analysis ──
+  if (report.conversation.total_messages > 0) {
+    lines.push(`CONVERSATION ANALYSIS:`);
+    lines.push(`  Total messages: ${report.conversation.total_messages} (${report.conversation.user_messages} from student)`);
+    lines.push(`  First contact: ${report.conversation.first_message_at || 'Unknown'} | Last: ${report.conversation.last_message_at || 'Unknown'}`);
+    lines.push(`  Avg messages/active day: ${report.conversation.avg_messages_per_active_day}`);
+    if (report.conversation.topics_discussed.length > 0) {
+      lines.push(`  Topics discussed: ${report.conversation.topics_discussed.map(t => `${t.topic}(${t.count})`).join(', ')}`);
+    }
+    lines.push('');
+  }
 
   // ── Lesson History ──
   if (report.lessons.total_plans > 0) {

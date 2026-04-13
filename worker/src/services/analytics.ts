@@ -146,13 +146,16 @@ export async function backfillDailyLogs(env: Env, userId: number, days = 30) {
   const cutoff = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
 
   try {
-    // Get daily aggregated data from attempt_answers
+    // Get daily aggregated data from attempt_answers (score-aware)
     const dailyData = await env.DB.prepare(`
       SELECT
         ta.user_id,
         date(aa.submitted_at) as day,
         COUNT(*) as questions,
-        SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct,
+        SUM(CASE
+          WHEN aa.is_correct = 1 THEN 1
+          WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+          ELSE 0 END) as correct,
         SUM(aa.time_spent_seconds) as time_spent,
         COUNT(DISTINCT aa.attempt_id) as test_sessions
       FROM attempt_answers aa
@@ -161,11 +164,11 @@ export async function backfillDailyLogs(env: Env, userId: number, days = 30) {
       GROUP BY ta.user_id, day
     `).bind(userId, cutoff).all() as any;
 
-    // Get message counts per day
+    // Get message counts per day (use conversation_messages, not sparse user_messages)
     const messageData = await env.DB.prepare(`
       SELECT date(created_at) as day, COUNT(*) as messages
-      FROM user_messages
-      WHERE user_id = ? AND date(created_at) >= ?
+      FROM conversation_messages
+      WHERE user_id = ? AND role = 'user' AND date(created_at) >= ?
       GROUP BY day
     `).bind(userId, cutoff).all() as any;
 
@@ -212,10 +215,13 @@ export async function getStudentAnalytics(env: Env, userId: number) {
   // Backfill historical data for this user
   await backfillDailyLogs(env, userId, 30);
 
-  // Basic stats
+  // Basic stats (speaking/writing use score in answer_data, not is_correct)
   const [answers, testsResult, user, streakResult] = await Promise.all([
     env.DB.prepare(`
-      SELECT COUNT(*) as total, SUM(is_correct) as correct
+      SELECT COUNT(*) as total, SUM(CASE
+        WHEN is_correct = 1 THEN 1
+        WHEN is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+        ELSE 0 END) as correct
       FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
       WHERE ta.user_id = ?
     `).bind(userId).first() as any,
@@ -243,35 +249,53 @@ export async function getStudentAnalytics(env: Env, userId: number) {
   const sessions: any[] = [];
   const totalSessionMinutes = Math.round((sessionData?.total_time_seconds || 0) / 60);
 
-  // Message count
+  // Message count (use conversation_messages, not sparse user_messages)
   const msgResult = await env.DB.prepare(
-    'SELECT COUNT(*) as count FROM user_messages WHERE user_id = ?'
+    'SELECT COUNT(*) as count FROM conversation_messages WHERE user_id = ? AND role = \'user\''
   ).bind(userId).first() as any;
 
-  // Section accuracy (last 30 days)
+  // Section accuracy (last 30 days, score-aware for speaking/writing)
   const sectionStats = await env.DB.prepare(`
     SELECT aa.section,
            COUNT(*) as total,
-           SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct
+           SUM(CASE
+             WHEN aa.is_correct = 1 THEN 1
+             WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+             ELSE 0 END) as correct
     FROM attempt_answers aa
     JOIN test_attempts ta ON aa.attempt_id = ta.id
     WHERE ta.user_id = ? AND aa.submitted_at >= ?
     GROUP BY aa.section
   `).bind(userId, thirtyDaysAgo).all() as any;
 
-  // Daily logs for chart (last 30 days, from attempt_answers)
+  // Daily logs for chart (last 30 days, from attempt_answers + conversation_messages)
   const dailyLogsData = await env.DB.prepare(`
-    SELECT 
-      date(aa.submitted_at) as log_date,
-      COUNT(*) as questions_answered,
-      SUM(aa.time_spent_seconds) as time_spent_seconds,
-      ROUND(CAST(SUM(aa.is_correct) AS REAL) / COUNT(*) * 100) as accuracy_percent
-    FROM attempt_answers aa
-    JOIN test_attempts ta ON aa.attempt_id = ta.id
-    WHERE ta.user_id = ? AND date(aa.submitted_at) >= ?
-    GROUP BY date(aa.submitted_at)
-    ORDER BY log_date ASC
-  `).bind(userId, thirtyDaysAgo).all() as any;
+    SELECT log_date, SUM(questions_answered) as questions_answered,
+           SUM(time_spent_seconds) as time_spent_seconds,
+           CASE WHEN SUM(questions_answered) > 0
+             THEN ROUND(CAST(SUM(correct) AS REAL) / SUM(questions_answered) * 100)
+             ELSE 0 END as accuracy_percent,
+           SUM(messages) as messages
+    FROM (
+      SELECT date(aa.submitted_at) as log_date,
+             COUNT(*) as questions_answered,
+             SUM(aa.time_spent_seconds) as time_spent_seconds,
+             SUM(CASE
+               WHEN aa.is_correct = 1 THEN 1
+               WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+               ELSE 0 END) as correct,
+             0 as messages
+      FROM attempt_answers aa
+      JOIN test_attempts ta ON aa.attempt_id = ta.id
+      WHERE ta.user_id = ? AND date(aa.submitted_at) >= ?
+      GROUP BY date(aa.submitted_at)
+      UNION ALL
+      SELECT date(created_at) as log_date, 0, 0, 0, COUNT(*) as messages
+      FROM conversation_messages
+      WHERE user_id = ? AND date(created_at) >= ?
+      GROUP BY date(created_at)
+    ) GROUP BY log_date ORDER BY log_date ASC
+  `).bind(userId, thirtyDaysAgo, userId, thirtyDaysAgo).all() as any;
 
   // Skills breakdown
   const skillsData = await env.DB.prepare(`
@@ -374,22 +398,25 @@ export async function getStudentAnalytics(env: Env, userId: number) {
     ? Math.round(totalSessionMinutes / (sessionData?.sessions_count || 0))
     : 0;
 
-  // Weekly frequency (days active per week, from attempt_answers)
+  // Weekly frequency (days active per week, from attempt_answers + conversation_messages)
   const activeDays = await env.DB.prepare(`
-    SELECT COUNT(DISTINCT date(aa.submitted_at)) as days
-    FROM attempt_answers aa
-    JOIN test_attempts ta ON aa.attempt_id = ta.id
-    WHERE ta.user_id = ? AND date(aa.submitted_at) >= ?
-  `).bind(userId, thirtyDaysAgo).first() as any;
+    SELECT COUNT(DISTINCT date) as days FROM (
+      SELECT date(aa.submitted_at) as date FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE ta.user_id = ? AND date(aa.submitted_at) >= ?
+      UNION SELECT date(created_at) FROM conversation_messages WHERE user_id = ? AND date(created_at) >= ?
+    )
+  `).bind(userId, thirtyDaysAgo, userId, thirtyDaysAgo).first() as any;
   const weeklyFrequency = Math.round(((activeDays?.days || 0) / 4) * 10) / 10;
 
-  // Percentile rank (compared to all students)
+  // Percentile rank (compared to all students, score-aware)
   const userAccuracy = totalAnswers > 0 ? Math.round((totalCorrect / totalAnswers) * 100) : 0;
   const percentileResult = await env.DB.prepare(`
     WITH user_acc AS (SELECT ? as user_id, ? as accuracy),
     all_acc AS (
       SELECT ta.user_id,
-             CAST(SUM(aa.is_correct) AS REAL) / NULLIF(COUNT(*), 0) * 100 as accuracy
+             CAST(SUM(CASE
+               WHEN aa.is_correct = 1 THEN 1
+               WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+               ELSE 0 END) AS REAL) / NULLIF(COUNT(*), 0) * 100 as accuracy
       FROM attempt_answers aa
       JOIN test_attempts ta ON aa.attempt_id = ta.id
       GROUP BY ta.user_id
@@ -451,10 +478,10 @@ export async function getStudentAnalytics(env: Env, userId: number) {
     // Daily chart data
     daily_logs: (dailyLogsData.results as any[]).map((d: any) => ({
       date: d.log_date,
-      questions: d.questions_answered,
+      questions: d.questions_answered || 0,
       time_minutes: Math.round((d.time_spent_seconds || 0) / 60),
       accuracy: d.accuracy_percent || 0,
-      messages: 0,
+      messages: d.messages || 0,
       sessions: 0,
       tests: 0,
     })),

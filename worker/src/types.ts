@@ -10,6 +10,13 @@ export interface Env {
   JWT_SECRET: string;
   WEBAPP_URL: string;
   ADMIN_API_KEY?: string;
+  ADMIN_SECRET?: string;
+  NOTION_API_KEY?: string;
+  NOTION_STUDENTS_DB?: string;
+  NOTION_ATTEMPTS_DB?: string;
+  NOTION_WEEKLY_DB?: string;
+  NOTION_DASHBOARD_PAGE?: string;
+  ENVIRONMENT?: string;
 }
 
 export interface User {

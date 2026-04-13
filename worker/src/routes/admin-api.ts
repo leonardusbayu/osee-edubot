@@ -19,11 +19,14 @@ async function requireAdmin(c: any, next: any) {
     return next();
   }
 
-  // Method 2: Legacy admin secret
+  // Method 2: Legacy admin secret (checks both ADMIN_API_KEY and ADMIN_SECRET)
   const adminSecret = c.req.header('x-admin-secret');
-  if (adminSecret && c.env.ADMIN_API_KEY && adminSecret === c.env.ADMIN_API_KEY) {
-    c.set('authMethod', 'admin_secret');
-    return next();
+  if (adminSecret) {
+    if ((c.env.ADMIN_API_KEY && adminSecret === c.env.ADMIN_API_KEY) ||
+        (c.env.ADMIN_SECRET && adminSecret === c.env.ADMIN_SECRET)) {
+      c.set('authMethod', 'admin_secret');
+      return next();
+    }
   }
 
   // Method 3: JWT auth (mini app)
@@ -89,16 +92,23 @@ adminApiRoutes.get('/students', async (c) => {
        sp.confidence_score, sp.learning_pace, sp.frustration_score,
        (SELECT COUNT(*) FROM attempt_answers aa
         JOIN test_attempts ta ON aa.attempt_id = ta.id
-        WHERE ta.user_id = u.id AND aa.is_correct IS NOT NULL) as questions_answered,
-       (SELECT ROUND(AVG(CASE WHEN aa2.is_correct = 1 THEN 100.0 ELSE 0 END), 1)
+        WHERE ta.user_id = u.id
+          AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))) as questions_answered,
+       (SELECT ROUND(AVG(CASE
+          WHEN aa2.is_correct = 1 THEN 100.0
+          WHEN aa2.is_correct IS NULL AND aa2.section IN ('speaking','writing')
+               AND json_extract(aa2.answer_data, '$.score') >= 5 THEN 100.0
+          ELSE 0 END), 1)
         FROM attempt_answers aa2
         JOIN test_attempts ta2 ON aa2.attempt_id = ta2.id
-        WHERE ta2.user_id = u.id AND aa2.is_correct IS NOT NULL) as accuracy,
+        WHERE ta2.user_id = u.id
+          AND NOT (aa2.is_correct IS NULL AND aa2.section NOT IN ('speaking','writing'))) as accuracy,
        (SELECT COUNT(*) FROM spaced_repetition sr
         WHERE sr.user_id = u.id AND sr.next_review_at <= datetime('now')) as due_reviews,
-       (SELECT MAX(aa3.submitted_at) FROM attempt_answers aa3
-        JOIN test_attempts ta3 ON aa3.attempt_id = ta3.id
-        WHERE ta3.user_id = u.id) as last_activity
+       (SELECT MAX(last_ts) FROM (
+          SELECT MAX(created_at) as last_ts FROM conversation_messages WHERE user_id = u.id
+          UNION ALL SELECT MAX(aa3.submitted_at) FROM attempt_answers aa3 JOIN test_attempts ta3 ON aa3.attempt_id = ta3.id WHERE ta3.user_id = u.id
+       )) as last_activity
      FROM users u
      LEFT JOIN student_profiles sp ON u.id = sp.user_id
      WHERE ${where}
@@ -135,14 +145,39 @@ adminApiRoutes.get('/students/:id', async (c) => {
        FROM student_mental_model WHERE user_id = ? ORDER BY last_assessed_at DESC`
     ).bind(userId).all(),
     c.env.DB.prepare(
-      `SELECT ta.id, ta.test_type, ta.section, ta.score, ta.total_questions, ta.status, ta.created_at
+      `SELECT ta.id, ta.test_type, ta.current_section as section, ta.status, ta.started_at as created_at,
+              ta.current_question_index as total_questions,
+              (SELECT SUM(CASE WHEN aa.is_correct = 1 THEN 1
+                WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+                     AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+                ELSE 0 END)
+               FROM attempt_answers aa WHERE aa.attempt_id = ta.id) as score
        FROM test_attempts ta WHERE ta.user_id = ? AND ta.status = 'completed'
-       ORDER BY ta.created_at DESC LIMIT 20`
+       ORDER BY ta.started_at DESC LIMIT 20`
     ).bind(userId).all(),
+    // Daily activity (from conversation_messages + attempt_answers, not empty daily_study_logs)
     c.env.DB.prepare(
-      `SELECT log_date, questions_answered, correct_answers, study_minutes, streak_count
-       FROM daily_study_logs WHERE user_id = ? ORDER BY log_date DESC LIMIT 30`
-    ).bind(userId).all(),
+      `SELECT date as log_date,
+              SUM(questions) as questions_answered,
+              SUM(correct) as correct_answers,
+              0 as study_minutes,
+              SUM(messages) as messages
+       FROM (
+         SELECT DATE(aa.submitted_at) as date, COUNT(*) as questions,
+                SUM(CASE WHEN aa.is_correct = 1 THEN 1
+                  WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+                       AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+                  ELSE 0 END) as correct,
+                0 as messages
+         FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
+         WHERE ta.user_id = ?
+         GROUP BY DATE(aa.submitted_at)
+         UNION ALL
+         SELECT DATE(created_at) as date, 0 as questions, 0 as correct, COUNT(*) as messages
+         FROM conversation_messages WHERE user_id = ?
+         GROUP BY DATE(created_at)
+       ) GROUP BY date ORDER BY date DESC LIMIT 30`
+    ).bind(userId, userId).all(),
     c.env.DB.prepare(
       `SELECT COUNT(*) as total,
               SUM(CASE WHEN next_review_at <= datetime('now') THEN 1 ELSE 0 END) as overdue,
@@ -158,14 +193,23 @@ adminApiRoutes.get('/students/:id', async (c) => {
 
   if (!user) return c.json({ error: 'Student not found' }, 404);
 
-  // Section breakdown
+  // Section breakdown — include speaking/writing (score-based) alongside MC (is_correct)
   const sectionBreakdown = await c.env.DB.prepare(
     `SELECT aa.section,
             COUNT(*) as total,
-            SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct
+            SUM(CASE
+              WHEN aa.is_correct = 1 THEN 1
+              WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+                   AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+              ELSE 0
+            END) as correct,
+            CASE WHEN aa.section IN ('speaking','writing')
+              THEN ROUND(AVG(json_extract(aa.answer_data, '$.score')), 1)
+              ELSE NULL
+            END as avg_score
      FROM attempt_answers aa
      JOIN test_attempts ta ON aa.attempt_id = ta.id
-     WHERE ta.user_id = ? AND aa.is_correct IS NOT NULL
+     WHERE ta.user_id = ?
      GROUP BY aa.section`
   ).bind(userId).all();
 
@@ -278,42 +322,52 @@ adminApiRoutes.get('/analytics/overview', async (c) => {
     c.env.DB.prepare("SELECT COUNT(*) as c FROM users").first(),
     c.env.DB.prepare(
       `SELECT COUNT(DISTINCT user_id) as c FROM (
-         SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= datetime('now', '-1 day')
-         UNION SELECT user_id FROM user_messages WHERE created_at >= datetime('now', '-1 day')
-         UNION SELECT user_id FROM tutor_interactions WHERE created_at >= datetime('now', '-1 day')
-         UNION SELECT user_id FROM daily_study_logs WHERE log_date >= date('now', '-1 day')
+         SELECT user_id FROM conversation_messages WHERE created_at >= datetime('now', '-1 day')
+         UNION SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= datetime('now', '-1 day')
+         UNION SELECT user_id FROM daily_question_logs WHERE question_date >= date('now', '-1 day')
        )`
     ).first(),
     c.env.DB.prepare(
       `SELECT COUNT(DISTINCT user_id) as c FROM (
-         SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= datetime('now', '-7 days')
-         UNION SELECT user_id FROM user_messages WHERE created_at >= datetime('now', '-7 days')
-         UNION SELECT user_id FROM tutor_interactions WHERE created_at >= datetime('now', '-7 days')
-         UNION SELECT user_id FROM daily_study_logs WHERE log_date >= date('now', '-7 days')
+         SELECT user_id FROM conversation_messages WHERE created_at >= datetime('now', '-7 days')
+         UNION SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= datetime('now', '-7 days')
+         UNION SELECT user_id FROM daily_question_logs WHERE question_date >= date('now', '-7 days')
        )`
     ).first(),
-    c.env.DB.prepare("SELECT COUNT(*) as c FROM attempt_answers WHERE is_correct IS NOT NULL").first(),
+    c.env.DB.prepare("SELECT COUNT(*) as c FROM attempt_answers WHERE NOT (is_correct IS NULL AND section NOT IN ('speaking','writing'))").first(),
     c.env.DB.prepare("SELECT COUNT(*) as c FROM test_contents WHERE status = 'published'").first(),
     c.env.DB.prepare("SELECT COUNT(*) as c FROM users WHERE is_premium = 1").first(),
     c.env.DB.prepare("SELECT COUNT(*) as c FROM test_attempts WHERE status = 'completed'").first(),
     c.env.DB.prepare(
-      `SELECT SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct,
+      `SELECT SUM(CASE
+         WHEN is_correct = 1 THEN 1
+         WHEN is_correct IS NULL AND section IN ('speaking','writing') AND json_extract(answer_data, '$.score') >= 5 THEN 1
+         ELSE 0 END) as correct,
               COUNT(*) as total
-       FROM attempt_answers WHERE submitted_at >= datetime('now', '-7 days') AND is_correct IS NOT NULL`
+       FROM attempt_answers WHERE submitted_at >= datetime('now', '-7 days')
+         AND NOT (is_correct IS NULL AND section NOT IN ('speaking','writing'))`
     ).first(),
     c.env.DB.prepare(
       `SELECT aa.section, COUNT(*) as total,
-              SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct
-       FROM attempt_answers aa WHERE aa.is_correct IS NOT NULL
+              SUM(CASE
+                WHEN aa.is_correct = 1 THEN 1
+                WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+                ELSE 0 END) as correct
+       FROM attempt_answers aa
+       WHERE NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
        GROUP BY aa.section`
     ).all(),
     c.env.DB.prepare(
       `SELECT u.id, u.name, u.username, COUNT(aa.id) as questions,
-              ROUND(AVG(CASE WHEN aa.is_correct = 1 THEN 100.0 ELSE 0 END), 1) as accuracy
+              ROUND(AVG(CASE
+                WHEN aa.is_correct = 1 THEN 100.0
+                WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+                ELSE 0 END), 1) as accuracy
        FROM users u
        JOIN test_attempts ta ON u.id = ta.user_id
        JOIN attempt_answers aa ON ta.id = aa.attempt_id
-       WHERE aa.is_correct IS NOT NULL AND aa.submitted_at >= datetime('now', '-7 days')
+       WHERE aa.submitted_at >= datetime('now', '-7 days')
+         AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
        GROUP BY u.id ORDER BY questions DESC LIMIT 10`
     ).all(),
   ]);
@@ -342,24 +396,29 @@ adminApiRoutes.get('/analytics/trends', async (c) => {
   const questionTrends = await c.env.DB.prepare(
     `SELECT DATE(aa.submitted_at) as date,
             COUNT(*) as questions_answered,
-            SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct,
-            ROUND(AVG(CASE WHEN aa.is_correct = 1 THEN 100.0 ELSE 0 END), 1) as accuracy
+            SUM(CASE
+              WHEN aa.is_correct = 1 THEN 1
+              WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+              ELSE 0 END) as correct,
+            ROUND(AVG(CASE
+              WHEN aa.is_correct = 1 THEN 100.0
+              WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+              ELSE 0 END), 1) as accuracy
      FROM attempt_answers aa
      JOIN test_attempts ta ON aa.attempt_id = ta.id
      WHERE aa.submitted_at >= datetime('now', '-' || ? || ' days')
-     AND aa.is_correct IS NOT NULL
+       AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
      GROUP BY DATE(aa.submitted_at)
      ORDER BY date ASC`
   ).bind(days).all();
 
-  // Active users trend (from all activity sources)
+  // Active users trend (conversation_messages is primary)
   const activeUserTrends = await c.env.DB.prepare(
     `SELECT date, COUNT(DISTINCT user_id) as active_users FROM (
-       SELECT DATE(aa.submitted_at) as date, ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= datetime('now', '-' || ? || ' days')
-       UNION ALL SELECT DATE(created_at) as date, user_id FROM user_messages WHERE created_at >= datetime('now', '-' || ? || ' days')
-       UNION ALL SELECT DATE(created_at) as date, user_id FROM tutor_interactions WHERE created_at >= datetime('now', '-' || ? || ' days')
+       SELECT DATE(created_at) as date, user_id FROM conversation_messages WHERE created_at >= datetime('now', '-' || ? || ' days')
+       UNION ALL SELECT DATE(aa.submitted_at) as date, ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= datetime('now', '-' || ? || ' days')
      ) GROUP BY date ORDER BY date ASC`
-  ).bind(days, days, days).all();
+  ).bind(days, days).all();
 
   // Merge question trends with active user counts
   const activeMap = new Map((activeUserTrends.results || []).map((r: any) => [r.date, r.active_users]));
@@ -639,6 +698,143 @@ adminApiRoutes.post('/content/bulk-insert', async (c) => {
   return c.json({ inserted: inserted.length, errors, ids: inserted });
 });
 
+// POST /content/:id/audio — Upload audio to R2 and update content media_url
+adminApiRoutes.post('/content/:id/audio', async (c) => {
+  const contentId = parseInt(c.req.param('id'));
+  const bucket = c.env.AUDIO_BUCKET;
+  if (!bucket) return c.json({ error: 'R2 audio bucket not configured' }, 501);
+
+  const formData = await c.req.formData();
+  const file = formData.get('audio') as File | null;
+  if (!file) return c.json({ error: 'No audio file provided' }, 400);
+
+  // Validate file type
+  const allowedTypes = ['audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/m4a'];
+  if (!allowedTypes.includes(file.type) && !file.name.match(/\.(mp3|ogg|wav|webm|m4a)$/i)) {
+    return c.json({ error: 'Invalid audio format. Supported: mp3, ogg, wav, webm, m4a' }, 400);
+  }
+
+  // Check content exists
+  const content = await c.env.DB.prepare('SELECT id, test_type, section FROM test_contents WHERE id = ?')
+    .bind(contentId).first();
+  if (!content) return c.json({ error: 'Content not found' }, 404);
+
+  // Upload to R2
+  const ext = file.name.split('.').pop() || 'mp3';
+  const key = `content-audio/${(content as any).test_type}/${(content as any).section}/${contentId}.${ext}`;
+
+  await bucket.put(key, file.stream(), {
+    httpMetadata: { contentType: file.type || 'audio/mpeg' },
+  });
+
+  // Build the public URL
+  const audioUrl = `/api/audio/${key}`;
+
+  // Update content media_url
+  await c.env.DB.prepare(
+    'UPDATE test_contents SET media_url = ?, updated_at = datetime(\'now\') WHERE id = ?'
+  ).bind(audioUrl, contentId).run();
+
+  return c.json({
+    id: contentId,
+    audio_url: audioUrl,
+    size: file.size,
+    key,
+  });
+});
+
+// POST /content/restore-with-tts — Batch: generate TTS audio for draft listening questions and restore to published
+adminApiRoutes.post('/content/restore-with-tts', async (c) => {
+  const { test_type, section, limit: batchLimit } = await c.req.json().catch(() => ({}));
+  const maxBatch = Math.min(batchLimit || 5, 10); // Max 10 per call to stay under subrequest limit
+
+  // Find draft questions that had broken media URLs
+  let query = `SELECT id, test_type, section, question_type, content
+               FROM test_contents
+               WHERE status = 'draft'
+               AND (media_url IS NULL OR media_url = '' OR (media_url NOT LIKE 'http://%' AND media_url NOT LIKE 'https://%'))
+               AND section IN ('listening', 'speaking')`;
+  const params: any[] = [];
+
+  if (test_type) { query += ' AND test_type = ?'; params.push(test_type); }
+  if (section) { query += ' AND section = ?'; params.push(section); }
+  query += ' LIMIT ?';
+  params.push(maxBatch);
+
+  const stmt = c.env.DB.prepare(query);
+  const rows = params.length > 0 ? await stmt.bind(...params).all() : await stmt.all();
+
+  const results: any[] = [];
+
+  for (const row of (rows.results || []) as any[]) {
+    try {
+      const content = JSON.parse(row.content as string || '{}');
+
+      // Extract the text to generate TTS from
+      let ttsText = '';
+      if (content.passage_script) {
+        ttsText = content.passage_script;
+      } else if (content.passage_text) {
+        ttsText = content.passage_text;
+      } else if (content.questions?.[0]?.script) {
+        ttsText = content.questions.map((q: any) => q.script || '').join('\n\n');
+      }
+
+      if (!ttsText || ttsText.length < 10) {
+        results.push({ id: row.id, status: 'skipped', reason: 'No text for TTS' });
+        continue;
+      }
+
+      // Generate TTS URL using existing TTS endpoint pattern
+      // The TTS is served on-demand via /api/tts/speak, so we just need to construct the URL
+      const ttsUrl = `/api/tts/speak?multi=true&text=${encodeURIComponent(ttsText.substring(0, 4000))}`;
+
+      // Update the content with the TTS URL and restore to published
+      await c.env.DB.prepare(
+        "UPDATE test_contents SET media_url = ?, status = 'published', updated_at = datetime('now') WHERE id = ?"
+      ).bind(ttsUrl, row.id).run();
+
+      results.push({ id: row.id, status: 'restored', tts_length: ttsText.length });
+    } catch (e: any) {
+      results.push({ id: row.id, status: 'error', message: e.message });
+    }
+  }
+
+  return c.json({
+    processed: results.length,
+    restored: results.filter(r => r.status === 'restored').length,
+    skipped: results.filter(r => r.status === 'skipped').length,
+    errors: results.filter(r => r.status === 'error').length,
+    results,
+  });
+});
+
+// GET /content/draft-stats — Get stats on draft/broken content for admin visibility
+adminApiRoutes.get('/content/draft-stats', async (c) => {
+  const stats = await c.env.DB.prepare(`
+    SELECT
+      test_type,
+      section,
+      COUNT(*) as total_draft,
+      SUM(CASE WHEN media_url IS NOT NULL AND media_url != '' AND media_url NOT LIKE 'http://%' AND media_url NOT LIKE 'https://%' THEN 1 ELSE 0 END) as broken_media,
+      SUM(CASE WHEN media_url IS NULL OR media_url = '' THEN 1 ELSE 0 END) as no_media,
+      SUM(CASE WHEN media_url LIKE 'http://%' OR media_url LIKE 'https://%' THEN 1 ELSE 0 END) as valid_media
+    FROM test_contents
+    WHERE status = 'draft'
+    GROUP BY test_type, section
+    ORDER BY total_draft DESC
+  `).all();
+
+  const total = await c.env.DB.prepare(
+    "SELECT COUNT(*) as count FROM test_contents WHERE status = 'draft'"
+  ).first() as any;
+
+  return c.json({
+    total_draft: total?.count || 0,
+    by_type_section: stats.results,
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════
 // CLASSES
 // ═══════════════════════════════════════════════════════════════
@@ -664,12 +860,17 @@ adminApiRoutes.get('/classes/:id/students', async (c) => {
   const students = await c.env.DB.prepare(
     `SELECT u.id, u.name, u.username, u.proficiency_level, u.target_test,
        sp.confidence_score, sp.learning_pace, sp.frustration_score,
-       (SELECT ROUND(AVG(CASE WHEN aa.is_correct = 1 THEN 100.0 ELSE 0 END), 1)
+       (SELECT ROUND(AVG(CASE
+          WHEN aa.is_correct = 1 THEN 100.0
+          WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+          ELSE 0 END), 1)
         FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
-        WHERE ta.user_id = u.id AND aa.is_correct IS NOT NULL) as accuracy,
+        WHERE ta.user_id = u.id
+          AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))) as accuracy,
        (SELECT COUNT(*) FROM attempt_answers aa2
         JOIN test_attempts ta2 ON aa2.attempt_id = ta2.id
-        WHERE ta2.user_id = u.id AND aa2.is_correct IS NOT NULL) as questions_answered
+        WHERE ta2.user_id = u.id
+          AND NOT (aa2.is_correct IS NULL AND aa2.section NOT IN ('speaking','writing'))) as questions_answered
      FROM class_members cm
      JOIN users u ON cm.user_id = u.id
      LEFT JOIN student_profiles sp ON u.id = sp.user_id
@@ -904,4 +1105,407 @@ adminApiRoutes.get('/export/content', async (c) => {
   }
 
   return c.json({ content: content.results });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// TEACHER DASHBOARD
+// ═══════════════════════════════════════════════════════════════
+
+// GET /teacher-dashboard/alerts — Students needing attention
+adminApiRoutes.get('/teacher-dashboard/alerts', requireAdmin, async (c) => {
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 86400000).toISOString();
+  const fourteenDaysAgo = new Date(now.getTime() - 14 * 86400000).toISOString();
+  const threeDaysAgo = new Date(now.getTime() - 3 * 86400000).toISOString();
+
+  // 1. Churn risk: were active in days 7-14, but NOT active in last 7 days
+  const churnRisk = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.username, u.target_test, u.proficiency_level,
+            MAX(activity.last_active) as last_active
+     FROM users u
+     JOIN (
+       SELECT user_id, MAX(created_at) as last_active FROM conversation_messages GROUP BY user_id
+       UNION ALL
+       SELECT ta.user_id, MAX(aa.submitted_at) as last_active FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id GROUP BY ta.user_id
+     ) activity ON u.id = activity.user_id
+     WHERE u.role = 'student'
+     GROUP BY u.id
+     HAVING MAX(activity.last_active) < ? AND MAX(activity.last_active) >= ?
+     ORDER BY MAX(activity.last_active) DESC
+     LIMIT 20`
+  ).bind(threeDaysAgo, fourteenDaysAgo).all();
+
+  // 2. Plateauing: active in last 14 days, but accuracy hasn't changed (compare week1 vs week2)
+  const plateauing = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.username, u.target_test,
+            ROUND(AVG(CASE WHEN aa.submitted_at >= ? THEN
+              CASE WHEN aa.is_correct = 1 THEN 100.0
+                   WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+                   ELSE 0 END
+            END), 1) as recent_accuracy,
+            ROUND(AVG(CASE WHEN aa.submitted_at < ? AND aa.submitted_at >= ? THEN
+              CASE WHEN aa.is_correct = 1 THEN 100.0
+                   WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+                   ELSE 0 END
+            END), 1) as previous_accuracy,
+            COUNT(CASE WHEN aa.submitted_at >= ? THEN 1 END) as recent_questions,
+            COUNT(CASE WHEN aa.submitted_at < ? AND aa.submitted_at >= ? THEN 1 END) as prev_questions
+     FROM users u
+     JOIN test_attempts ta ON u.id = ta.user_id
+     JOIN attempt_answers aa ON ta.id = aa.attempt_id
+     WHERE u.role = 'student' AND aa.submitted_at >= ?
+       AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
+     GROUP BY u.id
+     HAVING recent_questions >= 5 AND prev_questions >= 5
+            AND ABS(COALESCE(recent_accuracy, 0) - COALESCE(previous_accuracy, 0)) < 5
+     ORDER BY recent_questions DESC
+     LIMIT 15`
+  ).bind(sevenDaysAgo, sevenDaysAgo, fourteenDaysAgo, sevenDaysAgo, sevenDaysAgo, fourteenDaysAgo, fourteenDaysAgo).all();
+
+  // 3. Struggling: high effort but low accuracy (active last 7 days, accuracy < 40%)
+  const struggling = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.username, u.target_test,
+            COUNT(aa.id) as questions,
+            ROUND(AVG(CASE
+              WHEN aa.is_correct = 1 THEN 100.0
+              WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+              ELSE 0 END), 1) as accuracy
+     FROM users u
+     JOIN test_attempts ta ON u.id = ta.user_id
+     JOIN attempt_answers aa ON ta.id = aa.attempt_id
+     WHERE u.role = 'student' AND aa.submitted_at >= ?
+       AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
+     GROUP BY u.id
+     HAVING questions >= 5 AND accuracy < 40
+     ORDER BY accuracy ASC
+     LIMIT 15`
+  ).bind(sevenDaysAgo).all();
+
+  // 4. Close to goal: estimated band within 0.5 of target (or accuracy > 75%)
+  const closeToGoal = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.username, u.target_test, u.proficiency_level,
+            dr.estimated_band,
+            COUNT(aa.id) as total_questions,
+            ROUND(AVG(CASE
+              WHEN aa.is_correct = 1 THEN 100.0
+              WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+              ELSE 0 END), 1) as accuracy
+     FROM users u
+     LEFT JOIN diagnostic_results dr ON u.id = dr.user_id
+     JOIN test_attempts ta ON u.id = ta.user_id
+     JOIN attempt_answers aa ON ta.id = aa.attempt_id
+     WHERE u.role = 'student' AND aa.submitted_at >= ?
+       AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
+     GROUP BY u.id
+     HAVING accuracy >= 75 AND total_questions >= 10
+     ORDER BY accuracy DESC
+     LIMIT 15`
+  ).bind(fourteenDaysAgo).all();
+
+  return c.json({
+    churn_risk: churnRisk.results,
+    plateauing: plateauing.results,
+    struggling: struggling.results,
+    close_to_goal: closeToGoal.results,
+  });
+});
+
+// GET /teacher-dashboard/weakness-heatmap — Class-wide weakness analysis
+adminApiRoutes.get('/teacher-dashboard/weakness-heatmap', requireAdmin, async (c) => {
+  const classId = c.req.query('class_id');
+
+  // Overall weakness by section + question_type
+  let sectionTypeQuery = `
+    SELECT aa.section, tc.question_type, tc.skill_tags,
+           COUNT(aa.id) as attempts,
+           SUM(CASE
+             WHEN aa.is_correct = 1 THEN 1
+             WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+             ELSE 0 END) as correct,
+           ROUND(AVG(CASE
+             WHEN aa.is_correct = 1 THEN 100.0
+             WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+             ELSE 0 END), 1) as accuracy
+    FROM attempt_answers aa
+    JOIN test_contents tc ON aa.content_id = tc.id
+    JOIN test_attempts ta ON aa.attempt_id = ta.id`;
+
+  const binds: any[] = [];
+  if (classId) {
+    sectionTypeQuery += ` JOIN class_members cm ON ta.user_id = cm.user_id AND cm.class_id = ?`;
+    binds.push(classId);
+  }
+  sectionTypeQuery += ` WHERE NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))`;
+  sectionTypeQuery += ` GROUP BY aa.section, tc.question_type ORDER BY accuracy ASC`;
+
+  const heatmap = await c.env.DB.prepare(sectionTypeQuery).bind(...binds).all();
+
+  // Most-missed specific questions
+  let missedQuery = `
+    SELECT tc.id, tc.section, tc.question_type, tc.skill_tags,
+           SUBSTR(tc.content, 1, 120) as content_preview,
+           COUNT(aa.id) as attempts,
+           SUM(CASE
+             WHEN aa.is_correct = 1 THEN 0
+             WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 0
+             ELSE 1 END) as wrong_count,
+           ROUND(AVG(CASE
+             WHEN aa.is_correct = 1 THEN 100.0
+             WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+             ELSE 0 END), 1) as accuracy
+    FROM attempt_answers aa
+    JOIN test_contents tc ON aa.content_id = tc.id
+    JOIN test_attempts ta ON aa.attempt_id = ta.id`;
+
+  const missedBinds: any[] = [];
+  if (classId) {
+    missedQuery += ` JOIN class_members cm ON ta.user_id = cm.user_id AND cm.class_id = ?`;
+    missedBinds.push(classId);
+  }
+  missedQuery += ` WHERE NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))`;
+  missedQuery += ` GROUP BY tc.id HAVING attempts >= 3 ORDER BY accuracy ASC LIMIT 20`;
+
+  const missed = await c.env.DB.prepare(missedQuery).bind(...missedBinds).all();
+
+  // Skill tag breakdown (aggregate skill_tags across all answers)
+  let skillQuery = `
+    SELECT tc.skill_tags, COUNT(aa.id) as attempts,
+           ROUND(AVG(CASE
+             WHEN aa.is_correct = 1 THEN 100.0
+             WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+             ELSE 0 END), 1) as accuracy
+    FROM attempt_answers aa
+    JOIN test_contents tc ON aa.content_id = tc.id
+    JOIN test_attempts ta ON aa.attempt_id = ta.id`;
+
+  const skillBinds: any[] = [];
+  if (classId) {
+    skillQuery += ` JOIN class_members cm ON ta.user_id = cm.user_id AND cm.class_id = ?`;
+    skillBinds.push(classId);
+  }
+  skillQuery += ` WHERE tc.skill_tags IS NOT NULL AND tc.skill_tags != '' AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing')) GROUP BY tc.skill_tags ORDER BY accuracy ASC`;
+
+  const skills = await c.env.DB.prepare(skillQuery).bind(...skillBinds).all();
+
+  return c.json({
+    section_type_heatmap: heatmap.results,
+    most_missed_questions: missed.results,
+    skill_breakdown: skills.results,
+  });
+});
+
+// GET /teacher-dashboard/score-progression — Score trends per student and class average
+adminApiRoutes.get('/teacher-dashboard/score-progression', requireAdmin, async (c) => {
+  const studentId = c.req.query('student_id');
+  const classId = c.req.query('class_id');
+  const days = Math.min(parseInt(c.req.query('days') || '60'), 180);
+  const daysAgo = new Date(Date.now() - days * 86400000).toISOString();
+
+  if (studentId) {
+    // Individual student progression: weekly accuracy buckets
+    const progression = await c.env.DB.prepare(
+      `SELECT
+         strftime('%Y-W%W', aa.submitted_at) as week,
+         MIN(DATE(aa.submitted_at)) as week_start,
+         aa.section,
+         COUNT(aa.id) as questions,
+         ROUND(AVG(CASE
+           WHEN aa.is_correct = 1 THEN 100.0
+           WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+           ELSE 0 END), 1) as accuracy
+       FROM attempt_answers aa
+       JOIN test_attempts ta ON aa.attempt_id = ta.id
+       WHERE ta.user_id = ? AND aa.submitted_at >= ?
+         AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
+       GROUP BY week, aa.section
+       ORDER BY week ASC, aa.section`
+    ).bind(studentId, daysAgo).all();
+
+    // Overall weekly (not by section)
+    const overall = await c.env.DB.prepare(
+      `SELECT
+         strftime('%Y-W%W', aa.submitted_at) as week,
+         MIN(DATE(aa.submitted_at)) as week_start,
+         COUNT(aa.id) as questions,
+         ROUND(AVG(CASE
+           WHEN aa.is_correct = 1 THEN 100.0
+           WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+           ELSE 0 END), 1) as accuracy
+       FROM attempt_answers aa
+       JOIN test_attempts ta ON aa.attempt_id = ta.id
+       WHERE ta.user_id = ? AND aa.submitted_at >= ?
+         AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
+       GROUP BY week
+       ORDER BY week ASC`
+    ).bind(studentId, daysAgo).all();
+
+    return c.json({ by_section: progression.results, overall: overall.results });
+  }
+
+  // Class or system-wide: weekly average accuracy across all students
+  let classFilter = '';
+  const binds: any[] = [daysAgo];
+  if (classId) {
+    classFilter = 'JOIN class_members cm ON ta.user_id = cm.user_id AND cm.class_id = ?';
+    binds.push(classId);
+  }
+
+  const classProgression = await c.env.DB.prepare(
+    `SELECT
+       strftime('%Y-W%W', aa.submitted_at) as week,
+       MIN(DATE(aa.submitted_at)) as week_start,
+       COUNT(DISTINCT ta.user_id) as active_students,
+       COUNT(aa.id) as questions,
+       ROUND(AVG(CASE
+         WHEN aa.is_correct = 1 THEN 100.0
+         WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+         ELSE 0 END), 1) as avg_accuracy
+     FROM attempt_answers aa
+     JOIN test_attempts ta ON aa.attempt_id = ta.id
+     ${classFilter}
+     WHERE aa.submitted_at >= ?
+       AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
+     GROUP BY week
+     ORDER BY week ASC`
+  ).bind(...(classId ? [classId, daysAgo] : [daysAgo])).all();
+
+  // Per-section progression (class-wide)
+  const sectionProgression = await c.env.DB.prepare(
+    `SELECT
+       strftime('%Y-W%W', aa.submitted_at) as week,
+       MIN(DATE(aa.submitted_at)) as week_start,
+       aa.section,
+       COUNT(aa.id) as questions,
+       ROUND(AVG(CASE
+         WHEN aa.is_correct = 1 THEN 100.0
+         WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+         ELSE 0 END), 1) as accuracy
+     FROM attempt_answers aa
+     JOIN test_attempts ta ON aa.attempt_id = ta.id
+     ${classFilter}
+     WHERE aa.submitted_at >= ?
+       AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
+     GROUP BY week, aa.section
+     ORDER BY week ASC, aa.section`
+  ).bind(...(classId ? [classId, daysAgo] : [daysAgo])).all();
+
+  // Top improvers: students whose recent accuracy > past accuracy (compare halves)
+  const halfPoint = new Date(Date.now() - (days / 2) * 86400000).toISOString();
+  const improvers = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.username,
+            ROUND(AVG(CASE WHEN aa.submitted_at >= ? THEN
+              CASE WHEN aa.is_correct = 1 THEN 100.0
+                   WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+                   ELSE 0 END END), 1) as recent_acc,
+            ROUND(AVG(CASE WHEN aa.submitted_at < ? THEN
+              CASE WHEN aa.is_correct = 1 THEN 100.0
+                   WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 100.0
+                   ELSE 0 END END), 1) as past_acc,
+            COUNT(aa.id) as total_questions
+     FROM users u
+     JOIN test_attempts ta ON u.id = ta.user_id
+     JOIN attempt_answers aa ON ta.id = aa.attempt_id
+     ${classFilter ? classFilter.replace('ta.user_id', 'u.id') : ''}
+     WHERE aa.submitted_at >= ? AND u.role = 'student'
+       AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
+     GROUP BY u.id
+     HAVING total_questions >= 10 AND recent_acc > past_acc
+     ORDER BY (recent_acc - past_acc) DESC
+     LIMIT 10`
+  ).bind(...(classId ? [halfPoint, halfPoint, classId, daysAgo] : [halfPoint, halfPoint, daysAgo])).all();
+
+  return c.json({
+    class_overall: classProgression.results,
+    by_section: sectionProgression.results,
+    top_improvers: improvers.results,
+  });
+});
+
+// GET /teacher-dashboard/engagement — Engagement & consistency metrics
+adminApiRoutes.get('/teacher-dashboard/engagement', requireAdmin, async (c) => {
+  const classId = c.req.query('class_id');
+  const days = Math.min(parseInt(c.req.query('days') || '30'), 90);
+  const daysAgo = new Date(Date.now() - days * 86400000).toISOString();
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+
+  // 1. Daily active users over time
+  const dailyActive = await c.env.DB.prepare(
+    `SELECT date, COUNT(DISTINCT user_id) as active_users FROM (
+       SELECT DATE(created_at) as date, user_id FROM conversation_messages WHERE created_at >= ?
+       UNION ALL
+       SELECT DATE(aa.submitted_at) as date, ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= ?
+     ) GROUP BY date ORDER BY date ASC`
+  ).bind(daysAgo, daysAgo).all();
+
+  // 2. Total enrolled students
+  const totalStudents = await c.env.DB.prepare(
+    "SELECT COUNT(*) as c FROM users WHERE role = 'student'"
+  ).first();
+
+  // 3. Study consistency per student (last 30 days): active days / total days
+  const consistencyResult = await c.env.DB.prepare(
+    `SELECT u.id, u.name, u.username,
+            COUNT(DISTINCT activity.active_date) as active_days,
+            u.current_streak, u.longest_streak
+     FROM users u
+     LEFT JOIN (
+       SELECT user_id, DATE(created_at) as active_date FROM conversation_messages WHERE created_at >= ?
+       UNION
+       SELECT ta.user_id, DATE(aa.submitted_at) FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= ?
+     ) activity ON u.id = activity.user_id
+     WHERE u.role = 'student'
+     GROUP BY u.id
+     ORDER BY active_days DESC`
+  ).bind(daysAgo, daysAgo).all();
+
+  // 4. Feature usage breakdown (last 30 days)
+  const featureUsage = await c.env.DB.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM conversation_messages WHERE created_at >= ? AND role = 'user') as bot_messages,
+       (SELECT COUNT(*) FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= ?) as test_answers,
+       (SELECT COUNT(*) FROM daily_question_logs WHERE question_date >= DATE(?)) as study_button_uses,
+       (SELECT COUNT(*) FROM lesson_plans WHERE created_at >= ?) as lessons_generated,
+       (SELECT COUNT(*) FROM srs_cards WHERE last_reviewed >= ?) as srs_reviews`
+  ).bind(daysAgo, daysAgo, daysAgo, daysAgo, daysAgo).first();
+
+  // 5. Study time distribution (hour of day, from conversation_messages)
+  const hourDistribution = await c.env.DB.prepare(
+    `SELECT CAST(strftime('%H', created_at) AS INTEGER) as hour,
+            COUNT(*) as activity_count
+     FROM (
+       SELECT created_at FROM conversation_messages WHERE created_at >= ? AND role = 'user'
+       UNION ALL
+       SELECT aa.submitted_at FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= ?
+     ) GROUP BY hour ORDER BY hour`
+  ).bind(daysAgo, daysAgo).all();
+
+  // 6. Weekly active rate over time (for chart)
+  const weeklyRates = await c.env.DB.prepare(
+    `SELECT week, COUNT(DISTINCT user_id) as active_users FROM (
+       SELECT strftime('%Y-W%W', created_at) as week, user_id FROM conversation_messages WHERE created_at >= ?
+       UNION ALL
+       SELECT strftime('%Y-W%W', aa.submitted_at), ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= ?
+     ) GROUP BY week ORDER BY week ASC`
+  ).bind(daysAgo, daysAgo).all();
+
+  // 7. Average study minutes per student per week (from test time_spent_seconds)
+  const avgStudyTime = await c.env.DB.prepare(
+    `SELECT strftime('%Y-W%W', aa.submitted_at) as week,
+            ROUND(SUM(COALESCE(aa.time_spent_seconds, 0)) / 60.0 / NULLIF(COUNT(DISTINCT ta.user_id), 0), 1) as avg_minutes_per_student,
+            COUNT(DISTINCT ta.user_id) as students
+     FROM attempt_answers aa
+     JOIN test_attempts ta ON aa.attempt_id = ta.id
+     WHERE aa.submitted_at >= ?
+     GROUP BY week ORDER BY week ASC`
+  ).bind(daysAgo).all();
+
+  return c.json({
+    daily_active_users: dailyActive.results,
+    total_students: (totalStudents as any)?.c || 0,
+    student_consistency: consistencyResult.results,
+    feature_usage: featureUsage,
+    hour_distribution: hourDistribution.results,
+    weekly_active_rates: weeklyRates.results,
+    avg_study_time_weekly: avgStudyTime.results,
+  });
 });

@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>EduBot - Teacher Handbook</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.7; color: #1a1a2e; background: white; }
+    .page { max-width: 800px; margin: 0 auto; padding: 40px 30px; }
+    .cover { text-align: center; padding: 80px 0; border-bottom: 3px solid #168acd; margin-bottom: 40px; }
+    .cover .logo { font-size: 3rem; font-weight: 800; color: #168acd; margin-bottom: 20px; }
+    .cover .logo span { color: #ffd700; }
+    .cover h1 { font-size: 2.2rem; color: #1a1a2e; margin-bottom: 15px; }
+    .cover .subtitle { font-size: 1.1rem; color: #666; margin-bottom: 30px; }
+    .cover .url { font-size: 1.2rem; color: #168acd; font-weight: 600; }
+    .cover .version { font-size: 0.9rem; color: #999; margin-top: 20px; }
+    h2 { font-size: 1.6rem; color: #168acd; margin: 35px 0 20px; padding-bottom: 10px; border-bottom: 2px solid #f0f0f0; }
+    h3 { font-size: 1.2rem; color: #1a1a2e; margin: 25px 0 15px; }
+    p { margin-bottom: 15px; color: #444; }
+    ul, ol { margin: 15px 0 15px 25px; }
+    li { margin-bottom: 10px; color: #444; }
+    .highlight { background: #f0f7ff; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #168acd; }
+    .highlight.success { background: #f0fff0; border-left-color: #28a745; }
+    .highlight.warning { background: #fff9e6; border-left-color: #ffc107; }
+    .highlight.info { background: #f0f7ff; border-left-color: #168acd; }
+    .command { background: #1a1a2e; color: #ffd700; padding: 12px 20px; border-radius: 8px; font-family: 'Consolas', monospace; font-size: 1rem; margin: 10px 0; display: inline-block; }
+    .command-block { background: #1a1a2e; color: #ffd700; padding: 15px 20px; border-radius: 8px; font-family: 'Consolas', monospace; font-size: 0.95rem; margin: 15px 0; overflow-x: auto; }
+    .tip-box { background: linear-gradient(135deg, #168acd 0%, #0d5c8a 100%); color: white; padding: 25px; border-radius: 15px; margin: 25px 0; }
+    .tip-box h4 { font-size: 1.1rem; margin-bottom: 10px; }
+    .tip-box p { color: rgba(255,255,255,0.9); }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #f8f9fa; font-weight: 600; color: #1a1a2e; }
+    tr:hover { background: #f8f9fa; }
+    .page-break { page-break-after: always; }
+    .footer { text-align: center; padding: 40px 0; margin-top: 40px; border-top: 2px solid #f0f0f0; color: #999; font-size: 0.9rem; }
+    .toc { background: #f8f9fa; padding: 25px; border-radius: 15px; margin: 25px 0; }
+    .toc h3 { margin-top: 0; }
+    .toc ul { list-style: none; margin-left: 0; }
+    .toc li { padding: 5px 0; }
+    .toc li a { color: #168acd; text-decoration: none; }
+    .toc li a:hover { text-decoration: underline; }
+    .emoji { font-size: 1.3em; margin-right: 8px; }
+    .badge { background: #ffd700; color: #1a1a2e; padding: 3px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+    .premium-badge { background: linear-gradient(135deg, #ffd700, #ff8c00); color: #1a1a2e; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 700; }
+    .teacher-badge { background: linear-gradient(135deg, #168acd, #0d5c8a); color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <!-- Cover -->
+    <div class="cover">
+      <div class="logo">Edu<span>Bot</span></div>
+      <h1>Teacher Handbook</h1>
+      <p class="subtitle">Manage Your English Class with AI Power</p>
+      <p class="url">osee.co.id</p>
+      <p class="version">Version 1.0 | April 2025</p>
+    </div>
+
+    <!-- Welcome -->
+    <h2>Welcome to EduBot for Teachers! 🎓</h2>
+    <p>Hello, teacher! Congratulations on joining EduBot as a teacher partner. This handbook will guide you through everything you need to manage your students effectively using our AI-powered platform.</p>
+    
+    <div class="highlight success">
+      <p><strong>What is EduBot for Teachers?</strong></p>
+      <p>EduBot is a SaaS platform that helps English teachers manage their classes more efficiently. With AI-powered practice questions, automated daily quizzes, student progress tracking, and smart spaced repetition — you can focus on teaching while EduBot handles the repetitive work.</p>
+    </div>
+
+    <h3>What You'll Get as a Teacher:</h3>
+    <ul>
+      <li>👥 <strong>Class Management</strong> — Create classes, invite students with codes</li>
+      <li>📊 <strong>Student Dashboard</strong> — Monitor each student's progress</li>
+      <li>📝 <strong>Auto Quiz</strong> — Daily quiz sent automatically to your class</li>
+      <li>🏆 <strong>Leaderboard</strong> — Keep students motivated with rankings</li>
+      <li>📈 <strong>Analytics</strong> — See class performance at a glance</li>
+      <li>🤝 <strong>Referral Rewards</strong> — Earn free months by inviting students</li>
+    </ul>
+
+    <!-- Table of Contents -->
+    <div class="toc">
+      <h3>📋 Table of Contents</h3>
+      <ul>
+        <li><a href="#getting-started">1. Getting Started</a></li>
+        <li><a href="#class-management">2. Class Management</a></li>
+        <li><a href="#student-monitoring">3. Monitoring Students</a></li>
+        <li><a href="#admin-dashboard">4. Admin Dashboard</a></li>
+        <li><a href="#pricing">5. Pricing & Billing</a></li>
+        <li><a href="#daily-commands">6. Daily Commands</a></li>
+        <li><a href="#tips">7. Best Practices</a></li>
+        <li><a href="#faq">8. FAQ</a></li>
+        <li><a href="#support">9. Support</a></li>
+      </ul>
+    </div>
+
+    <div class="page-break"></div>
+
+    <!-- Getting Started -->
+    <h2 id="getting-started">1. Getting Started 🚀</h2>
+    
+    <h3>1.1 Activate Your Teacher Account</h3>
+    <p>Before you can manage classes, you need to activate your teacher role:</p>
+    <ol>
+      <li>Open <strong>@osee_IBT_IELTS_tutor_bot</strong> in Telegram</li>
+      <li>Send <span class="command">/teacher [invite_code]</span> — use the invite code provided to you</li>
+      <li>You'll receive a <span class="teacher-badge">TEACHER</span> badge and access to teacher commands</li>
+    </ol>
+
+    <div class="highlight warning">
+      <p><strong>Note:</strong> You get a 7-day free trial as a teacher. After the trial, you need to activate premium to continue managing classes.</p>
+    </div>
+
+    <h3>1.2 Setting Up Your Profile</h3>
+    <p>Configure your teacher settings:</p>
+    <div class="command-block">Send /settings</div>
+    <p>This lets you:</p>
+    <ul>
+      <li>Set your display name for students</li>
+      <li>Choose your class timezone</li>
+      <li>Configure notification preferences</li>
+    </ul>
+
+    <h3>1.3 Understanding Teacher Commands</h3>
+    <p>As a teacher, you have access to these commands:</p>
+    <table>
+      <tr><th>Command</th><th>Description</th></tr>
+      <tr><td><span class="command">/admin</span></td><td>Open the admin dashboard (web app)</td></tr>
+      <tr><td><span class="command">/addclass</span></td><td>Create a new class</td></tr>
+      <tr><td><span class="command">/broadcast MSG</span></td><td>Send message to all students</td></tr>
+      <tr><td><span class="command">/stats</span></td><td>View system statistics</td></tr>
+      <tr><td><span class="command">/pendingpayments</span></td><td>See pending student payments</td></tr>
+    </table>
+
+    <div class="page-break"></div>
+
+    <!-- Class Management -->
+    <h2 id="class-management">2. Class Management 📚</h2>
+    
+    <p>Organize your students into classes for easier management and automated daily quizzes.</p>
+
+    <h3>2.1 Creating a Class</h3>
+    <p>To create a new class:</p>
+    <div class="command-block">Send /addclass</div>
+    <p>Follow the prompts:</p>
+    <ol>
+      <li>Enter class name (e.g., "TOEFL Intensive Batch 1")</li>
+      <li>Enter class description (optional)</li>
+      <li>You'll receive a unique <strong>invite code</strong></li>
+      <li>Share this code with your students</li>
+    </ol>
+
+    <h3>2.2 Inviting Students</h3>
+    <p>Students can join your class using the invite code:</p>
+    <div class="command-block">Send /join CODE</div>
+    <p>Where <code>CODE</code> is the invite code you gave them.</p>
+
+    <div class="tip-box">
+      <h4>💡 Pro Tip</h4>
+      <p>Create different classes for different programs (e.g., TOEFL, IELTS) or batches. This way, you can send targeted content to each group.</p>
+    </div>
+
+    <h3>2.3 Managing Multiple Classes</h3>
+    <p>You can manage multiple classes:</p>
+    <ul>
+      <li><strong>View all classes:</strong> Use <span class="command">/admin</span> dashboard</li>
+      <li><strong>Switch between classes:</strong> Select class from the dashboard tabs</li>
+      <li><strong>Archive old classes:</strong> Contact admin for class archival</li>
+    </ul>
+
+    <h3>2.4 Daily Quiz System</h3>
+    <p>Each class gets an automatic daily quiz at 8 AM WIB. The quiz:</p>
+    <ul>
+      <li>Contains 5 questions from your class's target exam</li>
+      <li>Mixes question types (Reading, Listening, Grammar, etc.)</li>
+      <li>Updates the class leaderboard</li>
+      <li>Reminds students who haven't answered</li>
+    </ul>
+
+    <div class="page-break"></div>
+
+    <!-- Student Monitoring -->
+    <h2 id="student-monitoring">3. Monitoring Students 👀</h2>
+    
+    <p>The <span class="command">/admin</span> dashboard gives you full visibility into your students' progress.</p>
+
+    <h3>3.1 Student List View</h3>
+    <p>Access the dashboard:</p>
+    <div class="command-block">Send /admin</div>
+    <p>Then click the <strong>Students</strong> tab. You'll see:</p>
+    <ul>
+      <li>Student name and Telegram username</li>
+      <li>Current level and XP</li>
+      <li>Questions answered today</li>
+      <li>Last active time</li>
+      <li>Premium status</li>
+    </ul>
+
+    <h3>3.2 Individual Student Details</h3>
+    <p>Click on any student to see:</p>
+    <ul>
+      <li><strong>Progress Overview</strong> — Band score estimation, section breakdown</li>
+      <li><strong>Accuracy by Section</strong> — Reading, Listening, Speaking, Writing</li>
+      <li><strong>Study Streak</strong> — Consecutive days of practice</li>
+      <li><strong>Weak Areas</strong> — Topics that need more work</li>
+      <li><strong>Recent Activity</strong> — Last 10 questions with results</li>
+    </ul>
+
+    <h3>3.3 Class Leaderboard</h3>
+    <p>Keep students motivated with rankings:</p>
+    <div class="highlight">
+      <p><strong>Leaderboard shows:</strong></p>
+      <p>🥇 1st Place — Student with most XP this week</p>
+      <p>🥈 2nd Place — Second highest XP</p>
+      <p>🥉 3rd Place — Third highest XP</p>
+      <p>📊 Weekly updates every Monday at 8 AM WIB</p>
+    </div>
+
+    <h3>3.4 Identifying Struggling Students</h3>
+    <p>Watch for these warning signs:</p>
+    <ul>
+      <li>⚠️ No activity for 3+ days</li>
+      <li>⚠️ Accuracy below 40%</li>
+      <li>⚠️ Questions answered decreasing</li>
+    </ul>
+    <p>Use <span class="command">/broadcast</span> to send encouragement or study tips to inactive students.</p>
+
+    <div class="page-break"></div>
+
+    <!-- Admin Dashboard -->
+    <h2 id="admin-dashboard">4. Admin Dashboard 💻</h2>
+    
+    <p>The web-based dashboard gives you powerful tools to manage your class.</p>
+
+    <h3>4.1 Dashboard Tabs</h3>
+    <table>
+      <tr><th>Tab</th><th>Content</th></tr>
+      <tr><td>Students</td><td>List of all students with key metrics</td></tr>
+      <tr><td>Progress</td><td>Class-wide analytics and charts</td></tr>
+      <tr><td>CSV Export</td><td>Download student data as spreadsheet</td></tr>
+    </table>
+
+    <h3>4.2 Exporting Student Data</h3>
+    <p>Need data for external analysis? Export to CSV:</p>
+    <ol>
+      <li>Go to <span class="command">/admin</span> dashboard</li>
+      <li>Click <strong>Export CSV</strong> button</li>
+      <li>Choose which class to export</li>
+      <li>Download the CSV file</li>
+    </ol>
+    <p>The CSV includes:</p>
+    <ul>
+      <li>Student ID, Name, Username</li>
+      <li>Level, XP, Questions Answered</li>
+      <li>Accuracy %, Last Active</li>
+      <li>Premium Status, Referral Count</li>
+    </ul>
+
+    <h3>4.3 Content Management</h3>
+    <p>Teachers can contribute content (requires approval):</p>
+    <ul>
+      <li>Add new practice questions</li>
+      <li>Submit vocabulary lists</li>
+      <li>Create custom drills</li>
+    </ul>
+    <p>Contact admin to submit content for review.</p>
+
+    <div class="page-break"></div>
+
+    <!-- Pricing -->
+    <h2 id="pricing">5. Pricing & Billing 💰</h2>
+    
+    <p>EduBot for Teachers uses a per-student pricing model.</p>
+
+    <h3>5.1 Teacher Pricing</h3>
+    <div class="highlight success">
+      <p><strong>Rp 50,000 per student per month</strong></p>
+      <p>Minimum 5 students per class</p>
+      <p>Maximum depends on your plan</p>
+    </div>
+
+    <h3>5.2 What's Included</h3>
+    <ul>
+      <li>✅ Full class management</li>
+      <li>✅ Up to 50 students per class</li>
+      <li>✅ Daily auto quiz</li>
+      <li>✅ Student progress tracking</li>
+      <li>✅ Leaderboard system</li>
+      <li>✅ CSV export</li>
+      <li>✅ Priority support</li>
+    </ul>
+
+    <h3>5.3 How Billing Works</h3>
+    <ol>
+      <li>You pay based on the number of <strong>active students</strong></li>
+      <li>Billing is monthly, invoiced on the 1st</li>
+      <li>Payment via Telegram Stars or bank transfer</li>
+    </ol>
+
+    <h3>5.4 Student Pricing (Recommended Retail)</h3>
+    <p>You can set your own student pricing. We recommend:</p>
+    <table>
+      <tr><th>Duration</th><th>Recommended Price</th></tr>
+      <tr><td>30 days</td><td>Rp 150,000 - 200,000</td></tr>
+      <tr><td>90 days</td><td>Rp 400,000 - 500,000</td></tr>
+      <tr><td>180 days</td><td>Rp 750,000 - 900,000</td></tr>
+    </table>
+    <p>You keep the difference between student payment and EduBot's per-student fee!</p>
+
+    <div class="tip-box">
+      <h4>💡 Revenue Example</h4>
+      <p>If you have 20 students paying Rp 150k/month = Rp 3,000,000 revenue. EduBot fee = Rp 1,000,000. Your profit = Rp 2,000,000/month!</p>
+    </div>
+
+    <div class="page-break"></div>
+
+    <!-- Daily Commands -->
+    <h2 id="daily-commands">6. Daily Commands 📋</h2>
+    
+    <p>Make these commands part of your daily routine:</p>
+
+    <h3>6.1 Essential Teacher Commands</h3>
+    <table>
+      <tr><th>Command</th><th>Description</th></tr>
+      <tr><td><span class="command">/admin</span></td><td>Open admin dashboard</td></tr>
+      <tr><td><span class="command">/stats</span></td><td>View system statistics</td></tr>
+      <tr><td><span class="command">/broadcast MSG</span></td><td>Send message to all students</td></tr>
+      <tr><td><span class="command">/pendingpayments</span></td><td>Check pending student activations</td></tr>
+      <tr><td><span class="command">/settings</span></td><td>Configure your profile</td></tr>
+    </table>
+
+    <h3>6.2 Your Daily Routine</h3>
+    <div class="highlight">
+      <p><strong>🌅 Morning Check (8 AM WIB)</strong></p>
+      <p>1. Check <span class="command">/stats</span> for yesterday's class activity</p>
+      <p>2. Review leaderboard changes</p>
+      <p>3. Identify students needing attention</p>
+    </div>
+    <div class="highlight">
+      <p><strong>🌙 Evening Follow-up (6 PM WIB)</strong></p>
+      <p>1. Use <span class="command">/broadcast</span> for announcements</p>
+      <p>2. Send encouragement to inactive students</p>
+      <p>3. Share study tips</p>
+    </div>
+
+    <h3>6.3 Broadcast Message Ideas</h3>
+    <p>Keep students engaged with regular messages:</p>
+    <ul>
+      <li>"📚 Jangan lupa latihan hari ini! Kalian bisa mulai dengan /today"</li>
+      <li>"🏆 Leaderboard minggu ini sudah diupdate! Siapa yang mau naik rank?"</li>
+      <li>"💡 Tip: Fokus ke Reading hari ini ya. Gunakan strategi skim reading!"</li>
+      <li>"🎯 Ayo diskusi di grup! Pertanyaan: Apa topik paling sulit untuk kalian?"</li>
+    </ul>
+
+    <div class="page-break"></div>
+
+    <!-- Best Practices -->
+    <h2 id="tips">7. Best Practices 🎯</h2>
+    
+    <h3>7.1 Growing Your Class</h3>
+    <div class="highlight success">
+      <p><strong>Start with your existing network:</strong></p>
+      <p>✅ Current students who need TOEFL/IELTS prep</p>
+      <p>✅ Alumni who are planning to study abroad</p>
+      <p>✅ WhatsApp groups you're already in</p>
+      <p>✅ Social media followers interested in English</p>
+    </div>
+
+    <h3>7.2 Student Retention Tips</h3>
+    <ul>
+      <li><strong>Personal touch:</strong> Send birthday wishes, celebrate milestones</li>
+      <li><strong>Healthy competition:</strong> Weekly prizes for top performers</li>
+      <li><strong>Clear goals:</strong> Help students set target band scores</li>
+      <li><strong>Regular check-ins:</strong> Use /broadcast to stay connected</li>
+      <li><strong>Quick support:</strong> Respond to questions within hours</li>
+    </ul>
+
+    <h3>7.3 Handling Free Riders</h3>
+    <p>Students who join but don't practice:</p>
+    <ol>
+      <li>Send encouraging broadcast message</li>
+      <li>Direct message them personally</li>
+      <li>If still no activity after 1 week, consider removing from class</li>
+    </ol>
+
+    <h3>7.4 Scaling Your Business</h3>
+    <p>Want to grow beyond 50 students?</p>
+    <ul>
+      <li>Create multiple class batches</li>
+      <li>Hire a teaching assistant to help monitor</li>
+      <li>Use automated broadcasts for engagement</li>
+      <li>Contact us for enterprise pricing</li>
+    </ul>
+
+    <div class="page-break"></div>
+
+    <!-- FAQ -->
+    <h2 id="faq">8. Frequently Asked Questions ❓</h2>
+
+    <h3>Q: How many students can I have per class?</h3>
+    <p>A: Standard plan allows up to 50 students per class. Contact us for higher limits.</p>
+
+    <h3>Q: Can I use EduBot alongside my existing teaching methods?</h3>
+    <p>A: Absolutely! EduBot is a supplement, not a replacement. Use it for homework, self-practice, and daily quizzes while you focus on live sessions.</p>
+
+    <h3>Q: How do students pay?</h3>
+    <p>A: Students can pay via Telegram Stars or GoPay transfer. You can also collect payments manually and activate their accounts via the admin dashboard.</p>
+
+    <h3>Q: Can I create custom content for my class?</h3>
+    <p>A: Yes! Contact admin to submit custom questions or drills. Premium teachers get priority review.</p>
+
+    <h3>Q: What if a student wants a refund?</h3>
+    <p>A: Handle refunds between you and the student directly. EduBot's payment system is separate from your student management.</p>
+
+    <h3>Q: How do I track my revenue?</h3>
+    <p>A: Use the /stats command to see your student count and billing information.</p>
+
+    <h3>Q: Can I offer a free trial to prospects?</h3>
+    <p>A: Yes! Direct them to @osee_IBT_IELTS_tutor_bot for the standard 1-day free trial.</p>
+
+    <div class="page-break"></div>
+
+    <!-- Support -->
+    <h2 id="support">9. Support & Contact 📞</h2>
+
+    <h3>Need Help?</h3>
+    <p>We're here for you!</p>
+    <ul>
+      <li>📱 <strong>WhatsApp:</strong> wa.me/628112467784</li>
+      <li>💬 <strong>Telegram:</strong> @oseeadmin</li>
+      <li>🌐 <strong>Website:</strong> osee.co.id</li>
+    </ul>
+
+    <h3>Quick Troubleshooting</h3>
+    <div class="highlight">
+      <p><strong>Student can't join class?</strong></p>
+      <p>→ Verify the invite code is correct and not expired</p>
+    </div>
+    <div class="highlight">
+      <p><strong>Dashboard not loading?</strong></p>
+      <p>→ Try opening in a different browser or clearing cache</p>
+    </div>
+    <div class="highlight">
+      <p><strong>Student payment not activating?</strong></p>
+      <p>→ Use /pendingpayments to check and manually confirm</p>
+    </div>
+
+    <div class="footer">
+      <p>© 2025 EduBot | osee.co.id</p>
+      <p>AI-Powered TOEFL & IELTS Preparation for Indonesian Students</p>
+    </div>
+  </div>
+</body>
+</html>

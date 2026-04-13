@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTestStore } from '../stores/test';
 import { authedFetch } from '../api/authedFetch';
+import { startOfflineSyncService, stopOfflineSyncService, syncPendingAnswers } from '../utils/offline-sync';
 import Timer from '../components/Timer';
 import AudioRecorder from '../components/AudioRecorder';
 
@@ -12,7 +13,7 @@ function stripHtml(str: string): string {
   return str.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
 }
 
-const AudioWithError = ({ src, className }: { src: string; className?: string }) => {
+const AudioWithError = ({ src, className, onPlay }: { src: string; className?: string; onPlay?: () => void }) => {
   const [err, setErr] = useState(false);
   if (!src) return null;
   if (err) {
@@ -28,6 +29,7 @@ const AudioWithError = ({ src, className }: { src: string; className?: string })
       src={src}
       className={className}
       onError={() => setErr(true)}
+      onPlay={onPlay}
     />
   );
 };
@@ -38,6 +40,8 @@ export default function TestRunner() {
   const {
     sections, currentSection, currentQuestionIndex,
     setCurrentSection, setQuestionIndex, saveAnswer, answers,
+    prefetchedQuestions, isPrefetchingQuestions, prefetchQuestions,
+    networkAvailable, setNetworkAvailable,
   } = useTestStore();
 
   const [questions, setQuestions] = useState<any[]>([]);
@@ -49,22 +53,25 @@ export default function TestRunner() {
   const [speakingResult, setSpeakingResult] = useState<any>(null);
   const [speakingLoading, setSpeakingLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitRetries, setSubmitRetries] = useState(0);
   const [transitioning, setTransitioning] = useState(false);
   const [showExplanation, setShowExplanation] = useState(false);
   const [currentExplanation, setCurrentExplanation] = useState('');
   const [audioLoadError, setAudioLoadError] = useState(false);
+  const [audioPlayed, setAudioPlayed] = useState(false);
   const [questionsLoading, setQuestionsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<number | null>(null);
+  const [offlineMode, setOfflineMode] = useState(false);
   const questionStartTimeRef = useRef<number>(Date.now());
 
   const currentQuestion = questions[currentQuestionIndex];
   const currentSectionInfo = sections.find((s) => s.id === currentSection);
 
-  // Load questions for current section from stored test data
+  // Load questions for current section from prefetched cache or API
   useEffect(() => {
     const stored = useTestStore.getState();
     if (stored.attemptId && currentSection) {
-      // Questions were stored when test was started
       loadSectionQuestions();
     }
   }, [currentSection]);
@@ -72,28 +79,58 @@ export default function TestRunner() {
   async function loadSectionQuestions() {
     setQuestionsLoading(true);
     try {
-      const qType = useTestStore.getState().questionType;
-      const url = `/api/tests/questions/${currentSection}?limit=10${qType ? '&question_type=' + qType : ''}`;
-      const response = await authedFetch(url);
-      if (response.ok) {
-        const data = await response.json();
+      const state = useTestStore.getState();
+      const qType = state.questionType;
+
+      // Check if we have prefetched questions for this section
+      const cachedQuestions = currentSection ? prefetchedQuestions[currentSection] : null;
+      if (cachedQuestions && cachedQuestions.length > 0) {
+        console.log('[EduBot] Loading from prefetched cache:', currentSection, cachedQuestions.length, 'questions');
         const allQuestions: any[] = [];
 
-        for (const q of data.questions) {
+        for (const q of cachedQuestions) {
           const mapped = mapQuestion(q);
           if (mapped?._grouped) {
-            // Flatten grouped listening: passage + questions
             allQuestions.push(...mapped.items);
           } else if (mapped) {
             allQuestions.push(mapped);
           }
         }
 
+        console.log('[EduBot] Mapped to', allQuestions.length, 'display questions');
         setQuestions(allQuestions.length > 0 ? allQuestions : getFallbackQuestions());
+        setOfflineMode(true);
+        setQuestionsLoading(false);
+        return;
+      }
+
+      // Fallback: fetch from API
+      const url = `/api/tests/questions/${currentSection}?limit=10${qType ? '&question_type=' + qType : ''}`;
+      console.log('[EduBot] Loading questions from API:', url);
+      const response = await authedFetch(url);
+      if (response.ok) {
+        const data = await response.json();
+        console.log('[EduBot] Loaded', data.questions?.length || 0, 'raw questions for', currentSection);
+        const allQuestions: any[] = [];
+
+        for (const q of data.questions) {
+          const mapped = mapQuestion(q);
+          if (mapped?._grouped) {
+            allQuestions.push(...mapped.items);
+          } else if (mapped) {
+            allQuestions.push(mapped);
+          }
+        }
+
+        console.log('[EduBot] Mapped to', allQuestions.length, 'display questions');
+        setQuestions(allQuestions.length > 0 ? allQuestions : getFallbackQuestions());
+        setOfflineMode(false);
       } else {
+        console.error('[EduBot] Questions endpoint failed:', response.status);
         setQuestions(getFallbackQuestions());
       }
-    } catch {
+    } catch (e) {
+      console.error('[EduBot] loadSectionQuestions error:', e);
       setQuestions(getFallbackQuestions());
     } finally {
       setQuestionsLoading(false);
@@ -198,18 +235,21 @@ export default function TestRunner() {
 
       const items: any[] = [];
 
-      // First item: listen to the passage
-      items.push({
-        id: q.id,
-        type: 'listening_passage',
-        instruction: stripHtml(c.direction || 'Listen to the audio.'),
-        passage: passageScript,
-        audio_url: ttsUrl,
-        group_name: stripHtml(c.group_name || ''),
-      });
+      // Only show listening_passage step if there's actual audio or text to show
+      if (ttsUrl || passageScript.length > 10) {
+        items.push({
+          id: q.id,
+          type: 'listening_passage',
+          instruction: stripHtml(c.direction || 'Listen to the audio.'),
+          passage: passageScript,
+          audio_url: ttsUrl,
+          group_name: stripHtml(c.group_name || ''),
+        });
+      }
 
       // Then each question
-      for (const sq of c.questions) {
+      for (let i = 0; i < c.questions.length; i++) {
+        const sq = c.questions[i];
         const opts = (sq.options || []).map((o: any) => `${o.key}. ${stripHtml(o.text || '')}`);
 
         // Some questions have their own audio (e.g., per-question scripts)
@@ -219,10 +259,16 @@ export default function TestRunner() {
           qAudioUrl = `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(qScript.substring(0, 2000))}`;
         }
 
+        // Per-question image (e.g., TOEIC Part 1 photographs)
+        const qImageUrl = sq.image_url
+          ? (sq.image_url.startsWith('http') ? sq.image_url : `${API_URL}${sq.image_url}`)
+          : null;
+
         // Determine if it's fill-in-blank (no options) or multiple choice
         if (opts.length >= 2) {
           items.push({
             id: q.id,
+            _subIndex: i,
             type: 'listening',
             instruction: '',
             question: stripHtml(sq.question_text || ''),
@@ -230,17 +276,20 @@ export default function TestRunner() {
             correct: (sq.answers?.[0] || '').toUpperCase(),
             explanation: stripHtml(sq.explanation || ''),
             audio_url: qAudioUrl,
+            image_url: qImageUrl,
           });
         } else {
           // Fill-in-blank listening (e.g., IELTS Section 1 note completion)
           items.push({
             id: q.id,
+            _subIndex: i,
             type: 'fill_blank',
             instruction: stripHtml(c.direction || 'Complete the notes.'),
             question: stripHtml(sq.question_text || ''),
             correct: sq.answers?.[0] || '',
             explanation: stripHtml(sq.explanation || ''),
             audio_url: qAudioUrl,
+            image_url: qImageUrl,
           });
         }
       }
@@ -253,10 +302,12 @@ export default function TestRunner() {
     if (c.type === 'grouped_reading' && c.questions?.length > 0 && !['reading_passage', 'error_identification'].includes(type)) {
       const passage = stripHtml(c.passage || '');
       const items: any[] = [];
-      for (const sq of c.questions) {
+      for (let i = 0; i < c.questions.length; i++) {
+        const sq = c.questions[i];
         const opts = (sq.options || []).map((o: any) => `${o.key}. ${stripHtml(o.text || '')}`);
         items.push({
           id: q.id,
+          _subIndex: i,
           type: 'multiple_choice',
           passage,
           question: stripHtml(sq.question_text || ''),
@@ -292,10 +343,12 @@ export default function TestRunner() {
       if (c.type === 'grouped_reading' && c.questions?.length > 0) {
         const passage = stripHtml(c.passage || '');
         const items: any[] = [];
-        for (const sq of c.questions) {
+        for (let i = 0; i < c.questions.length; i++) {
+          const sq = c.questions[i];
           const opts = (sq.options || []).map((o: any) => `${o.key}. ${stripHtml(o.text || '')}`);
           items.push({
             id: q.id,
+            _subIndex: i,
             type: 'multiple_choice',
             passage,
             question: stripHtml(sq.question_text || ''),
@@ -322,10 +375,12 @@ export default function TestRunner() {
       // Grouped error identification — flatten into individual questions
       if (c.type === 'grouped_reading' && c.questions?.length > 0) {
         const items: any[] = [];
-        for (const sq of c.questions) {
+        for (let i = 0; i < c.questions.length; i++) {
+          const sq = c.questions[i];
           const opts = (sq.options || []).map((o: any) => ({ key: o.key, text: stripHtml(o.text || '') }));
           items.push({
             id: q.id,
+            _subIndex: i,
             type: 'error_identification',
             instruction: stripHtml(c.direction || 'Find the error in this sentence.'),
             sentence: stripHtml(sq.question_text || ''),
@@ -382,18 +437,21 @@ export default function TestRunner() {
 
         const items: any[] = [];
 
-        // First item: listen to the passage
-        items.push({
-          id: q.id,
-          type: 'listening_passage',
-          instruction: stripHtml(c.direction || 'Listen to the audio.'),
-          passage: passageScript,
-          audio_url: ttsUrl,
-          group_name: stripHtml(c.group_name || ''),
-        });
+        // Only show listening_passage step if there's actual audio or text
+        if (ttsUrl || passageScript.length > 10) {
+          items.push({
+            id: q.id,
+            type: 'listening_passage',
+            instruction: stripHtml(c.direction || 'Listen to the audio.'),
+            passage: passageScript,
+            audio_url: ttsUrl,
+            group_name: stripHtml(c.group_name || ''),
+          });
+        }
 
         // Then each question
-        for (const sq of c.questions) {
+        for (let i = 0; i < c.questions.length; i++) {
+          const sq = c.questions[i];
           const opts = (sq.options || []).map((o: any) => `${o.key}. ${stripHtml(o.text || '')}`);
           let qAudioUrl = null;
           const qScript = stripHtml(sq.script || '');
@@ -401,8 +459,13 @@ export default function TestRunner() {
             qAudioUrl = `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(qScript.substring(0, 2000))}`;
           }
 
+          const qImageUrl = sq.image_url
+            ? (sq.image_url.startsWith('http') ? sq.image_url : `${API_URL}${sq.image_url}`)
+            : null;
+
           items.push({
             id: q.id,
+            _subIndex: i,
             type: 'listening',
             instruction: '',
             question: stripHtml(sq.question_text || ''),
@@ -410,6 +473,7 @@ export default function TestRunner() {
             correct: (sq.answers?.[0] || '').toUpperCase(),
             explanation: stripHtml(sq.explanation || ''),
             audio_url: qAudioUrl,
+            image_url: qImageUrl,
           });
         }
 
@@ -445,7 +509,8 @@ export default function TestRunner() {
       if (c.type === 'grouped_speaking' && c.questions?.length > 0) {
         const items: any[] = [];
 
-        for (const sq of c.questions) {
+        for (let i = 0; i < c.questions.length; i++) {
+          const sq = c.questions[i];
           const script = stripHtml(sq.script || '');
           const ttsUrl = script.length > 3
             ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(script.substring(0, 2000))}`
@@ -454,6 +519,7 @@ export default function TestRunner() {
           if (type === 'listen_and_repeat') {
             items.push({
               id: q.id,
+              _subIndex: i,
               type: 'listen_and_repeat',
               instruction: stripHtml(c.direction || 'Listen and repeat the sentence.'),
               prompt: script,
@@ -463,6 +529,7 @@ export default function TestRunner() {
           } else {
             items.push({
               id: q.id,
+              _subIndex: i,
               type: 'take_interview',
               instruction: stripHtml(c.direction || 'Answer the question naturally.'),
               prompt: script,
@@ -492,7 +559,8 @@ export default function TestRunner() {
       // Grouped writing
       if (c.type === 'grouped_writing' && c.questions?.length > 0) {
         const items: any[] = [];
-        for (const sq of c.questions) {
+        for (let i = 0; i < c.questions.length; i++) {
+          const sq = c.questions[i];
           if (type === 'build_sentence') {
             // Extract words from options
             const opts = (sq.options || []);
@@ -507,6 +575,7 @@ export default function TestRunner() {
 
             items.push({
               id: q.id,
+              _subIndex: i,
               type: 'build_sentence',
               instruction: stripHtml(c.direction || 'Susun kata menjadi kalimat yang tepat.'),
               passage: passage.replace(/\{\{[^}]+\}\}/g, '____'),  // Show blanks
@@ -519,6 +588,7 @@ export default function TestRunner() {
             const questionText = stripHtml(sq.question_text || 'Summarize the main points made in the passage.');
             items.push({
               id: q.id,
+              _subIndex: i,
               type: 'write_academic_discussion',
               instruction: stripHtml(c.direction || 'Read the passage below. Then write a response that summarizes the main points. Your response should be between 150 and 225 words.'),
               prompt: questionText,
@@ -539,6 +609,7 @@ export default function TestRunner() {
               : null;
             items.push({
               id: q.id,
+              _subIndex: i,
               type: 'write_email',
               instruction: stripHtml(c.direction || 'Write an email.'),
               prompt: prompt || 'Write an email response.',
@@ -559,6 +630,7 @@ export default function TestRunner() {
               : null;
             items.push({
               id: q.id,
+              _subIndex: i,
               type: 'write_academic_discussion',
               instruction: stripHtml(c.direction || 'Write your response.'),
               prompt: prompt || 'Write a contribution to the discussion.',
@@ -622,6 +694,29 @@ export default function TestRunner() {
 
     // IELTS Matching headings / Matching information / Matching features
     if (['matching_headings', 'matching_information', 'matching_features', 'matching'].includes(type)) {
+      // Grouped matching — flatten into individual match questions
+      if (c.type === 'grouped_reading' && c.questions?.length > 0) {
+        const items: any[] = [];
+        for (let i = 0; i < c.questions.length; i++) {
+          const sq = c.questions[i];
+          items.push({
+            id: q.id,
+            _subIndex: i,
+            type: 'matching',
+            instruction: stripHtml(c.direction || 'Match each item to its correct match.'),
+            passage: c.passage_text || c.passage || '',
+            question: stripHtml(sq.question_text || ''),
+            options: (sq.options || c.options || []).map((o: any) => ({
+              key: o.key || o,
+              text: o.text || o,
+            })),
+            correct: (sq.answers?.[0] || '').toUpperCase(),
+            explanation: stripHtml(sq.explanation || ''),
+          });
+        }
+        return { _grouped: true, items };
+      }
+
       return {
         id: q.id,
         type: 'matching',
@@ -664,35 +759,48 @@ export default function TestRunner() {
 
     // IELTS Writing Task 1 (graphs/charts) — premium only
     if (type === 'task1') {
-      const contexts = (c.illustrated_passages || []).map((ip: any) => ({
+      // Unpack grouped_writing if needed — data may be nested in questions[0]
+      const sq = (c.type === 'grouped_writing' && c.questions?.length > 0) ? c.questions[0] : c;
+      const contexts = (sq.illustrated_passages || c.illustrated_passages || []).map((ip: any) => ({
         text: stripHtml(ip.text || ''),
         label: stripHtml(ip.label || ''),
         image_url: ip.image_url || null,
       }));
+      // Chart/graph image for IELTS Task 1 (top-level or nested)
+      const chartImage = sq.image_url || c.image_url || null;
+      const chartImageUrl = chartImage
+        ? (chartImage.startsWith('http') ? chartImage : `${API_URL}${chartImage}`)
+        : null;
       return {
         id: q.id,
         type: 'write_email',
-        instruction: stripHtml(c.direction || 'Describe the chart in at least 150 words.'),
-        passage: c.passage_text || '',
+        instruction: stripHtml(c.direction || sq.direction || 'Describe the chart in at least 150 words.'),
+        passage: sq.passage_text || sq.passage || c.passage_text || '',
         contexts,
-        prompt: c.question_text || 'Describe the chart below.',
+        prompt: sq.question_text || c.question_text || 'Describe the chart below.',
         time_limit: 600,
-        model_answer: stripHtml(c.model_answer || ''),
+        model_answer: stripHtml(sq.model_answer || c.model_answer || ''),
         premium_only: true,
+        image_url: chartImageUrl,
       };
     }
 
     // IELTS Writing Task 2 (essay)
     if (type === 'task2') {
+      // Unpack grouped_writing if needed — data may be nested in questions[0]
+      const sq = (c.type === 'grouped_writing' && c.questions?.length > 0) ? c.questions[0] : c;
       return {
         id: q.id,
         type: 'write_academic_discussion',
-        instruction: stripHtml(c.direction || 'Write an essay of at least 250 words addressing the topic below.'),
-        passage: c.passage_text || '',
-        prompt: c.question_text || '',
-        contexts: [],
+        instruction: stripHtml(c.direction || sq.direction || 'Write an essay of at least 250 words addressing the topic below.'),
+        passage: sq.passage_text || sq.passage || c.passage_text || '',
+        prompt: sq.question_text || c.question_text || '',
+        contexts: (sq.illustrated_passages || []).map((ip: any) => ({
+          text: stripHtml(ip.text || ''),
+          label: stripHtml(ip.label || ''),
+        })),
         time_limit: 1200,
-        model_answer: stripHtml(c.model_answer || ''),
+        model_answer: stripHtml(sq.model_answer || c.model_answer || ''),
         premium_only: true,
       };
     }
@@ -802,13 +910,32 @@ export default function TestRunner() {
   }
 
   function getFallbackQuestions() {
-    return [{
-      type: 'multiple_choice',
-      passage: 'The development of writing systems represents one of humanity\'s greatest achievements.',
-      question: 'What does the passage discuss?',
-      options: ['A. Writing systems', 'B. Mathematics', 'C. Agriculture', 'D. Art'],
-      correct: 'A',
-    }];
+    return [
+      {
+        id: 'fallback-1',
+        type: 'multiple_choice',
+        passage: 'The development of writing systems represents one of humanity\'s greatest achievements.',
+        question: 'What does the passage discuss?',
+        options: ['A. Writing systems', 'B. Mathematics', 'C. Agriculture', 'D. Art'],
+        correct: 'A',
+      },
+      {
+        id: 'fallback-2',
+        type: 'multiple_choice',
+        passage: 'Learning a new language opens doors to different cultures and opportunities.',
+        question: 'What is the main idea of the passage?',
+        options: ['A. Languages are difficult', 'B. Learning opens opportunities', 'C. Travel is necessary', 'D. Speaking is hard'],
+        correct: 'B',
+      },
+      {
+        id: 'fallback-3',
+        type: 'multiple_choice',
+        passage: 'Technology changes constantly, reshaping the way we communicate and work.',
+        question: 'What does the text say about technology?',
+        options: ['A. It never changes', 'B. It is static', 'C. It changes constantly', 'D. It is outdated'],
+        correct: 'C',
+      },
+    ];
   }
 
   useEffect(() => {
@@ -825,12 +952,28 @@ export default function TestRunner() {
     setSpeakingResult(null);
     setSpeakingLoading(false);
     setSubmitting(false);
+    setAudioPlayed(false);
     questionStartTimeRef.current = Date.now();
   }, [currentQuestionIndex, currentSection]);
 
-  // Start session on mount
+  // Monitor network status, prefetch, and start sync service on mount
   useEffect(() => {
     let activeSessionId: number | null = null;
+
+    // Network monitoring
+    const handleOnline = () => {
+      setNetworkAvailable(true);
+      console.log('[EduBot] Network is online');
+    };
+    const handleOffline = () => {
+      setNetworkAvailable(false);
+      console.log('[EduBot] Network is offline');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Start session, prefetch questions, and start sync service
     (async () => {
       try {
         const res = await authedFetch('/api/analytics/session/start', {
@@ -844,8 +987,22 @@ export default function TestRunner() {
           setSessionId(data.session_id);
         }
       } catch {}
+
+      // Prefetch all questions for offline-first mode
+      if (attemptId) {
+        const success = await prefetchQuestions(parseInt(attemptId));
+        console.log('[EduBot] Question prefetch:', success ? 'success' : 'failed');
+      }
+
+      // Start background sync service
+      startOfflineSyncService();
     })();
+
     return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      stopOfflineSyncService();
+
       if (activeSessionId) {
         authedFetch('/api/analytics/session/end', {
           method: 'POST',
@@ -854,7 +1011,7 @@ export default function TestRunner() {
         }).catch(() => {});
       }
     };
-  }, []);
+  }, [attemptId, prefetchQuestions]);
 
   // Track message on each question load
   useEffect(() => {
@@ -880,6 +1037,12 @@ export default function TestRunner() {
 
     // Listening passage — just advance, no answer to save
     if (currentQuestion.type === 'listening_passage') {
+      if (currentQuestion.audio_url && !audioPlayed) {
+        setSubmitError('Dengarkan audio terlebih dahulu sebelum melanjutkan.');
+        setSubmitting(false);
+        return;
+      }
+      setSubmitError(null);
       if (currentQuestionIndex + 1 < questions.length) {
         advanceWithTransition(() => setQuestionIndex(currentQuestionIndex + 1));
       }
@@ -894,7 +1057,15 @@ export default function TestRunner() {
     } else if (currentQuestion.type === 'build_sentence') {
       answerData = { text: sentenceOrder.join(' ') };
     } else if (currentQuestion.type === 'complete_the_words') {
-      answerData = { blanks: blankInputs, correct: currentQuestion.answers };
+      const allCorrect = currentQuestion.blanks?.every((ans: string, i: number) =>
+        (blankInputs[i] || '').trim().toLowerCase() === ans.trim().toLowerCase()
+      ) || false;
+      answerData = {
+        blanks: blankInputs,
+        correct: currentQuestion.answers,
+        selected: allCorrect ? 'correct' : 'incorrect',
+        correct_answer: 'correct',
+      };
     } else if (currentQuestion.type === 'fill_blank') {
       answerData = { text: writingText };
     }
@@ -903,29 +1074,62 @@ export default function TestRunner() {
 
     const timeSpentSeconds = Math.round((Date.now() - questionStartTimeRef.current) / 1000);
 
-    try {
-      const response = await authedFetch(`/api/tests/attempt/${attemptId}/answer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          section: currentSection,
-          question_index: currentQuestionIndex,
-          content_id: currentQuestion?.id || null,
-          answer_data: answerData,
-          time_spent_seconds: timeSpentSeconds,
-        }),
-      });
+    let saved = false;
+    for (let retry = 0; retry < 3; retry++) {
+      try {
+        const response = await authedFetch(`/api/tests/attempt/${attemptId}/answer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            section: currentSection,
+            question_index: currentQuestionIndex,
+            content_id: currentQuestion?.id || null,
+            sub_question_index: currentQuestion?._subIndex ?? null,
+            answer_data: answerData,
+            time_spent_seconds: timeSpentSeconds,
+          }),
+        });
 
-      if (!response.ok) {
-        const data = await response.json();
+        if (response.ok) {
+          saved = true;
+          setSubmitError(null);
+          setSubmitRetries(0);
+          break;
+        }
+
+        const data = await response.json().catch(() => ({}));
         if (data.code === 'LIMIT_REACHED') {
           navigate('/test?limit_reached=1');
           return;
         }
-        console.error('Answer submission failed:', response.status);
+
+        // Show error but allow retry (only on first/second attempt)
+        if (retry < 2) {
+          await new Promise(r => setTimeout(r, 1000 + retry * 500)); // exponential backoff
+          continue;
+        }
+      } catch (err) {
+        if (retry < 2) {
+          await new Promise(r => setTimeout(r, 1000 + retry * 500));
+          continue;
+        }
       }
-    } catch (err) {
-      console.error('Answer submission error:', err);
+    }
+
+    if (!saved) {
+      setSubmitError('Jawaban disimpan secara lokal. Akan disinkronkan saat online.');
+      setSubmitRetries(prev => prev + 1);
+      setSubmitting(false);
+
+      // Allow advancing even if sync failed — we have local cache
+      if (submitRetries >= 2) {
+        // After 3 consecutive failures, allow proceeding but track pending answers
+        console.log('[EduBot] Queuing answer for later sync');
+        setTimeout(() => {
+          advanceToNext();
+        }, 500);
+      }
+      return;
     }
 
     // Types that have a definite correct answer and should show explanation
@@ -961,6 +1165,12 @@ export default function TestRunner() {
   }, [selectedAnswer, writingText, sentenceOrder, currentSection, currentQuestionIndex, questions, submitting, currentQuestion]);
 
   async function handleFinish() {
+    // First, try to sync all pending answers if network is available
+    if (networkAvailable && attemptId) {
+      console.log('[EduBot] Syncing pending answers before finish...');
+      await syncPendingAnswers(parseInt(attemptId));
+    }
+
     // Retry up to 3 times to ensure the backend marks the test as completed
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -1022,6 +1232,7 @@ export default function TestRunner() {
               section: currentSection,
               question_index: currentQuestionIndex,
               content_id: currentQuestion?.id || null,
+              sub_question_index: currentQuestion?._subIndex ?? null,
               answer_data: { audio: true, transcription: result.transcription, score: result.score },
             }),
           });
@@ -1080,6 +1291,12 @@ export default function TestRunner() {
             <span className="text-sm text-tg-hint ml-2">
               Q{currentQuestionIndex + 1}/{questions.length}
             </span>
+            {!networkAvailable && (
+              <span className="text-xs text-orange-500 ml-2">📴 Offline</span>
+            )}
+            {offlineMode && (
+              <span className="text-xs text-blue-500 ml-2">💾 Cached</span>
+            )}
           </div>
           <Timer initialSeconds={sectionTimeSeconds} onExpire={handleSectionExpire} />
         </div>
@@ -1115,7 +1332,7 @@ export default function TestRunner() {
                 {currentQuestion.passage && currentQuestion.passage.length > 4000 && (
                   <p className="text-xs text-orange-500 mb-2">⚠️ Audio panjang — bagian akhir mungkin terpotong</p>
                 )}
-                <AudioWithError src={currentQuestion.audio_url} className="w-full" />
+                <AudioWithError src={currentQuestion.audio_url} className="w-full" onPlay={() => setAudioPlayed(true)} />
               </div>
             ) : (
               <div className="bg-tg-secondary rounded-xl p-4 mb-4">
@@ -1142,13 +1359,25 @@ export default function TestRunner() {
             {currentQuestion.instruction && (
               <p className="text-sm text-tg-hint mb-3">{currentQuestion.instruction}</p>
             )}
-            {currentQuestion.audio_url && (
+            {/* Photograph image (TOEIC Part 1) */}
+            {currentQuestion.image_url && (
+              <div className="mb-4">
+                <img src={currentQuestion.image_url} alt="Question photograph" className="w-full rounded-lg border border-tg-secondary" />
+              </div>
+            )}
+            {currentQuestion.audio_url ? (
               <div className="bg-tg-secondary rounded-xl p-4 mb-4">
                 <p className="text-sm font-medium mb-2">🎧 Dengarkan:</p>
                 <AudioWithError src={currentQuestion.audio_url} className="w-full" />
               </div>
+            ) : (
+              !currentQuestion.question || currentQuestion.question === '(Listen to the audio)' ? (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-3 mb-4 text-sm text-yellow-800">
+                  📝 Audio belum tersedia untuk soal ini. Jawab berdasarkan pilihan yang ada.
+                </div>
+              ) : null
             )}
-            {currentQuestion.question && (
+            {currentQuestion.question && currentQuestion.question !== '(Listen to the audio)' && (
               <p className="font-medium mb-4">{currentQuestion.question}</p>
             )}
           </>
@@ -1318,6 +1547,11 @@ export default function TestRunner() {
                     maxLength={(answer || '').length + 5}
                   />
                   <span className="text-xs text-tg-hint">{answer.length} huruf</span>
+                  {blankInputs[i] && blankInputs[i].length >= answer.length && (
+                    <span className={`text-sm ${blankInputs[i].trim().toLowerCase() === answer.trim().toLowerCase() ? 'text-green-500' : 'text-red-400'}`}>
+                      {blankInputs[i].trim().toLowerCase() === answer.trim().toLowerCase() ? '✓' : '✗'}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -1372,6 +1606,13 @@ export default function TestRunner() {
               <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-3 mb-3 border border-blue-100">
                 <p className="text-xs text-blue-600 font-medium mb-2">🔊 Listen to the instructions:</p>
                 <AudioWithError src={currentQuestion.audio_url} className="w-full" />
+              </div>
+            )}
+
+            {/* Chart/graph image for IELTS Writing Task 1 */}
+            {currentQuestion.image_url && (
+              <div className="mb-4 rounded-xl overflow-hidden border border-gray-200 shadow-sm">
+                <img src={currentQuestion.image_url} alt="Chart or diagram" className="w-full" loading="eager" />
               </div>
             )}
 
@@ -1459,26 +1700,40 @@ export default function TestRunner() {
                 }
                 className="w-full h-52 p-4 rounded-xl border-2 border-tg-secondary bg-white resize-none focus:outline-none focus:border-tg-button transition-colors text-sm leading-relaxed" />
               {/* Word counter bar */}
-              <div className="flex items-center justify-between mt-2 px-1">
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                    writingText.split(/\s+/).filter(Boolean).length >= 100
-                      ? 'bg-green-100 text-green-700'
-                      : writingText.split(/\s+/).filter(Boolean).length >= 50
-                      ? 'bg-yellow-100 text-yellow-700'
-                      : 'bg-gray-100 text-gray-500'
-                  }`}>
-                    {writingText.split(/\s+/).filter(Boolean).length} words
-                  </span>
-                  {writingText.split(/\s+/).filter(Boolean).length >= 100 && (
-                    <span className="text-xs text-green-600">✓ Minimum reached</span>
-                  )}
-                </div>
-                <span className="text-xs text-tg-hint">
-                  {currentQuestion.type === 'write_email' ? 'Target: 150-200 words' :
-                   currentQuestion.type === 'write_academic_discussion' ? 'Min: 100 words' : ''}
-                </span>
-              </div>
+              {(() => {
+                const wordCount = writingText.split(/\s+/).filter(Boolean).length;
+                const target = currentQuestion.type === 'write_email' ? 175 : 100;
+                const max = currentQuestion.type === 'write_email' ? 225 : 300;
+                const progress = Math.min(100, (wordCount / target) * 100);
+                const isOver = wordCount > max;
+                return (
+                  <div className="mt-2 px-1">
+                    <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden mb-1.5">
+                      <div className={`h-full rounded-full transition-all ${isOver ? 'bg-red-400' : progress >= 100 ? 'bg-green-400' : progress >= 60 ? 'bg-yellow-400' : 'bg-gray-400'}`}
+                        style={{ width: `${Math.min(100, (wordCount / max) * 100)}%` }} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        isOver ? 'bg-red-100 text-red-700'
+                          : wordCount >= target ? 'bg-green-100 text-green-700'
+                          : wordCount >= target * 0.5 ? 'bg-yellow-100 text-yellow-700'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {wordCount} kata
+                        {wordCount >= target && !isOver && ' ✓'}
+                        {isOver && ' (terlalu panjang)'}
+                      </span>
+                      <span className="text-xs text-tg-hint">
+                        {currentQuestion.type === 'write_email'
+                          ? 'Target: 150-200 kata'
+                          : currentQuestion.type === 'write_academic_discussion'
+                          ? 'Min: 100 kata'
+                          : ''}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -1617,6 +1872,12 @@ export default function TestRunner() {
       {/* Footer */}
       {!['listen_and_repeat', 'take_interview'].includes(currentQuestion.type) && (
         <div className="sticky bottom-0 bg-tg-bg border-t border-tg-secondary p-4">
+          {submitError && (
+            <div className="bg-red-50 border border-red-300 rounded-xl p-3 mb-3 text-sm">
+              <p className="font-medium text-red-700">⚠️ {submitError}</p>
+              <p className="text-red-600 mt-1 text-xs">Tekan tombol di bawah untuk coba lagi.</p>
+            </div>
+          )}
           {showExplanation && currentExplanation && currentExplanation.trim().length > 5 && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3 text-sm">
               <p className="font-medium text-blue-700 mb-1">💡 Penjelasan:</p>
@@ -1624,8 +1885,8 @@ export default function TestRunner() {
             </div>
           )}
           <button onClick={handleSubmitAnswer} disabled={submitting || showExplanation}
-            className="w-full bg-tg-button text-tg-button-text py-3 rounded-xl font-medium disabled:opacity-50 active:scale-95 transition-transform">
-            {currentQuestion.type === 'listening_passage'
+            className={`w-full py-3 rounded-xl font-medium disabled:opacity-50 active:scale-95 transition-transform ${submitError ? 'bg-red-500 text-white' : 'bg-tg-button text-tg-button-text'}`}>
+            {submitting ? 'Menyimpan...' : submitError ? 'Coba Lagi' : currentQuestion.type === 'listening_passage'
               ? 'Lanjut ke Soal'
               : currentQuestionIndex + 1 === questions.length
                 ? sections.findIndex((s) => s.id === currentSection) + 1 === sections.length

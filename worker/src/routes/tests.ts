@@ -165,6 +165,55 @@ testRoutes.post('/start', async (c) => {
   }
 });
 
+testRoutes.get('/attempt/resume', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    // Find most recent in_progress attempt less than 4 hours old
+    const attempt = await c.env.DB.prepare(
+      `SELECT ta.*, COUNT(aa.id) as answer_count
+       FROM test_attempts ta
+       LEFT JOIN attempt_answers aa ON aa.attempt_id = ta.id
+       WHERE ta.user_id = ? AND ta.status = 'in_progress'
+       AND ta.started_at > datetime('now', '-4 hours')
+       GROUP BY ta.id
+       ORDER BY ta.started_at DESC LIMIT 1`
+    ).bind(user.id).first();
+
+    if (!attempt) return c.json({ has_active: false });
+
+    const config = TEST_CONFIGS[attempt.test_type as string];
+
+    // Get the last answered question index per section
+    const lastAnswers = await c.env.DB.prepare(
+      `SELECT section, MAX(question_index) as last_index
+       FROM attempt_answers WHERE attempt_id = ?
+       GROUP BY section`
+    ).bind(attempt.id).all();
+
+    const sectionProgress: Record<string, number> = {};
+    for (const row of lastAnswers.results || []) {
+      sectionProgress[(row as any).section] = ((row as any).last_index || 0) + 1;
+    }
+
+    return c.json({
+      has_active: true,
+      attempt_id: attempt.id,
+      test_type: attempt.test_type,
+      sections: config?.sections || [],
+      current_section: attempt.current_section,
+      current_question_index: attempt.current_question_index,
+      answers_submitted: attempt.answer_count || 0,
+      section_progress: sectionProgress,
+      started_at: attempt.started_at,
+      metadata: attempt.metadata ? JSON.parse(attempt.metadata as string) : null,
+    });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
 testRoutes.get('/attempt/:id', async (c) => {
   const attemptId = parseInt(c.req.param('id'));
   const attempt = await c.env.DB.prepare(
@@ -203,115 +252,120 @@ testRoutes.get('/attempt/:id', async (c) => {
 });
 
 testRoutes.post('/attempt/:id/answer', async (c) => {
-  const attemptId = parseInt(c.req.param('id'));
-  const attempt = await c.env.DB.prepare(
-    'SELECT * FROM test_attempts WHERE id = ?'
-  ).bind(attemptId).first();
+  try {
+    const attemptId = parseInt(c.req.param('id'));
+    const attempt = await c.env.DB.prepare(
+      'SELECT * FROM test_attempts WHERE id = ?'
+    ).bind(attemptId).first();
 
-  if (!attempt) return c.json({ error: 'Not found' }, 404);
+    if (!attempt) return c.json({ error: 'Not found' }, 404);
 
-  const { section, question_index, content_id, answer_data, time_spent_seconds = 0 } = await c.req.json();
+    const { section, question_index, content_id, answer_data, time_spent_seconds = 0 } = await c.req.json();
 
-  // Check if answer exists
-  const existing = await c.env.DB.prepare(
-    'SELECT id FROM attempt_answers WHERE attempt_id = ? AND section = ? AND question_index = ?'
-  ).bind(attemptId, section, question_index).first();
+    // Check if answer exists
+    const existing = await c.env.DB.prepare(
+      'SELECT id FROM attempt_answers WHERE attempt_id = ? AND section = ? AND question_index = ?'
+    ).bind(attemptId, section, question_index).first();
 
-  // Track quota for new answers (not updates)
-  const userId = (attempt.user_id as number) || 1;
-  if (!existing && userId > 1) {
-    const { trackQuestionAnswer } = await import('../services/premium');
-    const trackResult = await trackQuestionAnswer(c.env, userId);
-    if (!trackResult.success) {
-      return c.json({
-        error: trackResult.error,
-        code: 'LIMIT_REACHED',
-        remaining: 0,
-      }, 403);
-    }
-  }
-
-  let isCorrect: boolean | null = null;
-
-  // Score objective questions
-  if (answer_data?.selected && answer_data?.correct_answer) {
-    isCorrect = answer_data.selected.toLowerCase() === answer_data.correct_answer.toLowerCase();
-  }
-
-  if (existing) {
-    await c.env.DB.prepare(
-      'UPDATE attempt_answers SET answer_data = ?, is_correct = ?, submitted_at = ?, time_spent_seconds = ?, content_id = ? WHERE id = ?'
-    ).bind(JSON.stringify(answer_data), isCorrect !== null ? (isCorrect ? 1 : 0) : null, new Date().toISOString(), time_spent_seconds, content_id || null, existing.id).run();
-  } else {
-    await c.env.DB.prepare(
-      `INSERT INTO attempt_answers (attempt_id, section, question_index, content_id, answer_data, is_correct, score, time_spent_seconds)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      attemptId, section, question_index, content_id || null, JSON.stringify(answer_data),
-      isCorrect !== null ? (isCorrect ? 1 : 0) : null,
-      isCorrect !== null ? (isCorrect ? 1.0 : 0.0) : null,
-      time_spent_seconds,
-    ).run();
-  }
-
-  // Update position
-  await c.env.DB.prepare(
-    'UPDATE test_attempts SET current_question_index = ? WHERE id = ?'
-  ).bind(question_index + 1, attemptId).run();
-
-  // Analytics: track progress, skills, and streak only for new answers
-  if (!existing) {
-    try {
-      const { incrementDailyStudyLog, trackSkillProgress, updateStreak } = await import('../services/analytics');
-      await incrementDailyStudyLog(c.env, userId, 1, time_spent_seconds, isCorrect === true ? 1 : 0, 0, 0);
-      await updateStreak(c.env, userId);
-
-      // Track sub-skill progress
-      const skillMap: Record<string, string> = {
-        reading: 'reading_strategy',
-        listening: 'listening_strategy',
-        speaking: 'speaking_templates',
-        writing: 'writing_templates',
-        structure: 'grammar_structure',
-      };
-      const skill = skillMap[section] || section;
-      await trackSkillProgress(c.env, userId, skill, attempt.test_type as string, 1, isCorrect === true ? 1 : 0, time_spent_seconds);
-    } catch (e) { console.error('Analytics tracking error:', e); }
-
-    // Gamification: award XP
-    try {
-      const { addXP, incrementDailyUsage } = await import('../services/commercial');
-      await addXP(c.env, userId, isCorrect ? 15 : 10, isCorrect ? 'correct_answer' : 'answer');
-      await incrementDailyUsage(c.env, userId);
-    } catch (e) { console.error('XP tracking error:', e); }
-
-    // Spaced repetition: add wrong answers to review queue
-    if (isCorrect === false) {
-      try {
-        const { addToReview } = await import('../services/fsrs-engine');
-        await addToReview(
-          c.env, userId, section, '',
-          JSON.stringify(answer_data), answer_data.correct_answer || '', answer_data.selected || '',
-        );
-      } catch (e) { console.error('Spaced repetition error:', e); }
+    // Track quota for new answers (not updates)
+    const userId = (attempt.user_id as number) || 1;
+    if (!existing && userId > 1) {
+      const { trackQuestionAnswer } = await import('../services/premium');
+      const trackResult = await trackQuestionAnswer(c.env, userId);
+      if (!trackResult.success) {
+        return c.json({
+          error: trackResult.error,
+          code: 'LIMIT_REACHED',
+          remaining: 0,
+        }, 403);
+      }
     }
 
-    // Update skill score for this section
-    if (isCorrect !== null) {
+    let isCorrect: boolean | null = null;
+
+    // Score objective questions
+    if (answer_data?.selected && answer_data?.correct_answer) {
+      isCorrect = answer_data.selected.toLowerCase() === answer_data.correct_answer.toLowerCase();
+    }
+
+    if (existing) {
+      await c.env.DB.prepare(
+        'UPDATE attempt_answers SET answer_data = ?, is_correct = ?, submitted_at = ?, time_spent_seconds = ?, content_id = ? WHERE id = ?'
+      ).bind(JSON.stringify(answer_data), isCorrect !== null ? (isCorrect ? 1 : 0) : null, new Date().toISOString(), time_spent_seconds, content_id || null, existing.id).run();
+    } else {
+      await c.env.DB.prepare(
+        `INSERT INTO attempt_answers (attempt_id, section, question_index, content_id, answer_data, is_correct, score, time_spent_seconds)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        attemptId, section, question_index, content_id || null, JSON.stringify(answer_data),
+        isCorrect !== null ? (isCorrect ? 1 : 0) : null,
+        isCorrect !== null ? (isCorrect ? 1.0 : 0.0) : null,
+        time_spent_seconds,
+      ).run();
+    }
+
+    // Update position
+    await c.env.DB.prepare(
+      'UPDATE test_attempts SET current_question_index = ? WHERE id = ?'
+    ).bind(question_index + 1, attemptId).run();
+
+    // Analytics: track progress, skills, and streak only for new answers
+    if (!existing) {
       try {
-        const { updateSkillScore } = await import('../services/prerequisites');
-        const sectionSkills: Record<string, string> = {
+        const { incrementDailyStudyLog, trackSkillProgress, updateStreak } = await import('../services/analytics');
+        await incrementDailyStudyLog(c.env, userId, 1, time_spent_seconds, isCorrect === true ? 1 : 0, 0, 0);
+        await updateStreak(c.env, userId);
+
+        // Track sub-skill progress
+        const skillMap: Record<string, string> = {
           reading: 'reading_strategy',
           listening: 'listening_strategy',
           speaking: 'speaking_templates',
           writing: 'writing_templates',
+          structure: 'grammar_structure',
         };
-        await updateSkillScore(c.env, userId, sectionSkills[section] || section, isCorrect);
-      } catch (e) { console.error('Skill update error:', e); }
-    }
-  }
+        const skill = skillMap[section] || section;
+        await trackSkillProgress(c.env, userId, skill, attempt.test_type as string, 1, isCorrect === true ? 1 : 0, time_spent_seconds);
+      } catch (e) { console.error('Analytics tracking error:', e); }
 
-  return c.json({ saved: true, is_correct: isCorrect, next_question_index: question_index + 1 });
+      // Gamification: award XP
+      try {
+        const { addXP, incrementDailyUsage } = await import('../services/commercial');
+        await addXP(c.env, userId, isCorrect ? 15 : 10, isCorrect ? 'correct_answer' : 'answer');
+        await incrementDailyUsage(c.env, userId);
+      } catch (e) { console.error('XP tracking error:', e); }
+
+      // Spaced repetition: add wrong answers to review queue
+      if (isCorrect === false) {
+        try {
+          const { addToReview } = await import('../services/fsrs-engine');
+          await addToReview(
+            c.env, userId, section, '',
+            JSON.stringify(answer_data), answer_data.correct_answer || '', answer_data.selected || '',
+          );
+        } catch (e) { console.error('Spaced repetition error:', e); }
+      }
+
+      // Update skill score for this section
+      if (isCorrect !== null) {
+        try {
+          const { updateSkillScore } = await import('../services/prerequisites');
+          const sectionSkills: Record<string, string> = {
+            reading: 'reading_strategy',
+            listening: 'listening_strategy',
+            speaking: 'speaking_templates',
+            writing: 'writing_templates',
+          };
+          await updateSkillScore(c.env, userId, sectionSkills[section] || section, isCorrect);
+        } catch (e) { console.error('Skill update error:', e); }
+      }
+    }
+
+    return c.json({ saved: true, is_correct: isCorrect, next_question_index: question_index + 1 });
+  } catch (e: any) {
+    console.error('Answer submission error:', e);
+    return c.json({ error: 'Failed to save answer: ' + (e.message || 'unknown error') }, 500);
+  }
 });
 
 testRoutes.post('/attempt/:id/section/:nextSection', async (c) => {
@@ -410,6 +464,14 @@ testRoutes.get('/questions/:section', async (c) => {
     const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50);
     const offset = parseInt(c.req.query('offset') || '0');
 
+    // Try to get authenticated user for smart sequencing
+    let userId: number | null = null;
+    try {
+      const { getAuthUser } = await import('../services/auth');
+      const user = await getAuthUser(c.req.raw, c.env).catch(() => null);
+      userId = user?.id || null;
+    } catch {}
+
     let query = `SELECT id, question_type, title, content, media_url, difficulty
                  FROM test_contents
                  WHERE test_type = ? AND section = ? AND status = 'published'`;
@@ -420,19 +482,36 @@ testRoutes.get('/questions/:section', async (c) => {
       params.push(questionType);
     }
 
-    // Deterministic ordering: shuffle using a subquery trick or by difficulty
-    // Use difficulty variance for variety without RANDOM() (which kills indexes)
-    query += ' ORDER BY difficulty ASC LIMIT ? OFFSET ?';
+    // When no question_type filter (random mix), use RANDOM() for variety
+    // Otherwise order by difficulty for progressive learning within a type
+    if (questionType) {
+      query += ' ORDER BY difficulty ASC LIMIT ? OFFSET ?';
+    } else {
+      query += ' ORDER BY RANDOM() LIMIT ? OFFSET ?';
+    }
     params.push(limit, offset);
 
     const stmt = c.env.DB.prepare(query);
     const result = await stmt.bind(...params).all();
 
+    // Apply smart sequencing if user is authenticated and no specific question_type filter
+    let questions = result.results;
+    if (userId && !questionType && !offset) {
+      try {
+        const { reorderQuestionsSmart } = await import('../services/smart-sequencing');
+        const reordered = await reorderQuestionsSmart(c.env, userId, questions, testType, section);
+        questions = reordered;
+      } catch (e) {
+        console.error('Smart sequencing error:', e);
+        // Fall back to unordered results
+      }
+    }
+
     return c.json({
       section,
       test_type: testType,
-      total: result.results.length,
-    questions: result.results.map((r: any) => {
+      total: questions.length,
+    questions: questions.map((r: any) => {
       let content = {};
       try { content = JSON.parse(r.content || '{}'); } catch {}
       // Only return media_url if it's a valid HTTP(S) URL, not a local file path
@@ -534,4 +613,71 @@ testRoutes.get('/attempt/:id/review', async (c) => {
   });
 
   return c.json({ attempt_id: attemptId, review });
+});
+
+// Fetch all questions for a test attempt at once (offline-first mode)
+testRoutes.get('/attempt/:id/questions-batch', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+  const attemptId = parseInt(c.req.param('id'));
+
+  const attempt = await c.env.DB.prepare(
+    'SELECT * FROM test_attempts WHERE id = ? AND user_id = ?'
+  ).bind(attemptId, user.id).first();
+
+  if (!attempt) return c.json({ error: 'Not found' }, 404);
+  if (attempt.status !== 'in_progress') {
+    return c.json({ error: 'Attempt is not in progress' }, 400);
+  }
+
+  const config = TEST_CONFIGS[attempt.test_type as string];
+  if (!config) return c.json({ error: 'Unknown test type' }, 404);
+
+  // Determine which sections to load
+  let sections = config.sections;
+  const metadata = attempt.metadata ? JSON.parse(attempt.metadata as string) : {};
+  if (metadata.section_only) {
+    const sectionConfig = config.sections.find((s: any) => s.id === metadata.section_only);
+    if (sectionConfig) sections = [sectionConfig];
+  }
+
+  const allQuestions: Record<string, any[]> = {};
+
+  // Load questions for each section
+  for (const section of sections) {
+    const result = await c.env.DB.prepare(
+      `SELECT id, question_type, title, content, media_url, difficulty
+       FROM test_contents
+       WHERE test_type = ? AND section = ? AND status = 'published'
+       ORDER BY RANDOM() LIMIT 50`
+    ).bind(attempt.test_type, section.id).all();
+
+    allQuestions[section.id] = (result.results || []).map((r: any) => {
+      let content = {};
+      try { content = JSON.parse(r.content || '{}'); } catch {}
+      const mediaUrl = r.media_url;
+      const isValidUrl = mediaUrl && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'));
+      return {
+        id: r.id,
+        question_type: r.question_type,
+        title: r.title,
+        content,
+        media_url: isValidUrl ? mediaUrl : null,
+        difficulty: r.difficulty,
+      };
+    });
+  }
+
+  return c.json({
+    attempt_id: attemptId,
+    test_type: attempt.test_type,
+    sections: sections.map((s: any) => ({
+      id: s.id,
+      name: s.name,
+      duration_minutes: s.duration_minutes,
+      question_count: (allQuestions[s.id] || []).length,
+    })),
+    questions_by_section: allQuestions,
+  });
 });

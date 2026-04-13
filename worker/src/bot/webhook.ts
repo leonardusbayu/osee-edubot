@@ -2,6 +2,112 @@ import type { Env, User } from '../types';
 import { getTutorResponse } from '../services/ai';
 import { getPrivateTutorResponse } from '../services/private-tutor';
 
+// Speaking practice prompts
+const SPEAKING_PROMPTS: Record<string, string[]> = {
+  TOEFL_IBT: [
+    'Do you agree or disagree: It is better to study alone than in a group? Use specific reasons.',
+    'Describe a place you have visited that impressed you. Explain why it was memorable.',
+    'Some people prefer to live in a big city. Others prefer a small town. Which do you prefer and why?',
+    'Talk about a teacher who has influenced you. Describe what made them special.',
+    'Do you think technology helps or hinders communication between people?',
+    'Describe an important event in your life and explain how it changed you.',
+    'Some people think money is the most important factor in choosing a job. Do you agree?',
+    'Talk about a book or movie that changed your perspective on something.',
+    'What is your favorite season and why? Use specific reasons.',
+    'Describe a skill you would like to learn and explain why it is important to you.',
+  ],
+  IELTS: [
+    'Describe a time when you helped someone. What did you do and how did they react?',
+    'Talk about a skill you would like to learn. Why is this skill important to you?',
+    'Describe your favorite place to relax. What makes it special?',
+    'Talk about a recent change in your life. How has it affected you?',
+    'Describe a person you admire. What qualities do they have?',
+    'Talk about a festival or celebration that is important in your culture.',
+    'Describe something you bought recently that you are happy with.',
+    'Talk about an activity you enjoy doing in your free time.',
+    'Describe a piece of technology you find useful. Why do you find it helpful?',
+    'Talk about a friend who is important to you. What makes them a good friend?',
+  ],
+  TOEIC: [
+    'Describe your daily routine at work or school.',
+    'Talk about a business meeting or presentation you attended.',
+    'Describe the office or workplace where you spend most of your time.',
+    'Talk about a professional goal you want to achieve.',
+    'Describe a successful project you worked on.',
+    'Talk about a challenge you faced at work and how you solved it.',
+  ],
+};
+
+// ═══════════════════════════════════════════════════════
+// SKILL-BASED EXERCISE DATA
+// ═══════════════════════════════════════════════════════
+
+const OPINION_TOPICS = [
+  'Social media has more negative effects than positive effects on young people.',
+  'Online education is just as effective as in-person learning.',
+  'Everyone should learn at least one foreign language.',
+  'Television has a negative effect on children\'s cognitive development.',
+  'Young people should prioritize gaining work experience before pursuing higher education.',
+  'Environmental protection should be the responsibility of governments, not individuals.',
+  'Success in life is determined by hard work rather than luck.',
+  'Reading physical books is more beneficial than reading digital books.',
+  'Advertising has too much influence on consumer behavior.',
+  'Remote work is more productive than working in an office.',
+  'Universities should focus more on practical skills than theoretical knowledge.',
+  'It is better to have a permanent job than to be self-employed.',
+  'Traveling is more important than saving money.',
+  'Traditional education methods are better than modern ones.',
+  'Social networking websites have improved human relationships.',
+  'Climate change is primarily caused by human activities.',
+  'Government should invest more in renewable energy than traditional energy sources.',
+  'Democracy is the best form of government.',
+  'Wealthy nations have a responsibility to help developing countries.',
+  'Food should be produced locally rather than imported.',
+];
+
+const ROLEPLAY_SCENARIOS = [
+  {
+    place: 'Bandara',
+    situation: 'Pesawat Anda tertunda 3 jam. Minta alternatif ke staff.',
+    role: 'penumpang'
+  },
+  {
+    place: 'Restoran',
+    situation: 'Kamu temukan rambut di makanan. Keluh polite ke pelayan.',
+    role: 'pelanggan'
+  },
+  {
+    place: 'Hotel',
+    situation: 'AC kamarmu rusak. Hubungi reception untuk bantuan.',
+    role: 'tamu'
+  },
+  {
+    place: 'Toko',
+    situation: 'Barang yang dibeli kemarin rusak. Minta pengembalian dana.',
+    role: 'pembeli'
+  },
+  {
+    place: 'Bank',
+    situation: 'Ada masalah dengan transfer uang. Tanyakan ke customer service.',
+    role: 'nasabah'
+  },
+  {
+    place: 'Kantor dokter',
+    situation: 'Diskusikan gejala sakit dengan dokter.',
+    role: 'pasien'
+  },
+  {
+    place: 'Kantor',
+    situation: 'Minta extension deadline ke boss karena urgent project.',
+    role: 'karyawan'
+  },
+  {
+    place: 'Universitas',
+    situation: 'Tanyakan tentang beasiswa ke admissions office.',
+    role: 'calon siswa'
+  },
+];
+
 // Telegram Bot API helper
 function cleanForTelegram(text: string): string {
   // Strip markdown that Telegram can't render
@@ -31,14 +137,17 @@ async function sendMessage(env: Env, chatId: number, text: string, replyMarkup?:
 }
 
 async function getOrCreateUser(env: Env, tgUser: any): Promise<User> {
+  // Always store/query telegram_id as clean integer string (no ".0" suffix)
+  const tgId = String(tgUser.id).replace('.0', '');
+
   let user = await env.DB.prepare(
     'SELECT * FROM users WHERE telegram_id = ?'
-  ).bind(tgUser.id).first() as User | null;
+  ).bind(tgId).first() as User | null;
 
   if (!user) {
     const name = `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim();
     // Generate referral code for new user
-    const referralCode = `ref_${tgUser.id}_${Date.now().toString(36)}`;
+    const referralCode = `ref_${tgId}_${Date.now().toString(36)}`;
     // New users get 1-day trial
     const trialEnds = new Date();
     trialEnds.setDate(trialEnds.getDate() + 1);
@@ -46,11 +155,11 @@ async function getOrCreateUser(env: Env, tgUser: any): Promise<User> {
 
     await env.DB.prepare(
       'INSERT INTO users (telegram_id, name, username, referral_code, is_premium, premium_until) VALUES (?, ?, ?, ?, 1, ?)'
-    ).bind(tgUser.id, name || 'User', tgUser.username || null, referralCode, trialEndsStr).run();
+    ).bind(tgId, name || 'User', tgUser.username || null, referralCode, trialEndsStr).run();
 
     user = await env.DB.prepare(
       'SELECT * FROM users WHERE telegram_id = ?'
-    ).bind(tgUser.id).first() as User;
+    ).bind(tgId).first() as User;
   }
 
   return user;
@@ -63,52 +172,44 @@ async function sendTTSAudio(env: Env, chatId: number, text: string) {
 
     // Detect if text has speaker labels (Man:, Woman:, Professor:, etc.)
     const hasMultiSpeaker = /(?:Woman|Man|Male|Female|Professor|Instructor|Narrator|Student|Speaker)\s*[^:]*:/i.test(text);
-    const audioBuffer = await generateTTSAudioBuffer(env, text, hasMultiSpeaker);
+    // Request opus format — Telegram sendVoice natively supports OGG Opus
+    const audioBuffer = await generateTTSAudioBuffer(env, text, hasMultiSpeaker, 'alloy', 'opus');
 
-    if (!audioBuffer) {
-      console.error('TTS: generateTTSAudioBuffer returned null for text:', text.substring(0, 80));
-      // Fallback: send text description so user knows audio was intended
+    if (!audioBuffer || audioBuffer.byteLength < 100) {
+      console.error('TTS: generateTTSAudioBuffer returned null/empty for text:', text.substring(0, 80));
       await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
       return;
     }
 
-    // Send as voice message via Telegram (sendVoice = inline playable, sendAudio = music player)
-    // Use sendVoice for short clips, sendAudio for longer ones
-    const isShort = audioBuffer.byteLength < 500000; // ~30 seconds
-    const endpoint = isShort ? 'sendVoice' : 'sendAudio';
-    const fieldName = isShort ? 'voice' : 'audio';
-
+    // Send as voice message (OGG Opus — native Telegram format, shows inline player)
     const formData = new FormData();
     formData.append('chat_id', String(chatId));
-    formData.append(fieldName, new File([audioBuffer], 'audio.mp3', { type: 'audio/mpeg' }));
+    formData.append('voice', new File([audioBuffer], 'audio.ogg', { type: 'audio/ogg' }));
 
-    const resp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${endpoint}`, {
+    const resp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendVoice`, {
       method: 'POST',
       body: formData,
     });
 
     if (!resp.ok) {
       const err = await resp.text();
-      console.error(`TTS: Telegram ${endpoint} failed:`, err);
-      // Fallback: try the other method
-      const fallbackEndpoint = isShort ? 'sendAudio' : 'sendVoice';
-      const fallbackField = isShort ? 'audio' : 'voice';
+      console.error('TTS: sendVoice failed:', err);
+      // Fallback: try sendAudio (music player style)
       const fallbackForm = new FormData();
       fallbackForm.append('chat_id', String(chatId));
-      fallbackForm.append(fallbackField, new File([audioBuffer], 'audio.mp3', { type: 'audio/mpeg' }));
-      const resp2 = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${fallbackEndpoint}`, {
+      fallbackForm.append('audio', new File([audioBuffer], 'audio.ogg', { type: 'audio/ogg' }));
+      fallbackForm.append('title', 'EduBot Audio');
+      const resp2 = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendAudio`, {
         method: 'POST',
         body: fallbackForm,
       });
       if (!resp2.ok) {
-        console.error(`TTS: Fallback ${fallbackEndpoint} also failed:`, await resp2.text());
-        // Last resort: send the text so user can still answer
+        console.error('TTS: sendAudio fallback also failed:', await resp2.text());
         await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
       }
     }
   } catch (e) {
     console.error('TTS audio send error:', e);
-    // Fallback: send text so the diagnostic doesn't get stuck
     try {
       await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
     } catch {}
@@ -142,16 +243,19 @@ const proficiencyKeyboard = {
   ],
 };
 
-function mainMenuKeyboard(webappUrl: string) {
+function mainMenuKeyboard(webappUrl: string, tgId?: string | number) {
+  // Ensure tg_id is clean (no .0 suffix) for URL params
+  const cleanTgId = tgId ? String(tgId).replace('.0', '') : '';
+  const tgParam = cleanTgId ? `?tg_id=${cleanTgId}` : '';
   return {
     keyboard: [
-      [{ text: '📝 Latihan Tes', web_app: { url: `${webappUrl}/test` } }],
+      [{ text: '📝 Latihan Tes', web_app: { url: `${webappUrl}/test${tgParam}` } }],
       [
         { text: '📖 Belajar' },
         { text: '🩺 Diagnostic' },
       ],
       [
-        { text: '📊 Progress', web_app: { url: `${webappUrl}/progress` } },
+        { text: '📊 Progress', web_app: { url: `${webappUrl}/progress${tgParam}` } },
         { text: '📅 Hari Ini' },
       ],
       [
@@ -170,21 +274,111 @@ function buildProgressBarInline(percent: number): string {
   return '[' + '█'.repeat(filled) + '░'.repeat(empty) + '] ' + percent + '%';
 }
 
+// ═══════════════════════════════════════════════════════
+// SKILL-BASED LEARNING PATHS KEYBOARDS
+// ═══════════════════════════════════════════════════════
+
 function studyTopicKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: '📖 Pelajaran Hari Ini', callback_data: 'study_lesson' }],
+      [
+        { text: '📖 Reading', callback_data: 'cat_reading' },
+        { text: '🎧 Listening', callback_data: 'cat_listening' },
+      ],
+      [
+        { text: '🗣 Speaking', callback_data: 'cat_speaking' },
+        { text: '✍️ Writing', callback_data: 'cat_writing' },
+      ],
       [
         { text: '📝 Grammar', callback_data: 'cat_grammar' },
         { text: '📚 Vocabulary', callback_data: 'cat_vocab' },
       ],
       [
-        { text: '🎯 Skills & Strategy', callback_data: 'cat_skills' },
         { text: '🏋️ Latihan', callback_data: 'cat_practice' },
+        { text: '❓ Tanya Bebas', callback_data: 'study_ask' },
       ],
-      [{ text: '❓ Tanya Bebas', callback_data: 'study_ask' }],
     ],
   };
+}
+
+function readingKeyboard(targetTest: string = '') {
+  const rows: any[][] = [
+    [{ text: '⚡ Speed Reading', callback_data: 'skill_speed_read' }],
+    [{ text: '🔍 Scan & Find', callback_data: 'skill_scan_find' }],
+    [{ text: '📖 Vocab in Context', callback_data: 'skill_vocab_context' }],
+    [{ text: '📝 Summarize This', callback_data: 'skill_summarize' }],
+  ];
+  // Test-specific reading exercises
+  if (targetTest === 'IELTS') {
+    rows.push([{ text: '✅❌❓ True/False/Not Given', callback_data: 'skill_tfng' }]);
+    rows.push([{ text: '🔤 Matching Headings', callback_data: 'skill_matching_headings' }]);
+  }
+  if (targetTest === 'TOEFL_IBT') {
+    rows.push([{ text: '📌 Insert Sentence', callback_data: 'skill_insert_sentence' }]);
+  }
+  if (targetTest === 'TOEIC') {
+    rows.push([{ text: '📧 Business Reading', callback_data: 'skill_biz_reading' }]);
+  }
+  if (targetTest === 'TOEFL_ITP') {
+    rows.push([{ text: '🔧 Structure & Written Expression', callback_data: 'skill_structure_we' }]);
+    rows.push([{ text: '✏️ Sentence Completion', callback_data: 'skill_sentence_completion' }]);
+  }
+  rows.push([{ text: '💡 Strategy Tips', callback_data: 'lesson_reading_strategy' }]);
+  rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
+  return { inline_keyboard: rows };
+}
+
+function listeningKeyboard(targetTest: string = '') {
+  const rows: any[][] = [
+    [{ text: '✍️ Dictation', callback_data: 'skill_dictation' }],
+    [{ text: '📝 Note-Taking', callback_data: 'skill_note_take' }],
+    [{ text: '🎯 Catch the Detail', callback_data: 'skill_catch_detail' }],
+    [{ text: '🔥 Speed Listening', callback_data: 'skill_speed_listen' }],
+  ];
+  // Test-specific listening exercises
+  if (targetTest === 'TOEIC') {
+    rows.push([{ text: '📸 Photo Description', callback_data: 'skill_photo_desc' }]);
+    rows.push([{ text: '💬 Quick Response', callback_data: 'skill_quick_response' }]);
+  }
+  rows.push([{ text: '🔗 Pronunciation Drill', callback_data: 'pronun_random' }]);
+  rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
+  return { inline_keyboard: rows };
+}
+
+function speakingKeyboard(targetTest: string = '') {
+  const rows: any[][] = [
+    [{ text: '📸 Describe Picture', callback_data: 'skill_describe_pic' }],
+    [{ text: '💭 Express Opinion', callback_data: 'skill_opinion' }],
+    [{ text: '🎭 Role Play', callback_data: 'skill_roleplay' }],
+    [{ text: '🎤 Shadowing', callback_data: 'skill_shadow' }],
+  ];
+  // Test-specific speaking exercises
+  if (targetTest === 'IELTS') {
+    rows.push([{ text: '🎴 Cue Card (Part 2)', callback_data: 'skill_cue_card' }]);
+  }
+  if (targetTest === 'TOEFL_IBT') {
+    rows.push([{ text: '🔗 Integrated Speaking', callback_data: 'skill_integrated_speak' }]);
+  }
+  rows.push([{ text: '📋 Templates', callback_data: 'lesson_speaking_templates' }]);
+  rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
+  return { inline_keyboard: rows };
+}
+
+function writingKeyboard(targetTest: string = '') {
+  const rows: any[][] = [
+    [{ text: '✏️ Fix Sentence', callback_data: 'skill_fix_sentence' }],
+    [{ text: '🔄 Paraphrase', callback_data: 'skill_paraphrase' }],
+    [{ text: '📊 Describe Chart', callback_data: 'skill_describe_chart' }],
+    [{ text: '📧 Email Response', callback_data: 'skill_email_write' }],
+    [{ text: '📄 Essay Builder', callback_data: 'skill_essay_build' }],
+  ];
+  // Test-specific writing exercises
+  if (targetTest === 'TOEFL_IBT') {
+    rows.push([{ text: '🔗 Integrated Writing', callback_data: 'skill_integrated_write' }]);
+  }
+  rows.push([{ text: '📋 Templates', callback_data: 'lesson_writing_templates' }]);
+  rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
+  return { inline_keyboard: rows };
 }
 
 function grammarKeyboard() {
@@ -252,6 +446,7 @@ function practiceKeyboard() {
   return {
     inline_keyboard: [
       [{ text: '🏋️ Drill Grammar', callback_data: 'study_drill' }],
+      [{ text: '🔊 Pronunciation Drill', callback_data: 'pronun_random' }],
       [{ text: '🧠 Mini Test', callback_data: 'study_minitest' }],
       [{ text: '🎯 Daily Challenge', callback_data: 'study_challenge' }],
       [{ text: '📊 Score Estimator', callback_data: 'study_score' }],
@@ -397,10 +592,7 @@ async function handleVoiceMessage(message: any, env: Env) {
       return;
     }
 
-    // Show what was heard
-    await sendMessage(env, chatId, `Aku dengar: "${transcription}"`);
-
-    // Log cost
+    // Log Whisper cost
     try {
       const duration = (voice.duration || 5) / 60;
       await env.DB.prepare('INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd, user_id) VALUES (?, ?, ?, ?, ?)')
@@ -408,6 +600,110 @@ async function handleVoiceMessage(message: any, env: Env) {
     } catch (e) {
       console.error('Whisper cost tracking error:', e);
     }
+
+    // Check for active speaking session
+    try {
+      const session = await env.DB.prepare(
+        'SELECT * FROM speaking_sessions WHERE user_id = ? AND status = ? ORDER BY created_at DESC LIMIT 1'
+      ).bind(user.id, 'active').first() as any;
+
+      if (session) {
+        // Score the speaking response using GPT-4o
+        try {
+          const { scoreInterview } = await import('../routes/speaking');
+          const maxBand = session.test_type === 'IELTS' ? 9 : 6;
+          const result = await scoreInterview(env.OPENAI_API_KEY, transcription, session.prompt, session.test_type, maxBand);
+
+          // Update session with results
+          await env.DB.prepare(
+            'UPDATE speaking_sessions SET transcription = ?, score = ?, feedback = ?, status = ?, completed_at = ? WHERE id = ?'
+          ).bind(
+            transcription,
+            result.score,
+            JSON.stringify(result.criteria),
+            'completed',
+            new Date().toISOString(),
+            session.id
+          ).run();
+
+          // Log speaking evaluation cost (estimate: ~150 tokens)
+          try {
+            await env.DB.prepare('INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd, user_id) VALUES (?, ?, ?, ?, ?)')
+              .bind('openai-gpt4o', 'speaking-eval', 150, 0.0015, user.id).run();
+          } catch (e) {
+            console.error('Speaking eval cost tracking error:', e);
+          }
+
+          // Send detailed feedback
+          await sendMessage(env, chatId,
+            `🎤 *Speaking Evaluation*\n\n` +
+            `📝 *Kamu berkata:* "${transcription}"\n\n` +
+            `⭐ *Skor:* ${result.score}/${maxBand}\n\n` +
+            `📊 *Kriteria:*\n` +
+            (result.criteria ? `• Content: ${result.criteria.content}\n• Fluency: ${result.criteria.fluency}\n• Grammar: ${result.criteria.grammar}\n• Vocabulary: ${result.criteria.vocabulary}\n\n` : '') +
+            `✅ *Kelebihan:* ${result.strengths || 'Bagus!'}\n\n` +
+            `🎯 *Untuk diperbaiki:* ${result.improvement || 'Terus praktik!'}\n\n` +
+            `💡 *Feedback:* ${result.feedback || 'Tidak bisa memberikan feedback.'}`
+          );
+          return;
+        } catch (e: any) {
+          console.error('Speaking scoring error:', e);
+          await sendMessage(env, chatId, 'Gagal menilai speaking. Coba lagi.');
+          return;
+        }
+      }
+    } catch (e: any) {
+      console.error('Speaking session check error:', e);
+      // Continue with normal message handling if session check fails
+    }
+
+    // Check for active exercise session awaiting voice input
+    try {
+      const activeExercise = await env.DB.prepare(
+        `SELECT * FROM exercise_sessions WHERE user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1`
+      ).bind(user.id).first() as any;
+
+      if (activeExercise) {
+        const meta = JSON.parse(activeExercise.metadata || '{}');
+        if (meta.input === 'voice') {
+          const { scoreTextAnswer, getStepDisplay, getStepInputType, getTotalSteps, renderSummary } = await import('../services/exercise-engine');
+
+          // For voice exercises, use transcription as the answer
+          await sendMessage(env, chatId, `🎤 *Kamu bilang:* "${transcription}"`);
+
+          const { score, feedback } = await scoreTextAnswer(env, activeExercise.type, meta.lesson, meta.step, transcription);
+          meta.scores.push(score);
+          meta.step += 1;
+          const total = getTotalSteps(activeExercise.type);
+
+          if (meta.step >= total) {
+            meta.input = null;
+            const avgScore = meta.scores.length > 0 ? Math.round(meta.scores.reduce((a: number, b: number) => a + b, 0) / meta.scores.length) : 0;
+            await env.DB.prepare(
+              'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
+            ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), activeExercise.id).run();
+            await sendMessage(env, chatId, feedback);
+            const summary = renderSummary(activeExercise.type, meta.lesson, meta.scores, meta.hints || 0);
+            await sendMessage(env, chatId, summary.text, summary.keyboard);
+          } else {
+            meta.input = null;
+            await env.DB.prepare(
+              'UPDATE exercise_sessions SET metadata = ? WHERE id = ?'
+            ).bind(JSON.stringify(meta), activeExercise.id).run();
+
+            await sendMessage(env, chatId, feedback, {
+              inline_keyboard: [[{ text: '➡️ Soal Berikutnya', callback_data: `ex_n_${activeExercise.id}` }]],
+            });
+          }
+          return;
+        }
+      }
+    } catch (e: any) {
+      console.error('Exercise voice handler error:', e);
+    }
+
+    // Show what was heard
+    await sendMessage(env, chatId, `Aku dengar: "${transcription}"`);
 
     // Process as text message
     message.text = transcription;
@@ -545,7 +841,7 @@ async function handleMessage(message: any, env: Env) {
         if (user.onboarding_complete) {
           await sendMessage(env, chatId,
             `Halo lagi, ${user.name}! 👋\n\nMau ngapain hari ini?`,
-            mainMenuKeyboard(env.WEBAPP_URL),
+            mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id),
           );
         } else {
           await sendMessage(env, chatId,
@@ -569,8 +865,10 @@ async function handleMessage(message: any, env: Env) {
           `/lesson — Lesson plan personal (AI)\n` +
           `/today — Pelajaran hari ini\n` +
           `/review — Review soal (FSRS adaptive)\n` +
+          `/speak — Latihan speaking (voice message)\n` +
+          `/pronounce — Drill pronunciation 254 kata\n` +
           `/challenge @user — Duel 5 soal\n\n` +
-          `💡 *Tips:* Kirim voice message untuk latihan speaking!`;
+          `💡 *Tips:* Kirim voice message untuk tutor 24/7!`;
 
         const progressHelp = `📊 *Progress & Profile*\n\n` +
           `/profile — Profil lengkap + mental model\n` +
@@ -1088,7 +1386,7 @@ async function handleMessage(message: any, env: Env) {
             `Buka aplikasi untuk mulai.`,
             {
               inline_keyboard: [
-                [{ text: '📝 Mulai Practice Test', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${user.telegram_id}` } }],
+                [{ text: '📝 Mulai Practice Test', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${String(user.telegram_id).replace('.0', '')}` } }],
                 [{ text: '⭐ Upgrade Premium', callback_data: 'buy_stars' }],
               ],
             }
@@ -1105,8 +1403,8 @@ async function handleMessage(message: any, env: Env) {
           `Buka aplikasi untuk mulai.`,
           {
             inline_keyboard: [
-              [{ text: '📝 Mulai Practice Test', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${user.telegram_id}` } }],
-              [{ text: '🗣️ Speaking Practice', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${user.telegram_id}&section=speaking` } }],
+              [{ text: '📝 Mulai Practice Test', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${String(user.telegram_id).replace('.0', '')}` } }],
+              [{ text: '🗣️ Speaking Practice', web_app: { url: `${env.WEBAPP_URL}/test?tg_id=${String(user.telegram_id).replace('.0', '')}&section=speaking` } }],
               [{ text: '📖 Belajar Topik', callback_data: 'cat_practice' }],
             ],
           }
@@ -1129,6 +1427,71 @@ async function handleMessage(message: any, env: Env) {
         const { startDiagnostic } = await import('../services/diagnostic');
         const intro = await startDiagnostic(env, user);
         await sendMessage(env, chatId, intro);
+        return;
+      }
+
+      case '/speak': {
+        // Speaking practice — select topic type
+        await sendMessage(env, chatId,
+          `🎤 *Speaking Practice*\n\n` +
+          `Latihan speaking dengan voice message. Tutor AI akan menilai pronunciation, fluency, grammar, dan vocabulary kamu.\n\n` +
+          `Pilih topik:`,
+          {
+            inline_keyboard: [
+              [
+                { text: '🎲 Random', callback_data: 'speak_topic_random' },
+              ],
+              [
+                { text: '💭 Opinion', callback_data: 'speak_topic_opinion' },
+                { text: '📖 Describe', callback_data: 'speak_topic_describe' },
+              ],
+            ],
+          }
+        );
+        return;
+      }
+
+      case '/pronounce': {
+        // Pronunciation practice from pronunciation_bank
+        const pronunCategories = [
+          { text: '🦷 TH Sounds', callback_data: 'pronun_cat_th_sounds' },
+          { text: '🔤 Vowel Pairs', callback_data: 'pronun_cat_vowel_pairs' },
+          { text: '🎯 Word Stress', callback_data: 'pronun_cat_word_stress' },
+          { text: '🔚 Final Consonants', callback_data: 'pronun_cat_final_consonants' },
+          { text: '🔄 R & L Sounds', callback_data: 'pronun_cat_r_and_l' },
+          { text: '🤫 Silent Letters', callback_data: 'pronun_cat_silent_letters' },
+          { text: '📚 Academic Vocab', callback_data: 'pronun_cat_academic_vocab' },
+          { text: '🔗 Connected Speech', callback_data: 'pronun_cat_connected_speech' },
+          { text: '❌ Commonly Wrong', callback_data: 'pronun_cat_commonly_mispronounced' },
+          { text: '🗣️ Sentence Practice', callback_data: 'pronun_cat_sentence_practice' },
+          { text: '🔊 Schwa Sound', callback_data: 'pronun_cat_schwa_sound' },
+          { text: '👥 Homophones', callback_data: 'pronun_cat_homophones' },
+          { text: '🔢 Numbers & Dates', callback_data: 'pronun_cat_numbers_dates' },
+          { text: '💼 Business English', callback_data: 'pronun_cat_business_english' },
+          { text: '📝 Academic Phrases', callback_data: 'pronun_cat_academic_phrases' },
+          { text: '🌊 IELTS Topics', callback_data: 'pronun_cat_ielts_topics' },
+          { text: '🎓 TOEFL Listening', callback_data: 'pronun_cat_toefl_listening' },
+          { text: '😜 Tongue Twisters', callback_data: 'pronun_cat_tongue_twisters' },
+          { text: '🆚 W & V Sounds', callback_data: 'pronun_cat_w_and_v' },
+        ];
+        // Build 2-column layout
+        const pronunRows = [];
+        for (let i = 0; i < pronunCategories.length; i += 2) {
+          if (i + 1 < pronunCategories.length) {
+            pronunRows.push([pronunCategories[i], pronunCategories[i + 1]]);
+          } else {
+            pronunRows.push([pronunCategories[i]]);
+          }
+        }
+        pronunRows.push([{ text: '🎲 Random Word', callback_data: 'pronun_random' }]);
+        await sendMessage(env, chatId,
+          `🔊 *Pronunciation Practice*\n\n` +
+          `Latihan pengucapan kata & kalimat bahasa Inggris. Pilih kategori di bawah — ` +
+          `kamu akan dapat kata + IPA + tips + audio.\n\n` +
+          `📊 254 kata/frasa tersedia dari 19 kategori\n` +
+          `🎯 Disesuaikan untuk TOEFL, IELTS, TOEIC`,
+          { inline_keyboard: pronunRows }
+        );
         return;
       }
 
@@ -1448,7 +1811,7 @@ async function handleMessage(message: any, env: Env) {
           env.DB.prepare('SELECT COUNT(*) as c FROM users').first() as Promise<any>,
           env.DB.prepare('SELECT COUNT(*) as c FROM test_contents').first() as Promise<any>,
           env.DB.prepare("SELECT COUNT(*) as c FROM test_attempts WHERE status = 'completed'").first() as Promise<any>,
-          env.DB.prepare('SELECT COUNT(*) as c FROM attempt_answers').first() as Promise<any>,
+          env.DB.prepare("SELECT COUNT(*) as c FROM attempt_answers WHERE NOT (is_correct IS NULL AND section NOT IN ('speaking','writing'))").first() as Promise<any>,
           env.DB.prepare('SELECT SUM(cost_usd) as c FROM api_usage').first() as Promise<any>,
           env.DB.prepare("SELECT COUNT(*) as c FROM users WHERE role = 'teacher'").first() as Promise<any>,
           env.DB.prepare('SELECT COUNT(*) as c FROM classes').first() as Promise<any>,
@@ -1456,28 +1819,31 @@ async function handleMessage(message: any, env: Env) {
 
         // --- Extended analytics ---
         const [accuracy, activeToday, active7d, premiumCount, todayCost, sectionBreakdown, topStudents] = await Promise.all([
-          // Overall accuracy
+          // Overall accuracy (speaking/writing use score in answer_data)
           env.DB.prepare(
             `SELECT COUNT(*) as total,
-                    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct
-             FROM attempt_answers WHERE is_correct IS NOT NULL`
+                    SUM(CASE
+                      WHEN is_correct = 1 THEN 1
+                      WHEN is_correct IS NULL AND section IN ('speaking','writing')
+                           AND json_extract(answer_data, '$.score') >= 5 THEN 1
+                      ELSE 0
+                    END) as correct
+             FROM attempt_answers`
           ).first() as Promise<any>,
-          // Active today — check multiple activity sources
+          // Active today — conversation_messages is the primary activity source
           env.DB.prepare(
             `SELECT COUNT(DISTINCT user_id) as c FROM (
-               SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE date(aa.submitted_at) = date('now')
-               UNION SELECT user_id FROM user_messages WHERE date(created_at) = date('now')
-               UNION SELECT user_id FROM tutor_interactions WHERE date(created_at) = date('now')
-               UNION SELECT user_id FROM daily_study_logs WHERE log_date = date('now')
+               SELECT user_id FROM conversation_messages WHERE date(created_at) = date('now')
+               UNION SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE date(aa.submitted_at) = date('now')
+               UNION SELECT user_id FROM daily_question_logs WHERE question_date = date('now')
              )`
           ).first() as Promise<any>,
-          // Active last 7 days — check multiple activity sources
+          // Active last 7 days
           env.DB.prepare(
             `SELECT COUNT(DISTINCT user_id) as c FROM (
-               SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= datetime('now', '-7 days')
-               UNION SELECT user_id FROM user_messages WHERE created_at >= datetime('now', '-7 days')
-               UNION SELECT user_id FROM tutor_interactions WHERE created_at >= datetime('now', '-7 days')
-               UNION SELECT user_id FROM daily_study_logs WHERE log_date >= date('now', '-7 days')
+               SELECT user_id FROM conversation_messages WHERE created_at >= datetime('now', '-7 days')
+               UNION SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= datetime('now', '-7 days')
+               UNION SELECT user_id FROM daily_question_logs WHERE question_date >= date('now', '-7 days')
              )`
           ).first() as Promise<any>,
           // Premium users
@@ -1488,21 +1854,31 @@ async function handleMessage(message: any, env: Env) {
           env.DB.prepare(
             `SELECT SUM(cost_usd) as c FROM api_usage WHERE created_at >= date('now')`
           ).first() as Promise<any>,
-          // Answers by section
+          // Answers by section (include speaking/writing scores)
           env.DB.prepare(
             `SELECT section, COUNT(*) as total,
-                    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct
-             FROM attempt_answers WHERE section IS NOT NULL AND is_correct IS NOT NULL
+                    SUM(CASE
+                      WHEN is_correct = 1 THEN 1
+                      WHEN is_correct IS NULL AND section IN ('speaking','writing')
+                           AND json_extract(answer_data, '$.score') >= 5 THEN 1
+                      ELSE 0
+                    END) as correct
+             FROM attempt_answers WHERE section IS NOT NULL
              GROUP BY section ORDER BY total DESC`
           ).all() as Promise<any>,
           // Top 5 students by questions answered (last 7 days)
           env.DB.prepare(
             `SELECT u.name, COUNT(*) as answered,
-                    SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct
+                    SUM(CASE
+                      WHEN aa.is_correct = 1 THEN 1
+                      WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+                           AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+                      ELSE 0
+                    END) as correct
              FROM attempt_answers aa
              JOIN test_attempts ta ON aa.attempt_id = ta.id
              JOIN users u ON ta.user_id = u.id
-             WHERE aa.submitted_at >= datetime('now', '-7 days') AND aa.is_correct IS NOT NULL
+             WHERE aa.submitted_at >= datetime('now', '-7 days')
              GROUP BY ta.user_id ORDER BY answered DESC LIMIT 5`
           ).all() as Promise<any>,
         ]);
@@ -2071,7 +2447,7 @@ async function handleMessage(message: any, env: Env) {
       await env.DB.prepare(
         "UPDATE diagnostic_sessions SET status = 'cancelled' WHERE user_id = ? AND status = 'in_progress'"
       ).bind(user.id).run();
-      await sendMessage(env, chatId, 'Diagnostic dibatalkan. Mau ngapain sekarang?', mainMenuKeyboard(env.WEBAPP_URL));
+      await sendMessage(env, chatId, 'Diagnostic dibatalkan. Mau ngapain sekarang?', mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id));
       return;
     }
 
@@ -2238,6 +2614,132 @@ async function handleMessage(message: any, env: Env) {
     }
   }
 
+  // ═══════════════════════════════════════════════════════
+  // CHECK FOR ACTIVE EXERCISE SESSION (Multi-step lessons)
+  // ═══════════════════════════════════════════════════════
+  const activeExercise = await env.DB.prepare(
+    `SELECT * FROM exercise_sessions WHERE user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1`
+  ).bind(user.id).first() as any;
+
+  if (activeExercise) {
+    try {
+      const meta = JSON.parse(activeExercise.metadata || '{}');
+      const lower = text.toLowerCase().trim();
+
+      // Navigation commands work anytime during an active exercise
+      if (['quit', 'selesai', 'keluar', 'stop', 'berhenti'].includes(lower)) {
+        const { renderSummary, getTotalSteps } = await import('../services/exercise-engine');
+        const avgScore = meta.scores?.length > 0 ? Math.round(meta.scores.reduce((a: number, b: number) => a + b, 0) / meta.scores.length) : 0;
+        await env.DB.prepare(
+          'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
+        ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), activeExercise.id).run();
+
+        if (meta.scores?.length > 0) {
+          const summary = renderSummary(activeExercise.type, meta.lesson, meta.scores, meta.hints || 0);
+          await sendMessage(env, chatId, summary.text, summary.keyboard);
+        } else {
+          await sendMessage(env, chatId, '👋 Lesson dihentikan. Kembali ke /study kapan saja!');
+        }
+        return;
+      }
+
+      if (['skip', 'lewat'].includes(lower) && meta.input) {
+        const { getStepDisplay, getStepInputType, getTotalSteps, renderSummary } = await import('../services/exercise-engine');
+        meta.scores.push(0);
+        meta.step += 1;
+        const total = getTotalSteps(activeExercise.type);
+
+        if (meta.step >= total) {
+          const avgScore = meta.scores.length > 0 ? Math.round(meta.scores.reduce((a: number, b: number) => a + b, 0) / meta.scores.length) : 0;
+          await env.DB.prepare(
+            'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
+          ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), activeExercise.id).run();
+          const summary = renderSummary(activeExercise.type, meta.lesson, meta.scores, meta.hints || 0);
+          await sendMessage(env, chatId, summary.text, summary.keyboard);
+          return;
+        }
+
+        const inputType = getStepInputType(activeExercise.type, meta.step);
+        meta.input = inputType === 'text' ? 'text' : inputType === 'voice' ? 'voice' : null;
+        await env.DB.prepare(
+          'UPDATE exercise_sessions SET metadata = ? WHERE id = ?'
+        ).bind(JSON.stringify(meta), activeExercise.id).run();
+
+        await sendMessage(env, chatId, '⏭ Dilewati.');
+        const display = getStepDisplay(activeExercise.type, meta.lesson, meta.step, activeExercise.id);
+        await sendMessage(env, chatId, display.text, display.keyboard);
+        if (display.tts_text) await sendTTSAudio(env, chatId, display.tts_text);
+        return;
+      }
+
+      if (['hint', 'bantuan'].includes(lower) && meta.input) {
+        const { getStepHint } = await import('../services/exercise-engine');
+        meta.hints = (meta.hints || 0) + 1;
+        await env.DB.prepare(
+          'UPDATE exercise_sessions SET metadata = ? WHERE id = ?'
+        ).bind(JSON.stringify(meta), activeExercise.id).run();
+        const hint = getStepHint(activeExercise.type, meta.lesson, meta.step);
+        await sendMessage(env, chatId, hint);
+        return;
+      }
+
+      // Text input — only when awaiting text
+      if (meta.input === 'text') {
+        const { scoreTextAnswer, getStepDisplay, getStepInputType, getTotalSteps, renderSummary } = await import('../services/exercise-engine');
+
+        const { score, feedback } = await scoreTextAnswer(env, activeExercise.type, meta.lesson, meta.step, text);
+        meta.scores.push(score);
+        meta.step += 1;
+        const total = getTotalSteps(activeExercise.type);
+
+        if (meta.step >= total) {
+          meta.input = null;
+          const avgScore = meta.scores.length > 0 ? Math.round(meta.scores.reduce((a: number, b: number) => a + b, 0) / meta.scores.length) : 0;
+          await env.DB.prepare(
+            'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
+          ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), activeExercise.id).run();
+          await sendMessage(env, chatId, feedback);
+          const summary = renderSummary(activeExercise.type, meta.lesson, meta.scores, meta.hints || 0);
+          await sendMessage(env, chatId, summary.text, summary.keyboard);
+        } else {
+          meta.input = null; // Waiting for Next button
+          await env.DB.prepare(
+            'UPDATE exercise_sessions SET metadata = ? WHERE id = ?'
+          ).bind(JSON.stringify(meta), activeExercise.id).run();
+
+          await sendMessage(env, chatId, feedback, {
+            inline_keyboard: [[{ text: '➡️ Soal Berikutnya', callback_data: `ex_n_${activeExercise.id}` }]],
+          });
+        }
+        return;
+      }
+
+      // If not awaiting input, fall through to AI tutor
+    } catch (e: any) {
+      console.error('Exercise text handler error:', e);
+      // Fall through to AI tutor on error
+    }
+  }
+
+  // Check daily quota for free users before AI tutor response
+  try {
+    const { checkTestAccess, trackQuestionAnswer } = await import('../services/premium');
+    const access = await checkTestAccess(env, user.id);
+    if (!access.allowed) {
+      await sendMessage(env, chatId,
+        `⚠️ Kuota harian habis (${access.used_today}/${access.daily_limit} soal).\n\n` +
+        `Kuota direset besok jam 00:00 WIB.\n` +
+        `Ketik /premium untuk akses unlimited! 🚀\n\n` +
+        `Atau ajak teman pakai /referral untuk bonus kuota! 🎁`);
+      return;
+    }
+    // Track this as a question usage
+    await trackQuestionAnswer(env, user.id);
+  } catch (e) {
+    console.error('Bot conversation quota check error:', e);
+    // Don't block if quota check fails — let the conversation continue
+  }
+
   // Use private tutor for rich tracking (student profiles, topic mastery, tutor interactions)
   let response: string;
   try {
@@ -2249,15 +2751,40 @@ async function handleMessage(message: any, env: Env) {
     await saveToHistory(env, user.id, text, response);
   }
 
-  // Check if AI tutor response contains [AUDIO] tag (e.g., follow-up listening exercises)
-  const audioMatch = response.match(/\[AUDIO\]\s*([\s\S]+?)(?=\n\s*Soal:|\n\s*Question:|$)/i);
-  if (audioMatch) {
-    const audioText = audioMatch[1].trim();
-    const questionText = response.replace(/\[AUDIO\]\s*([\s\S]+?)(?=\n\s*Soal:|\n\s*Question:|$)/i, '').trim();
-    await sendTTSAudio(env, chatId, audioText);
-    await sendMessage(env, chatId, questionText);
+  // Check if AI tutor response contains [AUDIO] tag(s)
+  // Support multiple [AUDIO] blocks in one response
+  const audioPattern = /\[AUDIO\]\s*(.+?)(?=\n\s*\[AUDIO\]|\n\s*Soal:|\n\s*Question:|$)/gis;
+  const audioMatches = [...response.matchAll(audioPattern)];
+
+  if (audioMatches.length > 0) {
+    // Strip all [AUDIO] blocks from the text response
+    let textResponse = response.replace(audioPattern, '').trim();
+    if (textResponse) {
+      await sendMessage(env, chatId, textResponse);
+    }
+    // Send each audio block as TTS
+    for (const match of audioMatches) {
+      const audioText = match[1].trim();
+      if (audioText.length > 0) {
+        await sendTTSAudio(env, chatId, audioText);
+      }
+    }
   } else {
     await sendMessage(env, chatId, response);
+
+    // Auto-detect: if user asked for audio/pronunciation but AI forgot [AUDIO] tag,
+    // extract English words from AI response and send TTS as follow-up
+    const userAskedAudio = /\b(audio|suara|dengarin|dengarkan|ucapkan|pronunciation|cara baca|cara ngomong|bunyikan|play|putar)\b/i.test(text);
+    if (userAskedAudio) {
+      // Try to find quoted English words/phrases in the AI response
+      const quotedWords = response.match(/"([A-Za-z\s,.'-]+)"/g);
+      if (quotedWords && quotedWords.length > 0) {
+        const wordsToSpeak = quotedWords.map(w => w.replace(/"/g, '').trim()).filter(w => w.length > 0).join('. ');
+        if (wordsToSpeak.length > 0 && wordsToSpeak.length < 500) {
+          await sendTTSAudio(env, chatId, wordsToSpeak);
+        }
+      }
+    }
   }
 }
 
@@ -2368,6 +2895,53 @@ async function handleCallbackQuery(query: any, env: Env) {
   });
 
   const user = await getOrCreateUser(env, tgUser);
+
+  // ═══════════════════════════════════════════════════════
+  // SPEAKING PRACTICE CALLBACKS
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('speak_topic_')) {
+    const topicType = data.replace('speak_topic_', '');
+    const testType = user.target_test || 'TOEFL_IBT';
+    const prompts = SPEAKING_PROMPTS[testType] || SPEAKING_PROMPTS.TOEFL_IBT;
+
+    let selectedPrompt = '';
+    let selectedType = topicType;
+
+    if (topicType === 'random') {
+      selectedPrompt = prompts[Math.floor(Math.random() * prompts.length)];
+    } else if (topicType === 'opinion') {
+      const opinionPrompts = prompts.filter((p: string) => p.toLowerCase().includes('agree') || p.toLowerCase().includes('prefer') || p.toLowerCase().includes('do you think'));
+      selectedPrompt = opinionPrompts.length > 0 ? opinionPrompts[Math.floor(Math.random() * opinionPrompts.length)] : prompts[0];
+      selectedType = 'opinion';
+    } else if (topicType === 'describe') {
+      const describePrompts = prompts.filter((p: string) => p.toLowerCase().includes('describe'));
+      selectedPrompt = describePrompts.length > 0 ? describePrompts[Math.floor(Math.random() * describePrompts.length)] : prompts[0];
+      selectedType = 'describe';
+    }
+
+    try {
+      // Insert speaking session
+      const session = await env.DB.prepare(
+        'INSERT INTO speaking_sessions (user_id, prompt, test_type, topic_type, status) VALUES (?, ?, ?, ?, ?) RETURNING id'
+      ).bind(user.id, selectedPrompt, testType, selectedType, 'active').first() as any;
+
+      // Send the prompt
+      await editMessage(env, chatId, messageId,
+        `🎤 *Speaking Task*\n\n` +
+        `📝 *Prompt:* "${selectedPrompt}"\n\n` +
+        `⏱️ *Waktu:* 60 detik\n\n` +
+        `🎙️ *Instruksi:*\n` +
+        `1. Tekan tombol microphone\n` +
+        `2. Jawab prompt di atas\n` +
+        `3. Kirim voice message\n\n` +
+        `Tutor AI akan menilai pronunciation, fluency, grammar, vocabulary kamu.`
+      );
+    } catch (e: any) {
+      console.error('Speaking session error:', e);
+      await sendMessage(env, chatId, 'Gagal membuat sesi speaking. Coba lagi.');
+    }
+    return;
+  }
 
   // Settings changes
   const VALID_TEST_TYPES = ['TOEFL_IBT', 'TOEFL_ITP', 'IELTS', 'TOEIC'];
@@ -2649,12 +3223,35 @@ async function handleCallbackQuery(query: any, env: Env) {
       `• 🩺 Diagnostic — tahu level kamu sekarang\n\n` +
       `💡 *Saran:* Mulai dengan /diagnostic untuk tahu skill kamu di titik mana!\n\n` +
       `Mau mulai dari mana?`,
-      mainMenuKeyboard(env.WEBAPP_URL),
+      mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id),
     );
     return;
   }
 
   // Study category sub-menus
+  // NEW SKILL-BASED CATEGORIES
+  if (data === 'cat_reading') {
+    const tt = user.target_test || 'TOEFL_IBT';
+    await editMessage(env, chatId, messageId, `📖 *Reading Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, readingKeyboard(tt));
+    return;
+  }
+  if (data === 'cat_listening') {
+    const tt = user.target_test || 'TOEFL_IBT';
+    await editMessage(env, chatId, messageId, `🎧 *Listening Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, listeningKeyboard(tt));
+    return;
+  }
+  if (data === 'cat_speaking') {
+    const tt = user.target_test || 'TOEFL_IBT';
+    await editMessage(env, chatId, messageId, `🗣 *Speaking Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, speakingKeyboard(tt));
+    return;
+  }
+  if (data === 'cat_writing') {
+    const tt = user.target_test || 'TOEFL_IBT';
+    await editMessage(env, chatId, messageId, `✍️ *Writing Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, writingKeyboard(tt));
+    return;
+  }
+
+  // TRADITIONAL CATEGORIES
   if (data === 'cat_grammar') {
     await editMessage(env, chatId, messageId, 'Grammar — pilih topik:', grammarKeyboard());
     return;
@@ -2673,6 +3270,142 @@ async function handleCallbackQuery(query: any, env: Env) {
   }
   if (data === 'back_study') {
     await editMessage(env, chatId, messageId, 'Mau belajar apa?', studyTopicKeyboard());
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // PRONUNCIATION BANK CALLBACKS
+  // ═══════════════════════════════════════════════════════
+
+  if (data.startsWith('pronun_cat_') || data === 'pronun_random') {
+    const category = data === 'pronun_random' ? null : data.replace('pronun_cat_', '');
+
+    try {
+      let word: any;
+      if (category) {
+        // Get random word from specific category
+        word = await env.DB.prepare(
+          'SELECT * FROM pronunciation_bank WHERE category = ? ORDER BY RANDOM() LIMIT 1'
+        ).bind(category).first();
+      } else {
+        // Random from any category
+        word = await env.DB.prepare(
+          'SELECT * FROM pronunciation_bank ORDER BY RANDOM() LIMIT 1'
+        ).first();
+      }
+
+      if (!word) {
+        await editMessage(env, chatId, messageId, 'Belum ada kata di kategori ini. Coba kategori lain!');
+        return;
+      }
+
+      // Format the pronunciation card
+      const catLabels: Record<string, string> = {
+        th_sounds: '🦷 TH Sounds', vowel_pairs: '🔤 Vowel Pairs', word_stress: '🎯 Word Stress',
+        final_consonants: '🔚 Final Consonants', r_and_l: '🔄 R & L Sounds', silent_letters: '🤫 Silent Letters',
+        academic_vocab: '📚 Academic Vocab', connected_speech: '🔗 Connected Speech',
+        commonly_mispronounced: '❌ Commonly Wrong', sentence_practice: '🗣️ Sentence Practice',
+        schwa_sound: '🔊 Schwa Sound', homophones: '👥 Homophones', numbers_dates: '🔢 Numbers & Dates',
+        business_english: '💼 Business English', academic_phrases: '📝 Academic Phrases',
+        ielts_topics: '🌊 IELTS Topics', toefl_listening: '🎓 TOEFL Listening',
+        tongue_twisters: '😜 Tongue Twisters', w_and_v: '🆚 W & V Sounds',
+      };
+      const diffEmoji: Record<string, string> = { beginner: '🟢', intermediate: '🟡', advanced: '🔴' };
+      const testLabels: Record<string, string> = {
+        ALL: '📋 Semua Tes', TOEFL_IBT: '📘 TOEFL iBT', IELTS: '📗 IELTS', TOEIC: '📙 TOEIC',
+      };
+
+      const isSentence = word.part_of_speech === 'sentence' || word.part_of_speech === 'phrase';
+      const wordDisplay = isSentence ? `"${word.word}"` : `**${word.word}**`;
+      const ipaLine = word.ipa ? `\n🔤 IPA: \`${word.ipa}\`` : '';
+
+      let card = `${catLabels[word.category] || word.category}\n` +
+        `${diffEmoji[word.difficulty] || '🟡'} ${word.difficulty} — ${testLabels[word.test_type] || word.test_type}\n\n` +
+        `${wordDisplay}${ipaLine}\n`;
+
+      if (word.example_sentence && !isSentence) {
+        card += `\n💬 _${word.example_sentence}_\n`;
+      }
+      if (word.common_mistake) {
+        card += `\n❌ Kesalahan umum: ${word.common_mistake}`;
+      }
+      if (word.tip) {
+        card += `\n✅ Tips: ${word.tip}`;
+      }
+
+      const buttons = [
+        [{ text: '🔊 Dengarkan Audio', callback_data: `pronun_audio_${word.id}` }],
+        [
+          { text: '🔄 Kata Lain', callback_data: category ? `pronun_cat_${category}` : 'pronun_random' },
+          { text: '📋 Kategori', callback_data: 'pronun_menu' },
+        ],
+      ];
+
+      await editMessage(env, chatId, messageId, card, { inline_keyboard: buttons });
+    } catch (e: any) {
+      console.error('Pronunciation bank error:', e);
+      await editMessage(env, chatId, messageId, 'Terjadi error saat mengambil data. Coba lagi nanti.');
+    }
+    return;
+  }
+
+  // Audio playback for pronunciation word
+  if (data.startsWith('pronun_audio_')) {
+    const wordId = parseInt(data.replace('pronun_audio_', ''));
+    try {
+      const word = await env.DB.prepare('SELECT * FROM pronunciation_bank WHERE id = ?').bind(wordId).first() as any;
+      if (!word) {
+        await sendMessage(env, chatId, 'Kata tidak ditemukan.');
+        return;
+      }
+      // Send TTS audio as voice message
+      const textToSpeak = word.part_of_speech === 'sentence' || word.part_of_speech === 'phrase'
+        ? word.word
+        : `${word.word}. ... ${word.example_sentence || word.word}`;
+      await sendTTSAudio(env, chatId, textToSpeak);
+    } catch (e: any) {
+      console.error('Pronunciation audio error:', e);
+      await sendMessage(env, chatId, '❌ Gagal mengirim audio. Coba lagi nanti.');
+    }
+    return;
+  }
+
+  // Back to pronunciation menu
+  if (data === 'pronun_menu') {
+    const pronunCategories = [
+      { text: '🦷 TH Sounds', callback_data: 'pronun_cat_th_sounds' },
+      { text: '🔤 Vowel Pairs', callback_data: 'pronun_cat_vowel_pairs' },
+      { text: '🎯 Word Stress', callback_data: 'pronun_cat_word_stress' },
+      { text: '🔚 Final Consonants', callback_data: 'pronun_cat_final_consonants' },
+      { text: '🔄 R & L Sounds', callback_data: 'pronun_cat_r_and_l' },
+      { text: '🤫 Silent Letters', callback_data: 'pronun_cat_silent_letters' },
+      { text: '📚 Academic Vocab', callback_data: 'pronun_cat_academic_vocab' },
+      { text: '🔗 Connected Speech', callback_data: 'pronun_cat_connected_speech' },
+      { text: '❌ Commonly Wrong', callback_data: 'pronun_cat_commonly_mispronounced' },
+      { text: '🗣️ Sentence Practice', callback_data: 'pronun_cat_sentence_practice' },
+      { text: '🔊 Schwa Sound', callback_data: 'pronun_cat_schwa_sound' },
+      { text: '👥 Homophones', callback_data: 'pronun_cat_homophones' },
+      { text: '🔢 Numbers & Dates', callback_data: 'pronun_cat_numbers_dates' },
+      { text: '💼 Business English', callback_data: 'pronun_cat_business_english' },
+      { text: '📝 Academic Phrases', callback_data: 'pronun_cat_academic_phrases' },
+      { text: '🌊 IELTS Topics', callback_data: 'pronun_cat_ielts_topics' },
+      { text: '🎓 TOEFL Listening', callback_data: 'pronun_cat_toefl_listening' },
+      { text: '😜 Tongue Twisters', callback_data: 'pronun_cat_tongue_twisters' },
+      { text: '🆚 W & V Sounds', callback_data: 'pronun_cat_w_and_v' },
+    ];
+    const pronunRows = [];
+    for (let i = 0; i < pronunCategories.length; i += 2) {
+      if (i + 1 < pronunCategories.length) {
+        pronunRows.push([pronunCategories[i], pronunCategories[i + 1]]);
+      } else {
+        pronunRows.push([pronunCategories[i]]);
+      }
+    }
+    pronunRows.push([{ text: '🎲 Random Word', callback_data: 'pronun_random' }]);
+    await editMessage(env, chatId, messageId,
+      `🔊 *Pronunciation Practice*\n\nPilih kategori:`,
+      { inline_keyboard: pronunRows }
+    );
     return;
   }
 
@@ -2738,9 +3471,22 @@ async function handleCallbackQuery(query: any, env: Env) {
         await sendMessage(env, chatId, questionText);
       } else {
         await sendMessage(env, chatId, lesson);
-        // For pronunciation lessons, send audio examples
+        // For pronunciation lessons, send audio from pronunciation_bank
         if (weakness === 'pronunciation') {
-          await sendTTSAudio(env, chatId, 'think. this. very. walked. needed. played.');
+          try {
+            const sampleWords = await env.DB.prepare(
+              'SELECT word FROM pronunciation_bank WHERE part_of_speech != ? ORDER BY RANDOM() LIMIT 6'
+            ).bind('sentence').all();
+            if (sampleWords.results && sampleWords.results.length > 0) {
+              const wordsText = sampleWords.results.map((w: any) => w.word).join('. ');
+              await sendTTSAudio(env, chatId, wordsText);
+            } else {
+              await sendTTSAudio(env, chatId, 'think. this. very. walked. needed. played.');
+            }
+          } catch {
+            await sendTTSAudio(env, chatId, 'think. this. very. walked. needed. played.');
+          }
+          await sendMessage(env, chatId, '💡 Ketik /pronounce untuk latihan pronunciation lengkap dengan 254 kata dari 19 kategori!');
         }
       }
 
@@ -2835,7 +3581,8 @@ async function handleCallbackQuery(query: any, env: Env) {
       const todayCount = await env.DB.prepare(
         `SELECT COUNT(*) as count FROM attempt_answers aa
          JOIN test_attempts ta ON aa.attempt_id = ta.id
-         WHERE ta.user_id = ? AND aa.submitted_at >= ?`
+         WHERE ta.user_id = ? AND aa.submitted_at >= ?
+           AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))`
       ).bind(freshUser.id, today).first() as any;
       const count = todayCount?.count || 0;
       const target = 10;
@@ -2854,7 +3601,12 @@ async function handleCallbackQuery(query: any, env: Env) {
     if (data === 'study_score') {
       const stats = await env.DB.prepare(
         `SELECT section, COUNT(*) as total,
-         SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct
+         SUM(CASE
+           WHEN is_correct = 1 THEN 1
+           WHEN is_correct IS NULL AND section IN ('speaking','writing')
+                AND json_extract(answer_data, '$.score') >= 5 THEN 1
+           ELSE 0
+         END) as correct
          FROM attempt_answers aa
          JOIN test_attempts ta ON aa.attempt_id = ta.id
          WHERE ta.user_id = ?
@@ -2904,6 +3656,206 @@ async function handleCallbackQuery(query: any, env: Env) {
       await sendMessage(env, chatId, response);
       return;
     }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // UNIFIED SKILL EXERCISE HANDLER (Multi-step lessons)
+  // ═══════════════════════════════════════════════════════
+
+  const skillMatch = data.match(/^skill_(.+)$/);
+  if (skillMatch) {
+    const exerciseType = skillMatch[1];
+    try {
+      const { generateLesson, createLessonMeta, getStepDisplay, getStepInputType, getTotalSteps } = await import('../services/exercise-engine');
+
+      // Cancel any existing active exercise
+      await env.DB.prepare(
+        `UPDATE exercise_sessions SET status = 'abandoned' WHERE user_id = ? AND status = 'active'`
+      ).bind(user.id).run();
+
+      await editMessage(env, chatId, messageId, '⏳ Membuat lesson...');
+
+      const userLevel = user.proficiency_level || 'intermediate';
+      const targetTest = user.target_test || 'TOEFL_IBT';
+      const lesson = await generateLesson(env, exerciseType, userLevel, targetTest);
+      if (!lesson) {
+        await editMessage(env, chatId, messageId, '❌ Gagal membuat lesson. Coba lagi.');
+        return;
+      }
+
+      const meta = createLessonMeta(lesson);
+      const sessionResult = await env.DB.prepare(
+        'INSERT INTO exercise_sessions (user_id, type, status, metadata) VALUES (?, ?, ?, ?) RETURNING id'
+      ).bind(user.id, exerciseType, 'active', JSON.stringify(meta)).first() as any;
+
+      if (!sessionResult?.id) throw new Error('Failed to create session');
+      const sessionId = sessionResult.id;
+
+      // Render step 0 (teach)
+      const display = getStepDisplay(exerciseType, lesson, 0, sessionId);
+      await editMessage(env, chatId, messageId, display.text, display.keyboard);
+      if (display.tts_text) await sendTTSAudio(env, chatId, display.tts_text);
+    } catch (e: any) {
+      console.error('Exercise start error:', e);
+      await editMessage(env, chatId, messageId, '❌ Error: ' + (e.message || 'unknown'));
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // EXERCISE NAVIGATION CALLBACKS (ex_n_, ex_h_, ex_s_, ex_a_, ex_q_)
+  // ═══════════════════════════════════════════════════════
+
+  const exNavMatch = data.match(/^ex_([nhsaq])_(\d+)(?:_([A-F]))?$/);
+  if (exNavMatch) {
+    const [, action, sessionIdStr, mcqOption] = exNavMatch;
+    const sessionId = parseInt(sessionIdStr);
+
+    try {
+      const { getStepDisplay, getStepInputType, getTotalSteps, getStepHint, scoreMCQ, renderSummary, getConfig } = await import('../services/exercise-engine');
+      type LessonMeta = import('../services/exercise-engine').LessonMeta;
+
+      const session = await env.DB.prepare(
+        'SELECT * FROM exercise_sessions WHERE id = ? AND user_id = ?'
+      ).bind(sessionId, user.id).first() as any;
+
+      if (!session || session.status !== 'active') {
+        await editMessage(env, chatId, messageId, '⚠️ Session tidak ditemukan atau sudah selesai.');
+        return;
+      }
+
+      const meta: LessonMeta = JSON.parse(session.metadata || '{}');
+      const exerciseType = session.type;
+      const total = getTotalSteps(exerciseType);
+
+      // ── NEXT (advance to next step) ──
+      if (action === 'n') {
+        meta.step += 1;
+
+        // Check if lesson is complete
+        if (meta.step >= total) {
+          const summary = renderSummary(exerciseType, meta.lesson, meta.scores, meta.hints);
+          const avgScore = meta.scores.length > 0 ? Math.round(meta.scores.reduce((a: number, b: number) => a + b, 0) / meta.scores.length) : 0;
+          await env.DB.prepare(
+            'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
+          ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), sessionId).run();
+          await editMessage(env, chatId, messageId, summary.text, summary.keyboard);
+          return;
+        }
+
+        // Determine input type for next step
+        const inputType = getStepInputType(exerciseType, meta.step);
+        meta.input = inputType === 'text' ? 'text' : inputType === 'voice' ? 'voice' : null;
+
+        await env.DB.prepare(
+          'UPDATE exercise_sessions SET metadata = ? WHERE id = ?'
+        ).bind(JSON.stringify(meta), sessionId).run();
+
+        const display = getStepDisplay(exerciseType, meta.lesson, meta.step, sessionId);
+        await editMessage(env, chatId, messageId, display.text, display.keyboard);
+        if (display.tts_text) await sendTTSAudio(env, chatId, display.tts_text);
+        return;
+      }
+
+      // ── HINT ──
+      if (action === 'h') {
+        meta.hints += 1;
+        await env.DB.prepare(
+          'UPDATE exercise_sessions SET metadata = ? WHERE id = ?'
+        ).bind(JSON.stringify(meta), sessionId).run();
+
+        const hint = getStepHint(exerciseType, meta.lesson, meta.step);
+        await sendMessage(env, chatId, hint);
+        return;
+      }
+
+      // ── SKIP (score 0, advance) ──
+      if (action === 's') {
+        meta.scores.push(0);
+        meta.step += 1;
+
+        if (meta.step >= total) {
+          const summary = renderSummary(exerciseType, meta.lesson, meta.scores, meta.hints);
+          const avgScore = meta.scores.length > 0 ? Math.round(meta.scores.reduce((a: number, b: number) => a + b, 0) / meta.scores.length) : 0;
+          await env.DB.prepare(
+            'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
+          ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), sessionId).run();
+          await editMessage(env, chatId, messageId, summary.text, summary.keyboard);
+          return;
+        }
+
+        const inputType = getStepInputType(exerciseType, meta.step);
+        meta.input = inputType === 'text' ? 'text' : inputType === 'voice' ? 'voice' : null;
+
+        await env.DB.prepare(
+          'UPDATE exercise_sessions SET metadata = ? WHERE id = ?'
+        ).bind(JSON.stringify(meta), sessionId).run();
+
+        await sendMessage(env, chatId, '⏭ Dilewati.');
+        const display = getStepDisplay(exerciseType, meta.lesson, meta.step, sessionId);
+        await sendMessage(env, chatId, display.text, display.keyboard);
+        if (display.tts_text) await sendTTSAudio(env, chatId, display.tts_text);
+        return;
+      }
+
+      // ── MCQ ANSWER ──
+      if (action === 'a' && mcqOption) {
+        const { score, feedback } = scoreMCQ(exerciseType, meta.lesson, meta.step, mcqOption);
+        meta.scores.push(score);
+        meta.step += 1;
+
+        const isLastStep = meta.step >= total;
+        if (isLastStep) {
+          const avgScore = meta.scores.length > 0 ? Math.round(meta.scores.reduce((a: number, b: number) => a + b, 0) / meta.scores.length) : 0;
+          await env.DB.prepare(
+            'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
+          ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), sessionId).run();
+
+          await editMessage(env, chatId, messageId, feedback);
+          const summary = renderSummary(exerciseType, meta.lesson, meta.scores, meta.hints);
+          await sendMessage(env, chatId, summary.text, summary.keyboard);
+        } else {
+          const inputType = getStepInputType(exerciseType, meta.step);
+          meta.input = inputType === 'text' ? 'text' : inputType === 'voice' ? 'voice' : null;
+
+          await env.DB.prepare(
+            'UPDATE exercise_sessions SET metadata = ? WHERE id = ?'
+          ).bind(JSON.stringify(meta), sessionId).run();
+
+          // Show feedback + next question button
+          await editMessage(env, chatId, messageId, feedback, {
+            inline_keyboard: [[{ text: '➡️ Soal Berikutnya', callback_data: `ex_n_${sessionId}` }]],
+          });
+        }
+        return;
+      }
+
+      // ── QUIT ──
+      if (action === 'q') {
+        const avgScore = meta.scores.length > 0 ? Math.round(meta.scores.reduce((a: number, b: number) => a + b, 0) / meta.scores.length) : 0;
+        await env.DB.prepare(
+          'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
+        ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), sessionId).run();
+
+        if (meta.scores.length > 0) {
+          const summary = renderSummary(exerciseType, meta.lesson, meta.scores, meta.hints);
+          await editMessage(env, chatId, messageId, summary.text, summary.keyboard);
+        } else {
+          await editMessage(env, chatId, messageId, '👋 Lesson dihentikan. Kembali ke /study kapan saja!');
+        }
+        return;
+      }
+    } catch (e: any) {
+      console.error('Exercise nav error:', e);
+      await sendMessage(env, chatId, '❌ Error: ' + (e.message || 'unknown'));
+    }
+    return;
+  }
+
+  // study_menu callback (back to main study menu)
+  if (data === 'study_menu') {
+    await editMessage(env, chatId, messageId, 'Mau belajar apa?', studyTopicKeyboard());
+    return;
   }
 
     // Copy referral link
@@ -3217,6 +4169,8 @@ try {
       return;
     }
   }
+
+// Old exercise handlers removed — now using exercise-engine.ts for multi-step lessons
 
 async function editMessage(env: Env, chatId: number, messageId: number, text: string, replyMarkup?: any) {
   await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {

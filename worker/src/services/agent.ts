@@ -131,7 +131,7 @@ async function executeStep(env: Env, user: User, step: any): Promise<string> {
       case 'query_stats': {
         const users = await env.DB.prepare('SELECT COUNT(*) as c FROM users').first() as any;
         const questions = await env.DB.prepare('SELECT COUNT(*) as c FROM test_contents WHERE status=?').bind('published').first() as any;
-        const answers = await env.DB.prepare('SELECT COUNT(*) as c FROM attempt_answers').first() as any;
+        const answers = await env.DB.prepare("SELECT COUNT(*) as c FROM attempt_answers WHERE NOT (is_correct IS NULL AND section NOT IN ('speaking','writing'))").first() as any;
         const costs = await env.DB.prepare('SELECT SUM(cost_usd) as c FROM api_usage').first() as any;
         return `Users: ${users?.c || 0} | Questions: ${questions?.c || 0} | Answers: ${answers?.c || 0} | Cost: $${(costs?.c || 0).toFixed(4)}`;
       }

@@ -9,6 +9,8 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
   const [isRecording, setIsRecording] = useState(false);
   const [duration, setDuration] = useState(0);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [micError, setMicError] = useState<string | null>(null);
+  const [checkingMic, setCheckingMic] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
@@ -29,7 +31,16 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
   }, []);
 
   async function startRecording() {
+    setMicError(null);
+    setCheckingMic(true);
     try {
+      // Check if getUserMedia is supported
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setMicError('Perangkat ini tidak mendukung perekaman suara. Coba gunakan bot Telegram dan kirim voice message.');
+        setCheckingMic(false);
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       const mediaRecorder = new MediaRecorder(stream, {
@@ -58,6 +69,7 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
       setIsRecording(true);
       setDuration(0);
       setAudioUrl(null);
+      setMicError(null);
 
       revokeAudioUrl();
 
@@ -70,8 +82,19 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
           return d + 1;
         });
       }, 1000);
-    } catch (err) {
-      alert('Microphone access is required for speaking tasks.');
+    } catch (err: any) {
+      console.error('[EduBot] Microphone error:', err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setMicError('Akses mikrofon ditolak. Buka pengaturan browser dan izinkan akses mikrofon untuk halaman ini.');
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        setMicError('Mikrofon tidak ditemukan. Pastikan perangkat kamu memiliki mikrofon yang berfungsi.');
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        setMicError('Mikrofon sedang digunakan aplikasi lain. Tutup aplikasi lain dan coba lagi.');
+      } else {
+        setMicError('Tidak bisa mengakses mikrofon. Coba kirim voice message ke bot @OSEE_TOEFL_IELTS_TOEIC_study_bot sebagai alternatif.');
+      }
+    } finally {
+      setCheckingMic(false);
     }
   }
 
@@ -98,6 +121,24 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
 
   return (
     <div className="flex flex-col items-center gap-3 p-4">
+      {micError && (
+        <div className="w-full bg-red-50 border border-red-200 rounded-xl p-3 mb-2">
+          <div className="flex items-start gap-2">
+            <span className="text-lg">🎙️</span>
+            <div>
+              <p className="text-sm font-medium text-red-700 mb-1">Mikrofon Tidak Tersedia</p>
+              <p className="text-xs text-red-600 leading-relaxed">{micError}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setMicError(null)}
+            className="mt-2 text-xs text-tg-button font-medium"
+          >
+            Coba Lagi
+          </button>
+        </div>
+      )}
+
       <div className="text-2xl font-mono">
         {String(minutes).padStart(2, '0')}:{String(secs).padStart(2, '0')}
       </div>
@@ -112,14 +153,19 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
       ) : (
         <button
           onClick={startRecording}
-          className="w-16 h-16 rounded-full bg-tg-button flex items-center justify-center shadow-lg"
+          disabled={checkingMic}
+          className="w-16 h-16 rounded-full bg-tg-button flex items-center justify-center shadow-lg disabled:opacity-50"
         >
-          <div className="w-6 h-6 bg-tg-button-text rounded-full"></div>
+          {checkingMic ? (
+            <div className="w-5 h-5 border-2 border-tg-button-text border-t-transparent rounded-full animate-spin"></div>
+          ) : (
+            <div className="w-6 h-6 bg-tg-button-text rounded-full"></div>
+          )}
         </button>
       )}
 
       <p className="text-sm text-tg-hint">
-        {isRecording ? 'Recording... tap to stop' : audioUrl ? 'Recording saved' : 'Tap to record'}
+        {checkingMic ? 'Memeriksa mikrofon...' : isRecording ? 'Merekam... tap untuk stop' : audioUrl ? 'Rekaman tersimpan' : 'Tap untuk merekam'}
       </p>
 
       {audioUrl && (

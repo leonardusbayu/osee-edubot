@@ -91,7 +91,7 @@ premiumRoutes.post('/stars/callback', async (c) => {
     return c.json({ success: true });
   } catch (e: any) {
     console.error('Stars callback error:', e);
-    return c.json({ error: e.message }, 500);
+    return c.json({ error: 'Premium service error' }, 500);
   }
 });
 

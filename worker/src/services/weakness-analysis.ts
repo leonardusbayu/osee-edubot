@@ -66,13 +66,18 @@ async function getLatestDiagnostic(env: Env, userId: number) {
 // Get practice stats by section for a user
 async function getPracticeStats(env: Env, userId: number) {
   const results = await env.DB.prepare(
-    `SELECT 
+    `SELECT
        aa.section,
        COUNT(*) as attempted,
-       SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct
+       SUM(CASE
+         WHEN aa.is_correct = 1 THEN 1
+         WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+              AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+         ELSE 0
+       END) as correct
      FROM attempt_answers aa
      JOIN test_attempts ta ON aa.attempt_id = ta.id
-     WHERE ta.user_id = ? AND aa.is_correct IS NOT NULL
+     WHERE ta.user_id = ?
      GROUP BY aa.section`
   ).bind(userId).all();
   

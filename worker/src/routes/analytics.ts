@@ -44,16 +44,25 @@ analyticsRoutes.get('/dashboard', async (c) => {
     ? await c.env.DB.prepare("SELECT COUNT(*) as c FROM class_enrollments WHERE class_id = ? AND status = 'active'").bind(classId).first() as any
     : await c.env.DB.prepare('SELECT COUNT(*) as c FROM users WHERE role = ?').bind('student').first() as any;
 
-  // Active today (filtered by class if classId)
+  // Active today (filtered by class if classId) — conversation_messages is primary activity
+  const activeTodayFilterClause = classId
+    ? ` AND user_id IN (SELECT user_id FROM class_enrollments WHERE class_id = ? AND status = 'active')`
+    : '';
+  const activeTodayParams = classId ? [today, classId, 'active', today, ...userFilterParams] : [today, today, ...userFilterParams];
   const activeToday = await c.env.DB.prepare(
-    `SELECT COUNT(DISTINCT ta.user_id) as c FROM attempt_answers aa
-     JOIN test_attempts ta ON aa.attempt_id = ta.id
-     WHERE aa.submitted_at >= ?${userFilterClause}`
-  ).bind(today, ...userFilterParams).first() as any;
+    `SELECT COUNT(DISTINCT user_id) as c FROM (
+       SELECT user_id FROM conversation_messages WHERE date(created_at) >= ?${activeTodayFilterClause}
+       UNION
+       SELECT ta.user_id FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= ?${userFilterClause}
+     )`
+  ).bind(...activeTodayParams).first() as any;
 
-  // Total questions answered this week (filtered by class)
+  // Total questions answered this week (speaking/writing use score in answer_data)
   const weekActivity = await c.env.DB.prepare(
-    `SELECT COUNT(*) as total, SUM(CASE WHEN is_correct=1 THEN 1 ELSE 0 END) as correct
+    `SELECT COUNT(*) as total, SUM(CASE
+       WHEN is_correct=1 THEN 1
+       WHEN is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+       ELSE 0 END) as correct
      FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id=ta.id
      WHERE aa.submitted_at >= ?${userFilterClause}`
   ).bind(weekAgo, ...userFilterParams).first() as any;
@@ -65,20 +74,26 @@ analyticsRoutes.get('/dashboard', async (c) => {
      WHERE tr.band_score IS NOT NULL AND tr.created_at >= ?${userFilterClause}`
   ).bind(weekAgo, ...userFilterParams).first() as any;
 
-  // Weakest sections (filtered by class)
+  // Weakest sections (filtered by class, speaking/writing score-aware)
   const weakSections = await c.env.DB.prepare(
     `SELECT aa.section, COUNT(*) as total,
-     SUM(CASE WHEN aa.is_correct=1 THEN 1 ELSE 0 END) as correct
+     SUM(CASE
+       WHEN aa.is_correct=1 THEN 1
+       WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+       ELSE 0 END) as correct
      FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id=ta.id
      WHERE aa.submitted_at >= ?${userFilterClause}
      GROUP BY aa.section ORDER BY (CAST(correct AS FLOAT)/total) ASC`
   ).bind(weekAgo, ...userFilterParams).all();
 
-  // Top students (filtered by class, this week)
+  // Top students (filtered by class, this week, score-aware)
   const topStudents = await c.env.DB.prepare(
     `SELECT COALESCE(u.name, u.username, 'Student ' || u.id) as name,
             COUNT(aa.id) as questions,
-            SUM(CASE WHEN aa.is_correct=1 THEN 1 ELSE 0 END) as correct
+            SUM(CASE
+              WHEN aa.is_correct=1 THEN 1
+              WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+              ELSE 0 END) as correct
      FROM users u
      JOIN test_attempts ta ON u.id=ta.user_id
      JOIN attempt_answers aa ON ta.id=aa.attempt_id
@@ -165,11 +180,14 @@ analyticsRoutes.post('/calibrate-difficulty', async (c) => {
   const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
   if (!isSecret && (!user || user.role !== 'admin')) return c.json({ error: 'Admin only' }, 403);
 
-  // For each question, calculate accuracy → set difficulty
+  // For each question, calculate accuracy → set difficulty (score-aware)
   // This is a heavy operation — update in batches
   const questions = await c.env.DB.prepare(
-    `SELECT tc.id, COUNT(aa.id) as attempts,
-     SUM(CASE WHEN aa.is_correct=1 THEN 1 ELSE 0 END) as correct
+    `SELECT tc.id, tc.section, COUNT(aa.id) as attempts,
+     SUM(CASE
+       WHEN aa.is_correct=1 THEN 1
+       WHEN aa.is_correct IS NULL AND tc.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+       ELSE 0 END) as correct
      FROM test_contents tc
      LEFT JOIN attempt_answers aa ON aa.content_id = tc.id
      WHERE tc.status = 'published'
@@ -214,16 +232,26 @@ analyticsRoutes.get('/churn-risk', async (c) => {
     userFilterParams = [classId, 'active'];
   }
 
-  // Students with no activity in 3+ days
+  // Students with no activity in 3+ days — conversation_messages is primary activity source
   const atRisk = await c.env.DB.prepare(
-    `SELECT u.id, u.name, u.telegram_id, MAX(aa.submitted_at) as last_active,
-     COUNT(aa.id) as total_questions
+    `SELECT u.id, u.name, u.telegram_id,
+     (SELECT MAX(last_ts) FROM (
+        SELECT MAX(created_at) as last_ts FROM conversation_messages WHERE user_id = u.id
+        UNION ALL SELECT MAX(aa2.submitted_at) FROM attempt_answers aa2 JOIN test_attempts ta2 ON aa2.attempt_id = ta2.id WHERE ta2.user_id = u.id
+     )) as last_active,
+     (SELECT COUNT(*) FROM attempt_answers aa3 JOIN test_attempts ta3 ON aa3.attempt_id = ta3.id WHERE ta3.user_id = u.id) as total_questions
      FROM users u
-     LEFT JOIN test_attempts ta ON u.id = ta.user_id
-     LEFT JOIN attempt_answers aa ON ta.id = aa.attempt_id
      WHERE u.role = 'student'${userFilterClause}
-     GROUP BY u.id
-     HAVING last_active < ? OR last_active IS NULL
+       AND (
+         (SELECT MAX(last_ts) FROM (
+            SELECT MAX(created_at) as last_ts FROM conversation_messages WHERE user_id = u.id
+            UNION ALL SELECT MAX(aa4.submitted_at) FROM attempt_answers aa4 JOIN test_attempts ta4 ON aa4.attempt_id = ta4.id WHERE ta4.user_id = u.id
+         )) < ? OR
+         (SELECT MAX(last_ts) FROM (
+            SELECT MAX(created_at) as last_ts FROM conversation_messages WHERE user_id = u.id
+            UNION ALL SELECT MAX(aa5.submitted_at) FROM attempt_answers aa5 JOIN test_attempts ta5 ON aa5.attempt_id = ta5.id WHERE ta5.user_id = u.id
+         )) IS NULL
+       )
      ORDER BY last_active ASC`
   ).bind(...userFilterParams, threeDaysAgo).all();
 
@@ -301,6 +329,32 @@ analyticsRoutes.get('/ab-results', async (c) => {
 
 // ─── Tracking Endpoints ───────────────────────────────────────────────
 
+// Log client or server errors
+analyticsRoutes.post('/error', async (c) => {
+  try {
+    const body = await c.req.json();
+    const user = await getAuthUser(c.req.raw, c.env).catch(() => null);
+
+    await c.env.DB.prepare(
+      `INSERT INTO error_logs (source, error_type, message, stack, user_id, url, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      body.source || 'client',
+      body.error_type || 'unknown',
+      (body.message || 'Unknown error').substring(0, 1000),
+      (body.stack || '').substring(0, 2000),
+      user?.id || null,
+      (body.url || '').substring(0, 500),
+      body.metadata ? JSON.stringify(body.metadata).substring(0, 2000) : null,
+    ).run();
+
+    return c.json({ logged: true });
+  } catch (e) {
+    console.error('Error logging failed:', e);
+    return c.json({ logged: false }, 500);
+  }
+});
+
 // Track a user message / interaction
 analyticsRoutes.post('/message', async (c) => {
   const user = await getAuthUser(c.req.raw, c.env);
@@ -370,18 +424,24 @@ analyticsRoutes.get('/class/:classId/students', async (c) => {
       (SELECT COUNT(*) FROM test_attempts ta
        JOIN attempt_answers aa ON ta.id = aa.attempt_id
        WHERE ta.user_id = u.id AND aa.submitted_at >= ?) as week_questions,
-      (SELECT CAST(SUM(aa.is_correct) AS FLOAT) / NULLIF(COUNT(*), 0) * 100
+      (SELECT CAST(SUM(CASE
+         WHEN aa.is_correct=1 THEN 1
+         WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+         ELSE 0 END) AS FLOAT) / NULLIF(COUNT(*), 0) * 100
        FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
        WHERE ta.user_id = u.id AND aa.submitted_at >= ?) as week_accuracy,
-      (SELECT SUM(time_spent_seconds) FROM daily_study_logs WHERE user_id = u.id AND log_date >= ?) as week_minutes,
-      (SELECT COUNT(DISTINCT date(started_at)) FROM user_sessions WHERE user_id = u.id AND started_at >= ?) as active_days,
+      (SELECT SUM(aa.time_spent_seconds) FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE ta.user_id = u.id AND aa.submitted_at >= ?) as week_minutes,
+      (SELECT COUNT(DISTINCT date) FROM (
+         SELECT DATE(cm.created_at) as date FROM conversation_messages cm WHERE cm.user_id = u.id AND cm.created_at >= ?
+         UNION SELECT DATE(aa2.submitted_at) FROM attempt_answers aa2 JOIN test_attempts ta2 ON aa2.attempt_id = ta2.id WHERE ta2.user_id = u.id AND aa2.submitted_at >= ?
+      )) as active_days,
       (SELECT MAX(diagnostic.estimated_band) FROM diagnostic_results diagnostic WHERE diagnostic.user_id = u.id) as estimated_band
     FROM users u
     JOIN class_enrollments ce ON ce.user_id = u.id
     LEFT JOIN user_gamification ug ON ug.user_id = u.id
     WHERE ce.class_id = ? AND ce.status = 'active' AND u.role = 'student'
     ORDER BY week_questions DESC
-  `).bind(sevenDaysAgo, sevenDaysAgo, sevenDaysAgo, sevenDaysAgo, classId).all() as any;
+  `).bind(sevenDaysAgo, sevenDaysAgo, sevenDaysAgo, sevenDaysAgo, sevenDaysAgo, classId).all() as any;
 
   return c.json({
     class_id: classId,

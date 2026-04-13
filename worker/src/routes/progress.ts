@@ -113,15 +113,34 @@ progressRoutes.get('/overview', async (c) => {
         };
       });
 
-    // 7. Study streak (consecutive days with activity)
+    // 6b. Conversation activity (Belajar, diagnostic via bot)
+    let conversationCount = 0;
+    let conversationDays: string[] = [];
+    try {
+      const convResult = await c.env.DB.prepare(
+        `SELECT COUNT(*) as msg_count FROM conversation_messages
+         WHERE user_id = ? AND role = 'user'`
+      ).bind(userId).first() as any;
+      conversationCount = convResult?.msg_count || 0;
+
+      const convDays = await c.env.DB.prepare(
+        `SELECT DISTINCT date(created_at) as day FROM conversation_messages
+         WHERE user_id = ? AND role = 'user'
+         ORDER BY day DESC LIMIT 30`
+      ).bind(userId).all();
+      conversationDays = (convDays.results || []).map((d: any) => d.day as string);
+    } catch {}
+
+    // 7. Study streak (consecutive days with activity — tests + conversations)
     const recentDays = await c.env.DB.prepare(
-      `SELECT DISTINCT date(submitted_at) as day
-       FROM attempt_answers aa
-       JOIN test_attempts ta ON aa.attempt_id = ta.id
-       WHERE ta.user_id = ?
-       ORDER BY day DESC
-       LIMIT 30`
-    ).bind(userId).all();
+      `SELECT DISTINCT day FROM (
+         SELECT date(submitted_at) as day FROM attempt_answers aa
+         JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE ta.user_id = ?
+         UNION
+         SELECT date(created_at) as day FROM conversation_messages
+         WHERE user_id = ? AND role = 'user'
+       ) ORDER BY day DESC LIMIT 30`
+    ).bind(userId, userId).all();
 
     let streak = 0;
     const today = new Date().toISOString().split('T')[0];
@@ -159,12 +178,17 @@ progressRoutes.get('/overview', async (c) => {
        GROUP BY aa.section`
     ).bind(userId).all();
 
+    // Include bot conversation activity in total practice count
+    const totalPracticed = totalAnswers + conversationCount;
+
     return c.json({
+      target_test: user.target_test || 'TOEFL_IBT',
       total_tests: totalTests,
-      total_questions_practiced: totalAnswers,
+      total_questions_practiced: totalPracticed,
       correct_answers: correctAnswers,
       wrong_answers: wrongAnswers,
       overall_accuracy: totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : 0,
+      bot_practice: conversationCount,
       best_score: bestScore,
       average_score: avgScore,
       study_streak: streak,
@@ -183,6 +207,7 @@ progressRoutes.get('/overview', async (c) => {
           total_score: r.total_score ?? 0,
           band_score: r.band_score ?? null,
           section_scores: sectionScores,
+          test_type: r.test_type || null,
           date: r.created_at,
         };
       }),
@@ -195,7 +220,7 @@ progressRoutes.get('/overview', async (c) => {
       })),
     });
   } catch (e: any) {
-    return c.json({ error: e.message }, 500);
+    return c.json({ error: 'Failed to load progress data' }, 500);
   }
 });
 
@@ -294,7 +319,7 @@ Return JSON: {"recommendations": [{"title": "...", "description": "...", "priori
     });
   } catch (e: any) {
     console.error('Analysis error:', e);
-    return c.json({ error: e.message }, 500);
+    return c.json({ error: 'Failed to load progress data' }, 500);
   }
 });
 
@@ -345,7 +370,7 @@ progressRoutes.get('/analysis/:userId', async (c) => {
       })),
     });
   } catch (e: any) {
-    return c.json({ error: e.message }, 500);
+    return c.json({ error: 'Failed to load progress data' }, 500);
   }
 });
 
@@ -361,6 +386,183 @@ progressRoutes.get('/costs', async (c) => {
     const total = await c.env.DB.prepare("SELECT SUM(cost_usd) as cost FROM api_usage").first() as any;
     return c.json({ today: today.results, month: month.results, all_time: total?.cost || 0 });
   } catch (e: any) {
-    return c.json({ error: e.message }, 500);
+    return c.json({ error: 'Failed to load progress data' }, 500);
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+// Weekly Report Card Data — visual report card page
+// ═══════════════════════════════════════════════════════
+progressRoutes.get('/report-card', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user?.id) return c.json({ error: 'Unauthorized' }, 401);
+  const userId = user.id;
+
+  try {
+    const { getOrCreateGamification } = await import('../services/commercial');
+
+    // Get week parameter (YYYY-WW format) or default to current week
+    const weekParam = c.req.query('week');
+    let startDate: Date;
+    let endDate: Date;
+
+    if (weekParam && /^\d{4}-\d{2}$/.test(weekParam)) {
+      // Parse ISO week format YYYY-WW
+      const [year, week] = weekParam.split('-').map(Number);
+      const jan4 = new Date(year, 0, 4);
+      const dayOfWeek = jan4.getDay();
+      const ISOWeek1Start = new Date(jan4);
+      ISOWeek1Start.setDate(jan4.getDate() - dayOfWeek + 1);
+      startDate = new Date(ISOWeek1Start);
+      startDate.setDate(ISOWeek1Start.getDate() + (week - 1) * 7);
+      endDate = new Date(startDate);
+      endDate.setDate(startDate.getDate() + 6);
+    } else {
+      // Default: current week (Sunday to Saturday, or Monday to Sunday depending on locale)
+      const today = new Date();
+      const dayOfWeek = today.getDay();
+      startDate = new Date(today);
+      startDate.setDate(today.getDate() - dayOfWeek); // Start of week (Sunday)
+      endDate = new Date(startDate);
+      endDate.setDate(startDate.getDate() + 6); // End of week (Saturday)
+    }
+
+    const startDateStr = startDate.toISOString();
+    const endDateStr = endDate.toISOString();
+
+    // Get week label
+    const weekLabel = `${startDate.getDate()}-${endDate.getDate()} ${endDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}`;
+
+    // Total questions answered this week
+    const answers = await c.env.DB.prepare(
+      `SELECT COUNT(*) as total, SUM(CASE WHEN is_correct=1 THEN 1 ELSE 0 END) as correct
+       FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id=ta.id
+       WHERE ta.user_id=? AND aa.submitted_at>=? AND aa.submitted_at<?`
+    ).bind(userId, startDateStr, endDateStr).first() as any;
+
+    // Tests completed this week
+    const tests = await c.env.DB.prepare(
+      "SELECT COUNT(*) as count FROM test_attempts WHERE user_id=? AND status='completed' AND started_at>=? AND started_at<?"
+    ).bind(userId, startDateStr, endDateStr).first() as any;
+
+    // By section breakdown
+    const bySection = await c.env.DB.prepare(
+      `SELECT aa.section, COUNT(*) as total, SUM(CASE WHEN is_correct=1 THEN 1 ELSE 0 END) as correct
+       FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id=ta.id
+       WHERE ta.user_id=? AND aa.submitted_at>=? AND aa.submitted_at<?
+       GROUP BY aa.section`
+    ).bind(userId, startDateStr, endDateStr).all();
+
+    // Gamification data
+    const g = await getOrCreateGamification(c.env, userId);
+
+    // Get previous week's data for improvement calculation
+    const prevStartDate = new Date(startDate);
+    prevStartDate.setDate(prevStartDate.getDate() - 7);
+    const prevEndDate = new Date(endDate);
+    prevEndDate.setDate(prevEndDate.getDate() - 7);
+    const prevStartDateStr = prevStartDate.toISOString();
+    const prevEndDateStr = prevEndDate.toISOString();
+
+    const prevAnswers = await c.env.DB.prepare(
+      `SELECT COUNT(*) as total, SUM(CASE WHEN is_correct=1 THEN 1 ELSE 0 END) as correct
+       FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id=ta.id
+       WHERE ta.user_id=? AND aa.submitted_at>=? AND aa.submitted_at<?`
+    ).bind(userId, prevStartDateStr, prevEndDateStr).first() as any;
+
+    // Calculate metrics
+    const total = answers?.total || 0;
+    const correct = answers?.correct || 0;
+    const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
+    const testsCompleted = tests?.count || 0;
+
+    const prevTotal = prevAnswers?.total || 0;
+    const prevCorrect = prevAnswers?.correct || 0;
+    const prevAccuracy = prevTotal > 0 ? Math.round((prevCorrect / prevTotal) * 100) : 0;
+    const improvementAccuracy = prevTotal > 0 ? accuracy - prevAccuracy : null;
+
+    // Study streak (from progress overview logic)
+    const recentDays = await c.env.DB.prepare(
+      `SELECT DISTINCT day FROM (
+         SELECT date(submitted_at) as day FROM attempt_answers aa
+         JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE ta.user_id = ?
+         UNION
+         SELECT date(created_at) as day FROM conversation_messages
+         WHERE user_id = ? AND role = 'user'
+       ) ORDER BY day DESC LIMIT 30`
+    ).bind(userId, userId).all();
+
+    let streak = 0;
+    const days = recentDays.results.map((d: any) => d.day as string);
+    if (days.length > 0) {
+      const checkDate = new Date();
+      for (let i = 0; i < 30; i++) {
+        const dateStr = checkDate.toISOString().split('T')[0];
+        if (days.includes(dateStr)) {
+          streak++;
+          checkDate.setDate(checkDate.getDate() - 1);
+        } else if (i === 0) {
+          checkDate.setDate(checkDate.getDate() - 1);
+          continue;
+        } else {
+          break;
+        }
+      }
+    }
+
+    // Calculate study minutes (estimate: ~2 min per question)
+    const studyMinutes = Math.round(total * 2);
+
+    // Rank percentile (rough: users with higher accuracy rank higher)
+    let rankPercentile = 50;
+    try {
+      const userRank = await c.env.DB.prepare(
+        `SELECT COUNT(*) as count FROM user_gamification WHERE accuracy >= ?`
+      ).bind(accuracy).first() as any;
+      const totalUsers = await c.env.DB.prepare(
+        `SELECT COUNT(*) as count FROM user_gamification`
+      ).first() as any;
+      if (totalUsers?.count > 0) {
+        rankPercentile = Math.round((1 - (userRank?.count || 1) / (totalUsers?.count || 1)) * 100);
+      }
+    } catch {}
+
+    // Section breakdown with colors
+    const sectionBreakdown: Record<string, any> = {};
+    for (const sec of bySection.results as any[]) {
+      const secTotal = sec.total || 0;
+      const secCorrect = sec.correct || 0;
+      const secAccuracy = secTotal > 0 ? Math.round((secCorrect / secTotal) * 100) : 0;
+      sectionBreakdown[sec.section] = {
+        total: secTotal,
+        correct: secCorrect,
+        accuracy: secAccuracy,
+      };
+    }
+
+    // Get badges earned
+    const badges = JSON.parse(g.badges || '[]') as string[];
+
+    const reportData = {
+      user_name: user.name || 'Student',
+      week_label: weekLabel,
+      questions_answered: total,
+      correct,
+      accuracy,
+      tests_completed: testsCompleted,
+      streak_days: streak,
+      xp: g.xp || 0,
+      level: g.level || 1,
+      badges: badges.slice(0, 5), // Top 5 badges
+      by_section: sectionBreakdown,
+      improvement: improvementAccuracy !== null ? (improvementAccuracy > 0 ? `+${improvementAccuracy}%` : `${improvementAccuracy}%`) : null,
+      rank_percentile: rankPercentile,
+      study_minutes: studyMinutes,
+    };
+
+    return c.json(reportData);
+  } catch (e: any) {
+    console.error('Report card error:', e);
+    return c.json({ error: 'Failed to load report card data' }, 500);
   }
 });

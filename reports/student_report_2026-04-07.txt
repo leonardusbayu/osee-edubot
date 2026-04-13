@@ -1,0 +1,779 @@
+================================================================================
+                    EDUBOT STUDENT LEGACY REPORT
+================================================================================
+Generated: 2026-04-07 10:59:46
+Total Students: 27
+
+────────────────────────────────────────────────────────────────────────────────
+SYSTEM OVERVIEW
+────────────────────────────────────────────────────────────────────────────────
+Total Questions Answered: 1,353
+Total Correct Answers: 303
+Overall System Accuracy: 22.4%
+Active Students (3 days): 0
+Cold Students (4-7 days): 0
+Very Cold Students (7+ days): 27
+Premium Students: 0
+
+================================================================================
+🔴 Very Cold Aditya Kurniawan (ID: 3) 
+--------------------------------------------------------------------------------
+Username: @FabrianusAditya
+Target Test: TOEFL_IBT
+Proficiency Level: advanced
+Member Since: 2026-03-28
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+DIAGNOSTIC RESULTS
+  Est. Band Score:    4
+  Grammar:            7/9
+  Reading:            3/3
+  Listening:         0/3
+
+
+================================================================================
+🔴 Very Cold Ahmad Khoirul Syafii (ID: 10) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold Ahmad arifai (ID: 14) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    60
+  Correct Answers:   14
+  Overall Accuracy:  23%
+  Tests Completed:   3
+  Sessions:          7
+
+SECTION ACCURACY
+  Reading              ██████░░░░░░░░░ 40%
+  Listening            ████░░░░░░░░░░░ 31%
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     afternoon
+  Most Active Day:   Sunday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-05
+  Last Activity:      2026-04-05
+
+DIAGNOSTIC RESULTS
+  Est. Band Score:    3.5
+  Grammar:            9/9
+  Reading:            3/3
+  Listening:         1/3
+
+  ⭐ Strongest:       Reading (40%)
+
+================================================================================
+🔴 Very Cold Arris Budi Yatno (ID: 5) 
+--------------------------------------------------------------------------------
+Username: @arrisbudiyatno
+Target Test: IELTS
+Proficiency Level: beginner
+Member Since: 2026-03-29
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold Bang Cabut (ID: 23) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_ITP
+Proficiency Level: beginner
+Member Since: 2026-04-03
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+DIAGNOSTIC RESULTS
+  Est. Band Score:    4.5
+  Grammar:            8/9
+  Reading:            3/3
+  Listening:         2/3
+
+
+================================================================================
+🔴 Very Cold Call me L (ID: 1) 
+--------------------------------------------------------------------------------
+Username: @givemeblowjob
+Target Test: IELTS
+Proficiency Level: beginner
+Member Since: 2026-03-27
+
+PERFORMANCE
+  Total Questions:    931
+  Correct Answers:   207
+  Overall Accuracy:  22%
+  Tests Completed:   10
+  Sessions:          56
+
+SECTION ACCURACY
+  Structure            ███████████░░░░ 75%
+  Listening            ████░░░░░░░░░░░ 33%
+  Reading              ███░░░░░░░░░░░░ 22%
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     night
+  Most Active Day:   Saturday
+  Weekly Frequency:   1.5x/week
+  Avg Session:       0 min
+  First Activity:     2026-03-27
+  Last Activity:      2026-04-05
+
+  ⭐ Strongest:       Structure (75%)
+
+================================================================================
+🔴 Very Cold Dima Ahmad Dimyati (ID: 17) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    16
+  Correct Answers:   2
+  Overall Accuracy:  13%
+  Tests Completed:   0
+  Sessions:          1
+
+SECTION ACCURACY
+  Listening            ██░░░░░░░░░░░░░ 17%
+  Reading              █░░░░░░░░░░░░░░ 10%
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     night
+  Most Active Day:   Saturday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-04
+  Last Activity:      2026-04-04
+
+  ⚠️ Needs Work:      Reading (10%)
+  ⭐ Strongest:       Listening (17%)
+
+================================================================================
+🔴 Very Cold Fahrur Rizqi (ID: 22) 
+--------------------------------------------------------------------------------
+Username: @pahru2
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-04-03
+
+PERFORMANCE
+  Total Questions:    119
+  Correct Answers:   19
+  Overall Accuracy:  16%
+  Tests Completed:   1
+  Sessions:          2
+
+SECTION ACCURACY
+  Speaking             ███░░░░░░░░░░░░ 24%
+  Listening            █░░░░░░░░░░░░░░ 11%
+  Reading              █░░░░░░░░░░░░░░ 10%
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     afternoon
+  Most Active Day:   Friday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-03
+  Last Activity:      2026-04-03
+
+DIAGNOSTIC RESULTS
+  Grammar:            0/9
+  Reading:            0/3
+  Listening:         0/3
+
+  ⚠️ Needs Work:      Reading (10%)
+  ⭐ Strongest:       Speaking (24%)
+
+================================================================================
+🔴 Very Cold Florentinus Endriyanto (ID: 19) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: intermediate
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    1
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          1
+
+SECTION ACCURACY
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     night
+  Most Active Day:   Saturday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-04
+  Last Activity:      2026-04-04
+
+DIAGNOSTIC RESULTS
+  Est. Band Score:    5
+  Grammar:            9/9
+  Reading:            3/3
+  Listening:         3/3
+
+
+================================================================================
+🔴 Very Cold Frans Setiawan (ID: 25) 
+--------------------------------------------------------------------------------
+Username: @FranSetiawan
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-04-03
+
+PERFORMANCE
+  Total Questions:    1
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          1
+
+SECTION ACCURACY
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     afternoon
+  Most Active Day:   Friday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-03
+  Last Activity:      2026-04-03
+
+
+================================================================================
+🔴 Very Cold Hendry Awan (ID: 18) 
+--------------------------------------------------------------------------------
+Username: @MANGUNSAEAN
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+DIAGNOSTIC RESULTS
+  Est. Band Score:    2.5
+  Grammar:            2/9
+  Reading:            2/3
+  Listening:         0/3
+
+
+================================================================================
+🔴 Very Cold Iin Budiyana (ID: 11) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+DIAGNOSTIC RESULTS
+  Est. Band Score:    4
+  Grammar:            7/9
+  Reading:            3/3
+  Listening:         2/3
+
+
+================================================================================
+🔴 Very Cold Irfan A.F. (ID: 6) 
+--------------------------------------------------------------------------------
+Username: @irfanalfi
+Target Test: TOEFL_IBT
+Proficiency Level: advanced
+Member Since: 2026-03-29
+
+PERFORMANCE
+  Total Questions:    1
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          1
+
+SECTION ACCURACY
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   Friday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-03
+  Last Activity:      2026-04-03
+
+DIAGNOSTIC RESULTS
+  Est. Band Score:    5
+  Grammar:            8/9
+  Reading:            3/3
+  Listening:         2/3
+
+
+================================================================================
+🔴 Very Cold Itzel Ariaz (ID: 20) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_ITP
+Proficiency Level: beginner
+Member Since: 2026-04-02
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold Iyuz (ID: 9) 
+--------------------------------------------------------------------------------
+Username: @dhol_khemet
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    118
+  Correct Answers:   27
+  Overall Accuracy:  23%
+  Tests Completed:   0
+  Sessions:          3
+
+SECTION ACCURACY
+  Reading              ████░░░░░░░░░░░ 29%
+  Listening            ███░░░░░░░░░░░░ 22%
+  Speaking             ███░░░░░░░░░░░░ 21%
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     night
+  Most Active Day:   Saturday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-04
+  Last Activity:      2026-04-04
+
+  ⚠️ Needs Work:      Speaking (21%)
+  ⭐ Strongest:       Reading (29%)
+
+================================================================================
+🔴 Very Cold Mahastya Dell (ID: 26) 
+--------------------------------------------------------------------------------
+Target Test: Not set
+Proficiency Level: beginner
+Member Since: 2026-04-04
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold Mug Doank 24391 (ID: 13) 
+--------------------------------------------------------------------------------
+Username: @MugDoank
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    24
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   1
+  Sessions:          1
+
+SECTION ACCURACY
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     afternoon
+  Most Active Day:   Sunday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-05
+  Last Activity:      2026-04-05
+
+DIAGNOSTIC RESULTS
+  Est. Band Score:    4.5
+  Grammar:            6/9
+  Reading:            3/3
+  Listening:         3/3
+
+
+================================================================================
+🔴 Very Cold Novia Pujianto (ID: 12) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold Rahmat Kurniawan (ID: 15) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    24
+  Correct Answers:   13
+  Overall Accuracy:  54%
+  Tests Completed:   1
+  Sessions:          3
+
+SECTION ACCURACY
+  Listening            █████████░░░░░░ 61%
+  Reading              ██████░░░░░░░░░ 40%
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     night
+  Most Active Day:   Saturday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-04
+  Last Activity:      2026-04-04
+
+  ⭐ Strongest:       Listening (61%)
+
+================================================================================
+🔴 Very Cold Ren (ID: 2) 
+--------------------------------------------------------------------------------
+Username: @rightpersonmaybe
+Target Test: TOEFL_IBT
+Proficiency Level: advanced
+Member Since: 2026-03-27
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold Ressy Melfriza (ID: 27) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: intermediate
+Member Since: 2026-04-05
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+DIAGNOSTIC RESULTS
+  Est. Band Score:    1
+  Grammar:            6/9
+  Reading:            0/3
+  Listening:         0/3
+
+
+================================================================================
+🔴 Very Cold Sugiarto Sugiarto (ID: 16) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-31
+
+PERFORMANCE
+  Total Questions:    58
+  Correct Answers:   21
+  Overall Accuracy:  36%
+  Tests Completed:   1
+  Sessions:          2
+
+SECTION ACCURACY
+  Listening            ██████░░░░░░░░░ 42%
+  Reading              █████░░░░░░░░░░ 36%
+  Speaking             ███░░░░░░░░░░░░ 22%
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     night
+  Most Active Day:   Saturday
+  Weekly Frequency:   0.3x/week
+  Avg Session:       0 min
+  First Activity:     2026-04-04
+  Last Activity:      2026-04-04
+
+  ⭐ Strongest:       Listening (42%)
+
+================================================================================
+🔴 Very Cold X (ID: 4) 
+--------------------------------------------------------------------------------
+Target Test: Not set
+Proficiency Level: beginner
+Member Since: 2026-03-29
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold Yuhuuu (ID: 7) 
+--------------------------------------------------------------------------------
+Username: @Yahayihiyuhuyehe
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-29
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold bhara (ID: 24) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: intermediate
+Member Since: 2026-04-03
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold irene (ID: 21) 
+--------------------------------------------------------------------------------
+Target Test: Not set
+Proficiency Level: beginner
+Member Since: 2026-04-02
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+
+
+================================================================================
+🔴 Very Cold riyadi riyadi (ID: 8) 
+--------------------------------------------------------------------------------
+Target Test: TOEFL_IBT
+Proficiency Level: beginner
+Member Since: 2026-03-30
+
+PERFORMANCE
+  Total Questions:    0
+  Correct Answers:   0
+  Overall Accuracy:  0%
+  Tests Completed:   0
+  Sessions:          0
+
+STUDY PATTERNS
+  Current Streak:    0 days
+  Longest Streak:     0 days
+  Preferred Time:     morning
+  Most Active Day:   None
+  Weekly Frequency:   0x/week
+  Avg Session:       0 min
+

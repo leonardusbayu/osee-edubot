@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EduBot - AI TOEFL & IELTS Prep untuk Siswa Indonesia</title>
+  <meta name="description" content="Latihan TOEFL & IELTS 24/7 dengan AI. Personal tutor yang siap bantu kamu kapan aja, di mana aja.">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.6; color: #1a1a2e; background: #f8f9fa; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+    
+    /* Header */
+    header { background: linear-gradient(135deg, #168acd 0%, #0d5c8a 100%); color: white; padding: 20px 0; position: sticky; top: 0; z-index: 100; }
+    header .container { display: flex; justify-content: space-between; align-items: center; }
+    .logo { font-size: 1.8rem; font-weight: 800; }
+    .logo span { color: #ffd700; }
+    nav a { color: white; text-decoration: none; margin-left: 30px; font-weight: 500; transition: opacity 0.3s; }
+    nav a:hover { opacity: 0.8; }
+    .cta-btn { background: #ffd700; color: #168acd; padding: 12px 28px; border-radius: 50px; font-weight: 700; text-decoration: none; transition: transform 0.3s, box-shadow 0.3s; display: inline-block; }
+    .cta-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(255,215,0,0.4); }
+    
+    /* Hero */
+    .hero { background: linear-gradient(135deg, #168acd 0%, #0d5c8a 100%); color: white; padding: 100px 0 80px; text-align: center; }
+    .hero h1 { font-size: 3rem; margin-bottom: 20px; line-height: 1.2; }
+    .hero h1 span { color: #ffd700; }
+    .hero p { font-size: 1.3rem; margin-bottom: 40px; opacity: 0.95; max-width: 700px; margin-left: auto; margin-right: auto; }
+    .hero-buttons { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
+    .btn-white { background: white; color: #168acd; padding: 16px 36px; border-radius: 50px; font-weight: 700; text-decoration: none; font-size: 1.1rem; transition: transform 0.3s, box-shadow 0.3s; display: inline-block; }
+    .btn-white:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(255,255,255,0.3); }
+    .btn-outline { border: 2px solid white; color: white; padding: 14px 34px; border-radius: 50px; font-weight: 600; text-decoration: none; transition: background 0.3s; display: inline-block; }
+    .btn-outline:hover { background: rgba(255,255,255,0.15); }
+    
+    /* Stats */
+    .stats { background: white; padding: 40px 0; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 30px; text-align: center; }
+    .stat-item h3 { font-size: 2.5rem; color: #168acd; margin-bottom: 5px; }
+    .stat-item p { color: #666; font-size: 0.95rem; }
+    
+    /* Features */
+    .features { padding: 80px 0; background: white; }
+    .section-title { text-align: center; font-size: 2.2rem; margin-bottom: 15px; color: #1a1a2e; }
+    .section-subtitle { text-align: center; color: #666; font-size: 1.1rem; margin-bottom: 50px; max-width: 600px; margin-left: auto; margin-right: auto; }
+    .features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; }
+    .feature-card { background: #f8f9fa; padding: 35px; border-radius: 20px; text-align: center; transition: transform 0.3s, box-shadow 0.3s; }
+    .feature-card:hover { transform: translateY(-5px); box-shadow: 0 15px 40px rgba(22,138,205,0.12); }
+    .feature-icon { font-size: 3rem; margin-bottom: 20px; }
+    .feature-card h3 { font-size: 1.3rem; margin-bottom: 12px; color: #1a1a2e; }
+    .feature-card p { color: #555; font-size: 0.95rem; }
+    
+    /* How It Works */
+    .how-it-works { padding: 80px 0; background: #f8f9fa; }
+    .steps { display: flex; gap: 40px; justify-content: center; margin-top: 50px; }
+    .step { text-align: center; flex: 1; max-width: 250px; }
+    .step-number { width: 60px; height: 60px; background: #168acd; color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: 800; margin: 0 auto 20px; }
+    .step h4 { font-size: 1.2rem; margin-bottom: 10px; }
+    .step p { color: #666; font-size: 0.95rem; }
+    
+    /* Pricing */
+    .pricing { padding: 80px 0; background: white; }
+    .pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; max-width: 1000px; margin: 50px auto 0; }
+    .price-card { background: #f8f9fa; padding: 40px; border-radius: 20px; text-align: center; position: relative; transition: transform 0.3s, box-shadow 0.3s; }
+    .price-card:hover { transform: translateY(-5px); box-shadow: 0 15px 40px rgba(22,138,205,0.12); }
+    .price-card.popular { background: linear-gradient(135deg, #168acd 0%, #0d5c8a 100%); color: white; transform: scale(1.05); }
+    .price-card.popular:hover { transform: scale(1.05) translateY(-5px); }
+    .badge { position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: #ffd700; color: #1a1a2e; padding: 6px 20px; border-radius: 20px; font-size: 0.85rem; font-weight: 700; }
+    .price-card h3 { font-size: 1.4rem; margin-bottom: 15px; }
+    .price { font-size: 3rem; font-weight: 800; margin-bottom: 5px; }
+    .price span { font-size: 1rem; font-weight: 500; opacity: 0.8; }
+    .price-card.popular .price { color: #ffd700; }
+    .price-features { list-style: none; margin: 25px 0; text-align: left; }
+    .price-features li { padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.08); }
+    .price-features li:last-child { border: none; }
+    .price-features li::before { content: '✓'; color: #168acd; font-weight: 700; margin-right: 10px; }
+    .price-card.popular .price-features li::before { color: #ffd700; }
+    
+    /* Testimonial */
+    .testimonial { padding: 80px 0; background: #f8f9fa; }
+    .testimonial-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; margin-top: 50px; }
+    .testimonial-card { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.06); }
+    .testimonial-card p { font-style: italic; margin-bottom: 20px; color: #444; line-height: 1.7; }
+    .testimonial-author { display: flex; align-items: center; gap: 15px; }
+    .testimonial-avatar { width: 50px; height: 50px; background: #168acd; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 1.2rem; }
+    .testimonial-info h5 { font-size: 1rem; margin-bottom: 3px; }
+    .testimonial-info span { font-size: 0.85rem; color: #666; }
+    
+    /* Teacher Section */
+    .teacher { padding: 80px 0; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: white; }
+    .teacher-content { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center; }
+    .teacher h2 { font-size: 2.5rem; margin-bottom: 20px; }
+    .teacher h2 span { color: #ffd700; }
+    .teacher p { font-size: 1.1rem; opacity: 0.9; margin-bottom: 30px; line-height: 1.8; }
+    .teacher-benefits { list-style: none; }
+    .teacher-benefits li { padding: 12px 0; font-size: 1.05rem; display: flex; align-items: center; gap: 15px; }
+    .teacher-benefits li::before { content: '✓'; background: #ffd700; color: #1a1a2e; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0; }
+    .teacher-pricing { background: rgba(255,255,255,0.1); padding: 40px; border-radius: 20px; }
+    .teacher-pricing h3 { font-size: 1.5rem; margin-bottom: 25px; color: #ffd700; }
+    .teacher-price-item { display: flex; justify-content: space-between; padding: 15px 0; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    .teacher-price-item:last-child { border: none; }
+    .teacher-cta { background: #ffd700; color: #1a1a2e; padding: 16px 36px; border-radius: 50px; font-weight: 700; text-decoration: none; display: inline-block; margin-top: 25px; transition: transform 0.3s; }
+    .teacher-cta:hover { transform: translateY(-2px); }
+    
+    /* CTA */
+    .cta { padding: 100px 0; background: linear-gradient(135deg, #168acd 0%, #0d5c8a 100%); color: white; text-align: center; }
+    .cta h2 { font-size: 2.5rem; margin-bottom: 20px; }
+    .cta p { font-size: 1.2rem; margin-bottom: 40px; opacity: 0.95; }
+    
+    /* Footer */
+    footer { background: #1a1a2e; color: white; padding: 50px 0 30px; }
+    .footer-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 40px; margin-bottom: 40px; }
+    .footer-brand h4 { font-size: 1.5rem; margin-bottom: 15px; }
+    .footer-brand p { color: #888; font-size: 0.95rem; line-height: 1.7; }
+    .footer-col h5 { font-size: 1rem; margin-bottom: 20px; color: #ffd700; }
+    .footer-col ul { list-style: none; }
+    .footer-col ul li { margin-bottom: 10px; }
+    .footer-col ul a { color: #888; text-decoration: none; transition: color 0.3s; }
+    .footer-col ul a:hover { color: white; }
+    .footer-bottom { border-top: 1px solid rgba(255,255,255,0.1); padding-top: 30px; display: flex; justify-content: space-between; align-items: center; }
+    .footer-bottom p { color: #666; font-size: 0.9rem; }
+    .whatsapp-float { position: fixed; bottom: 30px; right: 30px; background: #25D366; width: 65px; height: 65px; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 20px rgba(37,211,102,0.4); z-index: 1000; transition: transform 0.3s; }
+    .whatsapp-float:hover { transform: scale(1.1); }
+    .whatsapp-float a { color: white; font-size: 2rem; text-decoration: none; }
+    
+    @media (max-width: 968px) {
+      .features-grid, .pricing-grid, .testimonial-grid, .footer-grid { grid-template-columns: 1fr; }
+      .steps { flex-direction: column; align-items: center; }
+      .teacher-content { grid-template-columns: 1fr; }
+      .price-card.popular { transform: none; }
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="container">
+      <div class="logo">Edu<span>Bot</span></div>
+      <nav>
+        <a href="#fitur">Fitur</a>
+        <a href="#harga">Harga</a>
+        <a href="#guru">Untuk Guru</a>
+        <a href="#kontak">Kontak</a>
+      </nav>
+      <a href="https://t.me/osee_IBT_IELTS_tutor_bot?start=lp" class="cta-btn">Coba Gratis</a>
+    </div>
+  </header>
+  
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <h1>AI TOEFL & IELTS Prep<br>untuk <span>Siswa Indonesia</span></h1>
+      <p>Latihan 24/7 dengan AI tutor personal. Siap kapan aja, di mana aja. Tanpa harus ke kursus.</p>
+      <div class="hero-buttons">
+        <a href="https://t.me/osee_IBT_IELTS_tutor_bot?start=lp" class="btn-white">Coba Gratis 1 Hari</a>
+        <a href="#harga" class="btn-outline">Lihat Harga</a>
+      </div>
+    </div>
+  </section>
+  
+  <!-- Stats -->
+  <section class="stats">
+    <div class="container">
+      <div class="stats-grid">
+        <div class="stat-item">
+          <h3>3,000+</h3>
+          <p>Soal TOEFL & IELTS</p>
+        </div>
+        <div class="stat-item">
+          <h3>24/7</h3>
+          <p>Akses Latihan</p>
+        </div>
+        <div class="stat-item">
+          <h3>AI</h3>
+          <p>Speaking Evaluation</p>
+        </div>
+        <div class="stat-item">
+          <h3>100%</h3>
+          <p>Personalisasi</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- Features -->
+  <section class="features" id="fitur">
+    <div class="container">
+      <h2 class="section-title">Kenapa EduBot?</h2>
+      <p class="section-subtitle">Semua yang kamu butuhkan untuk persiapan TOEFL/IELTS, dalam satu aplikasi.</p>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">📝</div>
+          <h3>3,000+ Soal</h3>
+          <p>Soal lengkap untuk Reading, Listening, Speaking, dan Writing. Mirip banget sama tes asli.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🤖</div>
+          <h3>AI Tutor 24/7</h3>
+          <p>Tanya apa aja tentang grammar, vocab, atau strategi tes. AI siap jawab kapan aja.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🎤</div>
+          <h3>Speaking Evaluation</h3>
+          <p>Kirim voice message, dapat feedback dari AI. Praktik speaking tanpa malu.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📊</div>
+          <h3>Track Progress</h3>
+          <p>Lihat perkembangan skor kamu dari waktu ke waktu. Tahu exactly mana yang perlu diperbaiki.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔄</div>
+          <h3>Spaced Repetition</h3>
+          <p>Soal yang salah akan muncul lagi di waktu yang tepat. Biar beneran nempel di otak.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📱</div>
+          <h3>Mobile-First</h3>
+          <p>Desain buat HP Indonesia. Ringan, cepat, works offline mode.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- How It Works -->
+  <section class="how-it-works">
+    <div class="container">
+      <h2 class="section-title">Gimana Caranya?</h2>
+      <p class="section-subtitle">Mulai dari nol sampai bisa dalam hitungan minggu.</p>
+      <div class="steps">
+        <div class="step">
+          <div class="step-number">1</div>
+          <h4>Diagnostic Test</h4>
+          <p>Ikuti tes penempatan biar tau level kamu sekarang.</p>
+        </div>
+        <div class="step">
+          <div class="step-number">2</div>
+          <h4>Get Study Plan</h4>
+          <p>Dapat pelajaran yang sesuai sama kemampuan kamu.</p>
+        </div>
+        <div class="step">
+          <div class="step-number">3</div>
+          <h4>Latihan Daily</h4>
+          <p>Jawab soal, kirim voice, chat sama AI. Tiap hari.</p>
+        </div>
+        <div class="step">
+          <div class="step-number">4</div>
+          <h4>Track & Improve</h4>
+          <p>Lihat progress, naikkan band score kamu.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- Pricing -->
+  <section class="pricing" id="harga">
+    <div class="container">
+      <h2 class="section-title">Harga Terjangkau</h2>
+      <p class="section-subtitle">Mulai dari Rp 30rb/bulan. Lebih murah dari 1x les private.</p>
+      <div class="pricing-grid">
+        <div class="price-card">
+          <h3>Free Trial</h3>
+          <div class="price">Gratis<span>/1 hari</span></div>
+          <ul class="price-features">
+            <li>Diagnostic test</li>
+            <li>10 soal latihan</li>
+            <li>AI chat terbatas</li>
+            <li>Basic study plan</li>
+          </ul>
+          <a href="https://t.me/osee_IBT_IELTS_tutor_bot?start=lp" class="btn-outline" style="border-color:#168acd;color:#168acd;">Coba Sekarang</a>
+        </div>
+        <div class="price-card popular">
+          <div class="badge">TERLARIS</div>
+          <h3>Premium</h3>
+          <div class="price">Rp 99k<span>/bulan</span></div>
+          <ul class="price-features">
+            <li>Unlimited soal</li>
+            <li>AI tutor 24/7</li>
+            <li>Speaking evaluation</li>
+            <li>Full study plan</li>
+            <li>Spaced repetition</li>
+            <li>Progress tracking</li>
+          </ul>
+          <a href="https://t.me/osee_IBT_IELTS_tutor_bot?start=lp_premium" class="btn-white" style="background:#ffd700;color:#168acd;">Beli Sekarang</a>
+        </div>
+        <div class="price-card">
+          <h3>3 Bulan</h3>
+          <div class="price">Rp 270k<span>/3 bulan</span></div>
+          <ul class="price-features">
+            <li>Semua fitur Premium</li>
+            <li>Hemat 9%</li>
+            <li>Priority support</li>
+            <li>Bonus referral</li>
+          </ul>
+          <a href="https://t.me/osee_IBT_IELTS_tutor_bot?start=lp_3month" class="btn-outline" style="border-color:#168acd;color:#168acd;">Beli 3 Bulan</a>
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- Testimonial -->
+  <section class="testimonial">
+    <div class="container">
+      <h2 class="section-title">Kata Mereka Yang Sudah Pakai</h2>
+      <p class="section-subtitle">Hasil nyata dari siswa-siswa yang sudah latihan bareng EduBot.</p>
+      <div class="testimonial-grid">
+        <div class="testimonial-card">
+          <p>"Pertama kali coba langsung ketagihan. Soalnya banyak, AI tutor nya helpful banget. Band score naik 1.5 dalam 6 minggu!"</p>
+          <div class="testimonial-author">
+            <div class="testimonial-avatar">R</div>
+            <div class="testimonial-info">
+              <h5>Rina S.</h5>
+              <span>Mahasiswa, Jakarta</span>
+            </div>
+          </div>
+        </div>
+        <div class="testimonial-card">
+          <p>"Aku suka fitur spaced repetition nya. Soal yang salah bakal muncul lagi di waktu yang tepat. Efektif banget!"</p>
+          <div class="testimonial-author">
+            <div class="testimonial-avatar">A</div>
+            <div class="testimonial-info">
+              <h5>Andi W.</h5>
+              <span>Siswa SMA, Bandung</span>
+            </div>
+          </div>
+        </div>
+        <div class="testimonial-card">
+          <p>"Practice speaking nya keren! Kirim voice, dapat feedback langsung. Gak perlu malu kayak di kelas biasa."</p>
+          <div class="testimonial-author">
+            <div class="testimonial-avatar">D</div>
+            <div class="testimonial-info">
+              <h5>Dewi M.</h5>
+              <span>Fresh Graduate, Surabaya</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- Teacher Section -->
+  <section class="teacher" id="guru">
+    <div class="container">
+      <div class="teacher-content">
+        <div>
+          <h2>Untuk Guru & Tempat Kursus<br><span>Jalankan Kelas Online dengan AI</span></h2>
+          <p>Hemat waktu, tambah siswa. Biarkan AI yang handle 80% drill practice siswa-siswa kamu. Kamu fokus ke yang penting: teaching.</p>
+          <ul class="teacher-benefits">
+            <li>Dashboard untuk monitor progress siswa</li>
+            <li>Auto quiz harian untuk kelas</li>
+            <li>Leaderboard mingguan</li>
+            <li>AI tutor 24/7 untuk siswa</li>
+            <li>Laporan progress mingguan</li>
+            <li>Pasang di grup Telegram kamu</li>
+          </ul>
+        </div>
+        <div class="teacher-pricing">
+          <h3>Harga Teacher SaaS</h3>
+          <div class="teacher-price-item">
+            <span>1-10 siswa</span>
+            <strong>Rp 50k/siswa/bulan</strong>
+          </div>
+          <div class="teacher-price-item">
+            <span>11-30 siswa</span>
+            <strong>Rp 40k/siswa/bulan</strong>
+          </div>
+          <div class="teacher-price-item">
+            <span>31-50 siswa</span>
+            <strong>Rp 30k/siswa/bulan</strong>
+          </div>
+          <div class="teacher-price-item">
+            <span>51+ siswa (unlimited)</span>
+            <strong>Rp 500k flat/bulan</strong>
+          </div>
+          <a href="https://wa.me/628112467784?text=Halo%2C%20aku%20tertarik%20dengan%20Teacher%20SaaS%20EduBot" class="teacher-cta">Hubungi Kami</a>
+        </div>
+      </div>
+    </div>
+  </section>
+  
+  <!-- CTA -->
+  <section class="cta">
+    <div class="container">
+      <h2>Siap Naik Band Score?</h2>
+      <p>Mulai gratis sekarang. Gak ada risk, gak ada commitment.</p>
+      <a href="https://t.me/osee_IBT_IELTS_tutor_bot?start=lp" class="btn-white">Mulai Sekarang - Gratis!</a>
+    </div>
+  </section>
+  
+  <!-- Footer -->
+  <footer id="kontak">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <h4>EduBot</h4>
+          <p>AI-powered TOEFL & IELTS prep untuk siswa Indonesia. Bantu kamu mencapai band score yang kamu impikan.</p>
+        </div>
+        <div class="footer-col">
+          <h5>Produk</h5>
+          <ul>
+            <li><a href="#fitur">Fitur</a></li>
+            <li><a href="#harga">Harga</a></li>
+            <li><a href="#guru">Untuk Guru</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h5>Support</h5>
+          <ul>
+            <li><a href="https://t.me/osee_IBT_IELTS_tutor_bot">Telegram Bot</a></li>
+            <li><a href="https://wa.me/628112467784">WhatsApp</a></li>
+            <li><a href="#">FAQ</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h5>Legal</h5>
+          <ul>
+            <li><a href="#">Syarat & Ketentuan</a></li>
+            <li><a href="#">Privacy Policy</a></li>
+            <li><a href="#">Refund Policy</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2025 EduBot. All rights reserved.</p>
+        <p>wa.me/628112467784</p>
+      </div>
+    </div>
+  </footer>
+  
+  <!-- WhatsApp Float -->
+  <div class="whatsapp-float">
+    <a href="https://wa.me/628112467784?text=Halo%2C%20aku%20tertarik%20dengan%20EduBot" target="_blank">📱</a>
+  </div>
+</body>
+</html>

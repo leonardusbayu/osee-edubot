@@ -1,6 +1,14 @@
 import { create } from 'zustand';
 import type { SectionInfo } from '../types';
 
+interface PendingAnswer {
+  section: string;
+  questionIndex: number;
+  answerData: any;
+  retries: number;
+  maxRetries: number;
+}
+
 interface TestState {
   attemptId: number | null;
   testType: string | null;
@@ -12,6 +20,12 @@ interface TestState {
   isFinished: boolean;
   questionType: string | null; // Filter for section-specific practice
 
+  // Offline-first mode
+  prefetchedQuestions: Record<string, any[]>; // questions_by_section cache
+  isPrefetchingQuestions: boolean;
+  pendingAnswers: PendingAnswer[]; // Queued answers awaiting sync
+  networkAvailable: boolean;
+
   startTest: (attemptId: number, testType: string, sections: SectionInfo[], currentSection: string, questionType?: string | null) => void;
   setCurrentSection: (section: string) => void;
   setQuestionIndex: (index: number) => void;
@@ -19,9 +33,18 @@ interface TestState {
   saveAnswer: (section: string, questionIndex: number, answer: unknown) => void;
   finishTest: () => void;
   reset: () => void;
+
+  // Offline-first methods
+  prefetchQuestions: (attemptId: number) => Promise<boolean>;
+  getNextQuestion: (section: string, index: number) => any | null;
+  queueAnswer: (section: string, questionIndex: number, answerData: any) => void;
+  setPrefetchingState: (loading: boolean) => void;
+  setNetworkAvailable: (available: boolean) => void;
+  getPendingAnswers: () => PendingAnswer[];
+  clearPendingAnswer: (section: string, questionIndex: number) => void;
 }
 
-export const useTestStore = create<TestState>((set) => ({
+export const useTestStore = create<TestState>((set, get) => ({
   attemptId: null,
   testType: null,
   sections: [],
@@ -31,6 +54,12 @@ export const useTestStore = create<TestState>((set) => ({
   answers: {},
   isFinished: false,
   questionType: null,
+
+  // Offline-first mode
+  prefetchedQuestions: {},
+  isPrefetchingQuestions: false,
+  pendingAnswers: [],
+  networkAvailable: typeof navigator !== 'undefined' ? navigator.onLine : true,
 
   startTest: (attemptId, testType, sections, currentSection, questionType) =>
     set({
@@ -43,6 +72,9 @@ export const useTestStore = create<TestState>((set) => ({
       answers: {},
       isFinished: false,
       questionType: questionType || null,
+      prefetchedQuestions: {},
+      pendingAnswers: [],
+      networkAvailable: typeof navigator !== 'undefined' ? navigator.onLine : true,
     }),
 
   setCurrentSection: (section) => set({ currentSection: section, currentQuestionIndex: 0 }),
@@ -61,6 +93,7 @@ export const useTestStore = create<TestState>((set) => ({
     })),
 
   finishTest: () => set({ isFinished: true }),
+
   reset: () =>
     set({
       attemptId: null,
@@ -72,5 +105,80 @@ export const useTestStore = create<TestState>((set) => ({
       answers: {},
       isFinished: false,
       questionType: null,
+      prefetchedQuestions: {},
+      isPrefetchingQuestions: false,
+      pendingAnswers: [],
     }),
+
+  // Offline-first: Prefetch all questions for the test
+  prefetchQuestions: async (attemptId: number) => {
+    const state = get();
+    if (state.isPrefetchingQuestions) return false;
+
+    set({ isPrefetchingQuestions: true });
+
+    try {
+      const response = await fetch(`/api/tests/attempt/${attemptId}/questions-batch`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${(window as any).__AUTH_TOKEN__ || ''}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        console.error('[TestStore] Prefetch failed:', response.status);
+        set({ isPrefetchingQuestions: false });
+        return false;
+      }
+
+      const data = await response.json();
+      set({
+        prefetchedQuestions: data.questions_by_section || {},
+        isPrefetchingQuestions: false,
+      });
+      console.log('[TestStore] Prefetched questions:', Object.keys(data.questions_by_section || {}).map(s => `${s}: ${(data.questions_by_section[s] || []).length}`));
+      return true;
+    } catch (err) {
+      console.error('[TestStore] Prefetch error:', err);
+      set({ isPrefetchingQuestions: false });
+      return false;
+    }
+  },
+
+  // Get question from prefetched cache
+  getNextQuestion: (section: string, index: number) => {
+    const state = get();
+    const questions = state.prefetchedQuestions[section] || [];
+    return questions[index] || null;
+  },
+
+  // Queue answer for syncing
+  queueAnswer: (section: string, questionIndex: number, answerData: any) => {
+    set((state) => ({
+      pendingAnswers: [
+        ...state.pendingAnswers,
+        {
+          section,
+          questionIndex,
+          answerData,
+          retries: 0,
+          maxRetries: 3,
+        },
+      ],
+    }));
+  },
+
+  setPrefetchingState: (loading: boolean) => set({ isPrefetchingQuestions: loading }),
+  setNetworkAvailable: (available: boolean) => set({ networkAvailable: available }),
+
+  getPendingAnswers: () => get().pendingAnswers,
+
+  clearPendingAnswer: (section: string, questionIndex: number) => {
+    set((state) => ({
+      pendingAnswers: state.pendingAnswers.filter(
+        (a) => !(a.section === section && a.questionIndex === questionIndex)
+      ),
+    }));
+  },
 }));

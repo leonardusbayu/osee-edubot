@@ -11,20 +11,21 @@ authRoutes.post('/login', async (c) => {
   const tgUser = await validateInitDataAsync(init_data, c.env.TELEGRAM_BOT_TOKEN);
   if (!tgUser) return c.json({ error: 'Invalid authentication' }, 401);
 
-  // Get or create user
+  // Get or create user — always store telegram_id as clean string (no .0 suffix)
+  const tgIdStr = String(tgUser.id).replace('.0', '');
   let user = await c.env.DB.prepare(
     'SELECT * FROM users WHERE telegram_id = ?'
-  ).bind(tgUser.id).first();
+  ).bind(tgIdStr).first();
 
   if (!user) {
     const name = `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim() || 'User';
     await c.env.DB.prepare(
       'INSERT INTO users (telegram_id, name, username) VALUES (?, ?, ?)'
-    ).bind(tgUser.id, name, tgUser.username || null).run();
+    ).bind(tgIdStr, name, tgUser.username || null).run();
 
     user = await c.env.DB.prepare(
       'SELECT * FROM users WHERE telegram_id = ?'
-    ).bind(tgUser.id).first();
+    ).bind(tgIdStr).first();
   }
 
   if (!user) return c.json({ error: 'Failed to create user' }, 500);

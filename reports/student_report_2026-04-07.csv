@@ -1,0 +1,28 @@
+id,name,username,target_test,proficiency_level,is_premium,created_at,last_study_date,status,total_questions,total_correct,overall_accuracy,tests_completed,total_sessions,current_streak,longest_streak,preferred_time,most_active_day,weekly_frequency,reading_accuracy,listening_accuracy,speaking_accuracy,writing_accuracy,structure_accuracy,estimated_band,percentile_rank
+3,Aditya Kurniawan,FabrianusAditya,TOEFL_IBT,advanced,No,2026-03-28,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,4,50
+10,Ahmad Khoirul Syafii,,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+14,Ahmad arifai,,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,60,14,23,3,7,0,0,afternoon,Sunday,0.3,40,31,0,0,0,3.5,45
+5,Arris Budi Yatno,arrisbudiyatno,IELTS,beginner,No,2026-03-29,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+23,Bang Cabut,,TOEFL_ITP,beginner,No,2026-04-03,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,4.5,50
+1,Call me L,givemeblowjob,IELTS,beginner,No,2026-03-27,Never,🔴 Very Cold,931,207,22,10,56,0,0,night,Saturday,1.5,22,33,0,0,75,,27
+17,Dima Ahmad Dimyati,,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,16,2,13,0,1,0,0,night,Saturday,0.3,10,17,0,0,0,,18
+22,Fahrur Rizqi,pahru2,TOEFL_IBT,beginner,No,2026-04-03,Never,🔴 Very Cold,119,19,16,1,2,0,0,afternoon,Friday,0.3,10,11,24,0,0,,27
+19,Florentinus Endriyanto,,TOEFL_IBT,intermediate,No,2026-03-31,Never,🔴 Very Cold,1,0,0,0,1,0,0,night,Saturday,0.3,0,0,0,0,0,5,50
+25,Frans Setiawan,FranSetiawan,TOEFL_IBT,beginner,No,2026-04-03,Never,🔴 Very Cold,1,0,0,0,1,0,0,afternoon,Friday,0.3,0,0,0,0,0,,50
+18,Hendry Awan,MANGUNSAEAN,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,2.5,50
+11,Iin Budiyana,,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,4,50
+6,Irfan A.F.,irfanalfi,TOEFL_IBT,advanced,No,2026-03-29,Never,🔴 Very Cold,1,0,0,0,1,0,0,morning,Friday,0.3,0,0,0,0,0,5,50
+20,Itzel Ariaz,,TOEFL_ITP,beginner,No,2026-04-02,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+9,Iyuz,dhol_khemet,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,118,27,23,0,3,0,0,night,Saturday,0.3,29,22,21,0,0,,45
+26,Mahastya Dell,,,beginner,No,2026-04-04,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+13,Mug Doank 24391,MugDoank,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,24,0,0,1,1,0,0,afternoon,Sunday,0.3,0,0,0,0,0,4.5,50
+12,Novia Pujianto,,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+15,Rahmat Kurniawan,,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,24,13,54,1,3,0,0,night,Saturday,0.3,40,61,0,0,0,,64
+2,Ren,rightpersonmaybe,TOEFL_IBT,advanced,No,2026-03-27,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+27,Ressy Melfriza,,TOEFL_IBT,intermediate,No,2026-04-05,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,1,50
+16,Sugiarto Sugiarto,,TOEFL_IBT,beginner,No,2026-03-31,Never,🔴 Very Cold,58,21,36,1,2,0,0,night,Saturday,0.3,36,42,22,0,0,,55
+4,X,,,beginner,No,2026-03-29,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+7,Yuhuuu,Yahayihiyuhuyehe,TOEFL_IBT,beginner,No,2026-03-29,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+24,bhara,,TOEFL_IBT,intermediate,No,2026-04-03,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+21,irene,,,beginner,No,2026-04-02,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50
+8,riyadi riyadi,,TOEFL_IBT,beginner,No,2026-03-30,Never,🔴 Very Cold,0,0,0,0,0,0,0,morning,,0,0,0,0,0,0,,50

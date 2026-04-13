@@ -106,7 +106,8 @@ function parseDialogue(text: string): { voice: string; text: string }[] {
 }
 
 // Fetch TTS audio for a single segment
-async function fetchTTSAudio(apiKey: string, text: string, voice: string): Promise<ArrayBuffer> {
+// format: 'mp3' for browser/HTTP, 'opus' for Telegram sendVoice (OGG Opus)
+async function fetchTTSAudio(apiKey: string, text: string, voice: string, format: string = 'mp3'): Promise<ArrayBuffer> {
   const response = await fetch('https://api.openai.com/v1/audio/speech', {
     method: 'POST',
     headers: {
@@ -117,7 +118,7 @@ async function fetchTTSAudio(apiKey: string, text: string, voice: string): Promi
       model: 'tts-1',
       input: text.substring(0, 4096),
       voice,
-      response_format: 'mp3',
+      response_format: format,
     }),
   });
 
@@ -126,12 +127,14 @@ async function fetchTTSAudio(apiKey: string, text: string, voice: string): Promi
 }
 
 // Exported core function to generate TTS audio without an HTTP loopback
-export async function generateTTSAudioBuffer(env: Env, text: string, multi: boolean = false, voice: string = 'alloy'): Promise<ArrayBuffer | null> {
+// format: 'mp3' for browser playback, 'opus' for Telegram bot voice messages
+export async function generateTTSAudioBuffer(env: Env, text: string, multi: boolean = false, voice: string = 'alloy', format: string = 'mp3'): Promise<ArrayBuffer | null> {
   if (!env.OPENAI_API_KEY) return null;
 
   const decoded = decodeURIComponent(text).trim();
   if (decoded.length === 0) return null;
-  const cacheKey = await hashText(decoded + (multi ? 'true' : '') + voice);
+  // Include format in cache key so mp3 and opus are cached separately
+  const cacheKey = await hashText(decoded + (multi ? 'true' : '') + voice + format);
 
   // Check cache
   const cached = await getCachedAudio(env.DB, cacheKey);
@@ -146,9 +149,20 @@ export async function generateTTSAudioBuffer(env: Env, text: string, multi: bool
         for (let i = 0; i < segments.length; i += batchSize) {
           const batch = segments.slice(i, i + batchSize);
           const results = await Promise.all(
-            batch.map((seg) => fetchTTSAudio(env.OPENAI_API_KEY, seg.text, seg.voice))
+            batch.map((seg) => fetchTTSAudio(env.OPENAI_API_KEY, seg.text, seg.voice, format))
           );
           audioBuffers.push(...results);
+        }
+
+        // For opus: each segment is a standalone OGG file, can't just concatenate bytes.
+        // For single-segment or mp3 concatenation, byte concat works well enough.
+        // For multi-segment opus: generate as single voice to avoid concat issues.
+        if (format === 'opus' && audioBuffers.length > 1) {
+          // Re-generate as single voice with full text (opus can't be byte-concatenated)
+          const fullText = segments.map(s => s.text).join(' ');
+          const singleBuffer = await fetchTTSAudio(env.OPENAI_API_KEY, fullText, voice, format);
+          cacheAudio(env.DB, cacheKey, singleBuffer, 'multi');
+          return singleBuffer;
         }
 
         const totalLength = audioBuffers.reduce((sum, buf) => sum + buf.byteLength, 0);
@@ -185,7 +199,7 @@ export async function generateTTSAudioBuffer(env: Env, text: string, multi: bool
         model: 'tts-1',
         input: decoded.substring(0, 4096),
         voice,
-        response_format: 'mp3',
+        response_format: format,
       }),
     });
 

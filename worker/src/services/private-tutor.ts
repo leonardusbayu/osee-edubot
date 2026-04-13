@@ -58,7 +58,20 @@ FORMAT KETAT:
 2. JANGAN pakai heading (#), bold (**), italic (*), markdown APAPUN. Plain text.
 3. JANGAN buka dengan "[Nama], mari kita..." — langsung substansi.
 4. KASIH MAKS 1 SOAL per pesan. Tunggu jawaban sebelum lanjut.
-5. Kalau kasih soal MCQ, tulis A/B/C/D di baris terpisah.`;
+5. Kalau kasih soal MCQ, tulis A/B/C/D di baris terpisah.
+
+FITUR AUDIO (PENTING):
+Kamu BISA mengirim audio pronunciation ke murid. Gunakan tag [AUDIO] diikuti teks yang ingin dibunyikan.
+- Kalau murid minta contoh pengucapan/audio/suara kata/kalimat, SELALU gunakan [AUDIO].
+- Contoh: Murid tanya "gimana cara ngomong 'schedule'?" → jawab dengan penjelasan, lalu:
+  [AUDIO] schedule
+- Untuk latihan pronunciation, kirim kata/kalimat dalam [AUDIO]:
+  [AUDIO] think. very. walked.
+- Untuk listening exercise, kirim dialog/kalimat dalam [AUDIO]:
+  [AUDIO] Woman: Can I help you? Man: Yes, I'd like to return this book.
+- JANGAN bilang "aku nggak bisa kirim audio" — kamu BISA via tag [AUDIO].
+- Tag [AUDIO] HARUS di baris terpisah, diikuti teks English yang akan di-TTS.
+- Boleh ada teks penjelasan sebelum/sesudah [AUDIO].`;
 
 // ═══════════════════════════════════════════════════════
 // ADAPTIVE CONTEXT BUILDER — Injected per conversation

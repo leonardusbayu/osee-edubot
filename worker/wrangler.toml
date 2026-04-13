@@ -4,6 +4,10 @@ compatibility_date = "2024-12-05"
 
 [vars]
 WEBAPP_URL = "https://edubot-webapp.pages.dev"
+NOTION_STUDENTS_DB = "ef738175275b4d97be1dfdee9d5cd31a"
+NOTION_ATTEMPTS_DB = "34b452063480463c85eea9cde38d139e"
+NOTION_WEEKLY_DB = "a52619212cf149cd988672ebd8f83217"
+NOTION_DASHBOARD_PAGE = "34174d80-7f1a-81e0-ba69-c1304243deac"
 
 # Secrets (set via `wrangler secret put`):
 # TELEGRAM_BOT_TOKEN
@@ -11,6 +15,7 @@ WEBAPP_URL = "https://edubot-webapp.pages.dev"
 # ANTHROPIC_API_KEY
 # OPENAI_API_KEY
 # JWT_SECRET
+# NOTION_API_KEY — Notion integration token (internal integration)
 
 [[d1_databases]]
 binding = "DB"

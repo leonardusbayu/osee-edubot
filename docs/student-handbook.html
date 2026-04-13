@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>EduBot - Student Handbook</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.7; color: #1a1a2e; background: white; }
+    .page { max-width: 800px; margin: 0 auto; padding: 40px 30px; }
+    .cover { text-align: center; padding: 80px 0; border-bottom: 3px solid #168acd; margin-bottom: 40px; }
+    .cover .logo { font-size: 3rem; font-weight: 800; color: #168acd; margin-bottom: 20px; }
+    .cover .logo span { color: #ffd700; }
+    .cover h1 { font-size: 2.2rem; color: #1a1a2e; margin-bottom: 15px; }
+    .cover .subtitle { font-size: 1.1rem; color: #666; margin-bottom: 30px; }
+    .cover .url { font-size: 1.2rem; color: #168acd; font-weight: 600; }
+    .cover .version { font-size: 0.9rem; color: #999; margin-top: 20px; }
+    h2 { font-size: 1.6rem; color: #168acd; margin: 35px 0 20px; padding-bottom: 10px; border-bottom: 2px solid #f0f0f0; }
+    h3 { font-size: 1.2rem; color: #1a1a2e; margin: 25px 0 15px; }
+    p { margin-bottom: 15px; color: #444; }
+    ul, ol { margin: 15px 0 15px 25px; }
+    li { margin-bottom: 10px; color: #444; }
+    .highlight { background: #f0f7ff; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 4px solid #168acd; }
+    .highlight.success { background: #f0fff0; border-left-color: #28a745; }
+    .highlight.warning { background: #fff9e6; border-left-color: #ffc107; }
+    .highlight.info { background: #f0f7ff; border-left-color: #168acd; }
+    .command { background: #1a1a2e; color: #ffd700; padding: 12px 20px; border-radius: 8px; font-family: 'Consolas', monospace; font-size: 1rem; margin: 10px 0; display: inline-block; }
+    .command-block { background: #1a1a2e; color: #ffd700; padding: 15px 20px; border-radius: 8px; font-family: 'Consolas', monospace; font-size: 0.95rem; margin: 15px 0; overflow-x: auto; }
+    .tip-box { background: linear-gradient(135deg, #168acd 0%, #0d5c8a 100%); color: white; padding: 25px; border-radius: 15px; margin: 25px 0; }
+    .tip-box h4 { font-size: 1.1rem; margin-bottom: 10px; }
+    .tip-box p { color: rgba(255,255,255,0.9); }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #f8f9fa; font-weight: 600; color: #1a1a2e; }
+    tr:hover { background: #f8f9fa; }
+    .page-break { page-break-after: always; }
+    .footer { text-align: center; padding: 40px 0; margin-top: 40px; border-top: 2px solid #f0f0f0; color: #999; font-size: 0.9rem; }
+    .toc { background: #f8f9fa; padding: 25px; border-radius: 15px; margin: 25px 0; }
+    .toc h3 { margin-top: 0; }
+    .toc ul { list-style: none; margin-left: 0; }
+    .toc li { padding: 5px 0; }
+    .toc li a { color: #168acd; text-decoration: none; }
+    .toc li a:hover { text-decoration: underline; }
+    .emoji { font-size: 1.3em; margin-right: 8px; }
+    .badge { background: #ffd700; color: #1a1a2e; padding: 3px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+    .premium-badge { background: linear-gradient(135deg, #ffd700, #ff8c00); color: #1a1a2e; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <!-- Cover -->
+    <div class="cover">
+      <div class="logo">Edu<span>Bot</span></div>
+      <h1>Student Handbook</h1>
+      <p class="subtitle">AI-Powered TOEFL & IELTS Preparation</p>
+      <p class="url">osee.co.id</p>
+      <p class="version">Version 1.0 | April 2025</p>
+    </div>
+
+    <!-- Welcome -->
+    <h2>Welcome to EduBot! 🎉</h2>
+    <p>Hello, student! Congratulations on joining EduBot — your personal AI-powered TOEFL and IELTS preparation assistant. This handbook will guide you through everything you need to know to maximize your learning experience.</p>
+    
+    <div class="highlight success">
+      <p><strong>What is EduBot?</strong></p>
+      <p>EduBot is an AI-powered learning tool that helps you practice for TOEFL and IELTS exams 24/7. With over 3,000 questions, AI tutoring, speaking practice, and personalized study plans, EduBot is designed to help you achieve your target band score faster.</p>
+    </div>
+
+    <h3>What You'll Get:</h3>
+    <ul>
+      <li>📝 <strong>3,000+ Practice Questions</strong> — Reading, Listening, Speaking, and Writing</li>
+      <li>🤖 <strong>AI Tutor 24/7</strong> — Ask anything about English, get instant answers</li>
+      <li>🎤 <strong>Speaking Practice</strong> — Send voice messages, get AI feedback</li>
+      <li>📊 <strong>Progress Tracking</strong> — See your improvement over time</li>
+      <li>🔄 <strong>Spaced Repetition</strong> — Smart review of mistakes</li>
+      <li>📅 <strong>Personalized Study Plans</strong> — Based on your current level</li>
+    </ul>
+
+    <!-- Table of Contents -->
+    <div class="toc">
+      <h3>📋 Table of Contents</h3>
+      <ul>
+        <li><a href="#getting-started">1. Getting Started</a></li>
+        <li><a href="#daily-commands">2. Daily Commands</a></li>
+        <li><a href="#premium">3. Premium Features</a></li>
+        <li><a href="#study-plan">4. Your Study Plan</a></li>
+        <li><a href="#speaking">5. Speaking Practice</a></li>
+        <li><a href="#progress">6. Tracking Progress</a></li>
+        <li><a href="#referral">7. Referral Program</a></li>
+        <li><a href="#faq">8. FAQ</a></li>
+        <li><a href="#support">9. Support</a></li>
+      </ul>
+    </div>
+
+    <div class="page-break"></div>
+
+    <!-- Getting Started -->
+    <h2 id="getting-started">1. Getting Started 🚀</h2>
+    
+    <h3>1.1 Set Up Your Profile</h3>
+    <p>Before you start, let's make sure your profile is set up correctly:</p>
+    <ol>
+      <li>Open <strong>@osee_IBT_IELTS_tutor_bot</strong> in Telegram</li>
+      <li>Send <span class="command">/settings</span> to choose your target exam (TOEFL or IELTS)</li>
+      <li>Select your current proficiency level (Beginner, Intermediate, or Advanced)</li>
+      <li>You're ready to start!</li>
+    </ol>
+
+    <h3>1.2 Take the Diagnostic Test</h3>
+    <p>Before diving into practice, take the diagnostic test to understand your current level:</p>
+    <div class="command-block">Send /diagnostic</div>
+    <p>This test will:</p>
+    <ul>
+      <li>Assess your current English level</li>
+      <li>Identify your strengths and weaknesses</li>
+      <li>Create a personalized study plan for you</li>
+    </ul>
+    <div class="tip-box">
+      <h4>💡 Pro Tip</h4>
+      <p>Take the diagnostic test when you're fresh and focused. It takes about 15-20 minutes. Don't rush — this sets your baseline!</p>
+    </div>
+
+    <h3>1.3 Understanding the Main Menu</h3>
+    <p>When you open the bot, you'll see the main menu with these options:</p>
+    <table>
+      <tr><th>Menu</th><th>What it does</th></tr>
+      <tr><td>📝 Latihan Tes</td><td>Start a practice test</td></tr>
+      <tr><td>📖 Belajar</td><td>Access study materials</td></tr>
+      <tr><td>🩺 Diagnostic</td><td>Take the placement test</td></tr>
+      <tr><td>📊 Progress</td><td>View your statistics</td></tr>
+      <tr><td>📅 Hari Ini</td><td>See today's study plan</td></tr>
+      <tr><td>💳 Upgrade Premium</td><td>See premium options</td></tr>
+      <tr><td>💬 Tanya Admin</td><td>Contact support via WhatsApp</td></tr>
+    </table>
+
+    <div class="page-break"></div>
+
+    <!-- Daily Commands -->
+    <h2 id="daily-commands">2. Daily Commands 📚</h2>
+    
+    <p>These are the commands you'll use most often. Make them part of your daily routine!</p>
+
+    <h3>2.1 Essential Commands</h3>
+    <table>
+      <tr><th>Command</th><th>Description</th></tr>
+      <tr><td><span class="command">/diagnostic</span></td><td>Take the placement test to establish your baseline</td></tr>
+      <tr><td><span class="command">/study</span></td><td>Access study topics and materials</td></tr>
+      <tr><td><span class="command">/today</span></td><td>See your personalized lesson for today</td></tr>
+      <tr><td><span class="command">/review</span></td><td>Review questions you got wrong</td></tr>
+      <tr><td><span class="command">/challenge @user</span></td><td>Challenge a friend to a 5-question duel</td></tr>
+      <tr><td><span class="command">/settings</span></td><td>Change your target exam or level</td></tr>
+      <tr><td><span class="command">/role</span></td><td>View your XP, level, and badges</td></tr>
+      <tr><td><span class="command">/help</span></td><td>Get help with commands</td></tr>
+    </table>
+
+    <h3>2.2 Your Daily Routine</h3>
+    <p>We recommend this daily routine for best results:</p>
+    <div class="highlight">
+      <p><strong>🌅 Morning (Before School/Work)</strong></p>
+      <p>1. Send <span class="command">/today</span> to see today's lesson</p>
+      <p>2. Complete the recommended practice</p>
+      <p>3. Send <span class="command">/review</span> to review mistakes</p>
+    </div>
+    <div class="highlight">
+      <p><strong>🌙 Evening (Before Sleep)</strong></p>
+      <p>1. Do 5-10 more practice questions</p>
+      <p>2. Use voice messages to practice speaking</p>
+      <p>3. Check your progress with <span class="command">/role</span></p>
+    </div>
+
+    <h3>2.3 Practice Modes</h3>
+    <p>When you send <span class="command">/study</span>, you'll see these options:</p>
+    <ul>
+      <li><strong>📝 Grammar</strong> — Practice grammar questions by topic</li>
+      <li><strong>📖 Vocabulary</strong> — Learn new words in context</li>
+      <li><strong>🎯 Skills & Strategy</strong> — Test-taking strategies</li>
+      <li><strong>📊 Practice Test</strong> — Full section or mixed questions</li>
+    </ul>
+
+    <div class="tip-box">
+      <h4>💡 Pro Tip</h4>
+      <p>Start with your weakest area! The diagnostic test identified where you need most work. Focus there first.</p>
+    </div>
+
+    <div class="page-break"></div>
+
+    <!-- Premium Features -->
+    <h2 id="premium">3. Premium Features ⭐</h2>
+    
+    <p>EduBot offers a free trial so you can test the platform. After your trial ends, upgrade to Premium for full access!</p>
+
+    <h3>3.1 What's Included in Free Trial</h3>
+    <ul>
+      <li>✅ Diagnostic test</li>
+      <li>✅ 10 practice questions per day</li>
+      <li>✅ Basic AI chat (limited)</li>
+      <li>❌ Limited study plans</li>
+      <li>❌ No speaking practice</li>
+      <li>❌ No advanced analytics</li>
+    </ul>
+
+    <h3>3.2 Premium Benefits</h3>
+    <div class="highlight success">
+      <p><strong>With Premium, you get:</strong></p>
+      <p>✅ <strong>Unlimited Questions</strong> — Practice without limits</p>
+      <p>✅ <strong>AI Tutor 24/7</strong> — Ask anything, anytime</p>
+      <p>✅ <strong>Speaking Practice</strong> — Send voice, get feedback</p>
+      <p>✅ <strong>Full Study Plans</strong> — Complete learning path</p>
+      <p>✅ <strong>Spaced Repetition</strong> — Smart review system</p>
+      <p>✅ <strong>Progress Analytics</strong> — Detailed statistics</p>
+      <p>✅ <strong>Certificate</strong> — Download when you reach your target</p>
+    </div>
+
+    <h3>3.3 How to Buy Premium</h3>
+    <p>Send <span class="command">/buy</span> to see payment options:</p>
+    <ul>
+      <li><strong>Telegram Stars</strong> — Instant activation</li>
+      <li><strong>GoPay / Transfer</strong> — Manual confirmation</li>
+      <li><strong>WhatsApp</strong> — Chat with us for other methods</li>
+    </ul>
+
+    <h3>3.4 Pricing</h3>
+    <table>
+      <tr><th>Duration</th><th>Price</th></tr>
+      <tr><td>7 days</td><td>Rp 30,000</td></tr>
+      <tr><td>30 days (1 month)</td><td>Rp 99,000</td></tr>
+      <tr><td>90 days (3 months)</td><td>Rp 270,000</td></tr>
+      <tr><td>180 days (6 months)</td><td>Rp 500,000</td></tr>
+      <tr><td>365 days (1 year)</td><td>Rp 950,000</td></tr>
+    </table>
+
+    <div class="page-break"></div>
+
+    <!-- Study Plan -->
+    <h2 id="study-plan">4. Your Study Plan 📅</h2>
+    
+    <p>After taking the diagnostic test, EduBot creates a personalized study plan just for you.</p>
+
+    <h3>4.1 How It Works</h3>
+    <ol>
+      <li><strong>Diagnostic Test</strong> — We assess your current level</li>
+      <li><strong>Gap Analysis</strong> — We identify what you need to learn</li>
+      <li><strong>Study Plan Created</strong> — A day-by-day learning path</li>
+      <li><strong>Daily Lessons</strong> — <span class="command">/today</span> shows what to study</li>
+      <li><strong>Spaced Repetition</strong> — Questions repeat at optimal intervals</li>
+    </ol>
+
+    <h3>4.2 Daily Study Plan</h3>
+    <p>Send <span class="command">/today</span> every day to see your recommended lesson. The plan will:</p>
+    <ul>
+      <li>Focus on your weakest areas first</li>
+      <li>Build on concepts you've already mastered</li>
+      <li>Include a mix of question types</li>
+      <li>Adapt based on your performance</li>
+    </ul>
+
+    <h3>4.3 Review System</h3>
+    <p>When you get a question wrong, EduBot saves it for review. Send <span class="command">/review</span> to practice these questions again.</p>
+    <p>The spaced repetition system ensures questions appear at the optimal time for long-term memory.</p>
+
+    <div class="tip-box">
+      <h4>💡 Pro Tip</h4>
+      <p>Consistency beats intensity! It's better to do 20 minutes every day than 2 hours once a week. Build the habit!</p>
+    </div>
+
+    <div class="page-break"></div>
+
+    <!-- Speaking Practice -->
+    <h2 id="speaking">5. Speaking Practice 🎤</h2>
+    
+    <p>Speaking is often the hardest part of TOEFL/IELTS. EduBot's AI speaking practice helps you improve!</p>
+
+    <h3>5.1 How to Practice Speaking</h3>
+    <ol>
+      <li>Send a <strong>voice message</strong> (hold the microphone button)</li>
+      <li>Speak about the topic or question shown</li>
+      <li>The AI will transcribe and provide feedback</li>
+      <li>You'll get suggestions for improvement</li>
+    </ol>
+
+    <h3>5.2 Speaking Topics</h3>
+    <p>You can practice:</p>
+    <ul>
+      <li><strong>Independent Speaking</strong> — Personal opinions and experiences</li>
+      <li><strong>Integrated Speaking</strong> — Summarizing reading/listening passages</li>
+      <li><strong>Pronunciation</strong> — Specific sounds and intonation</li>
+      <li><strong>Vocabulary in Context</strong> — Using words naturally</li>
+    </ul>
+
+    <h3>5.3 Tips for Speaking Practice</h3>
+    <div class="highlight">
+      <p><strong>Do:</strong></p>
+      <p>✅ Speak clearly and at a natural pace</p>
+      <p>✅ Record in a quiet environment</p>
+      <p>✅ Practice with the AI's feedback</p>
+      <p>✅ Try multiple attempts on the same question</p>
+    </div>
+    <div class="highlight warning">
+      <p><strong>Don't:</strong></p>
+      <p>❌ Rush through responses</p>
+      <p>❌ Use notes while recording</p>
+      <p>❌ Ignore the AI's feedback</p>
+      <p>❌ Practice only once and move on</p>
+    </div>
+
+    <div class="page-break"></div>
+
+    <!-- Progress Tracking -->
+    <h2 id="progress">6. Tracking Progress 📊</h2>
+    
+    <p>EduBot tracks everything you do. Monitor your progress to stay motivated!</p>
+
+    <h3>6.1 Your Stats</h3>
+    <p>Send <span class="command">/role</span> to see:</p>
+    <ul>
+      <li><strong>Level</strong> — Your current XP level</li>
+      <li><strong>XP Points</strong> — Earned by answering questions</li>
+      <li><strong>Badges</strong> — Achievements you've unlocked</li>
+      <li><strong>Total Questions</strong> — How many you've answered</li>
+    </ul>
+
+    <h3>6.2 Progress Dashboard</h3>
+    <p>Send <span class="command">📊 Progress</span> from the main menu (web app) to see:</p>
+    <ul>
+      <li>Questions answered by section</li>
+      <li>Accuracy rate per section</li>
+      <li>Band score estimation</li>
+      <li>Weekly and monthly trends</li>
+    </ul>
+
+    <h3>6.3 Band Score Estimation</h3>
+    <p>Based on your practice, EduBot estimates your band score. Here's the scale:</p>
+    <table>
+      <tr><th>Band</th><th>Description</th></tr>
+      <tr><td>1-3</td><td>Beginner — Foundation building needed</td></tr>
+      <tr><td>4-5</td><td>Intermediate — Growing proficiency</td></tr>
+      <tr><td>5.5-6</td><td>Upper-Intermediate — Nearly there</td></tr>
+      <tr><td>6.5-7</td><td>Advanced — Meeting requirements</td></tr>
+      <tr><td>7.5+</td><td>Expert — Exceeding expectations</td></tr>
+    </table>
+
+    <div class="page-break"></div>
+
+    <!-- Referral -->
+    <h2 id="referral">7. Referral Program 🎁</h2>
+    
+    <p>Love EduBot? Share it with friends and earn free premium!</p>
+
+    <h3>7.1 How It Works</h3>
+    <ol>
+      <li>Send <span class="command">/referral</span> to get your unique link</li>
+      <li>Share the link with friends</li>
+      <li>When they sign up and become paid users</li>
+      <li>You get free premium days!</li>
+    </ol>
+
+    <h3>7.2 Reward Tiers</h3>
+    <table>
+      <tr><th>Referrals</th><th>Reward</th></tr>
+      <tr><td>1 paid friend</td><td>3 days free</td></tr>
+      <tr><td>3 paid friends</td><td>1 week free</td></tr>
+      <tr><td>5 paid friends</td><td>1 month free</td></tr>
+    </table>
+
+    <div class="tip-box">
+      <h4>💡 Pro Tip</h4>
+      <p>Share with friends who are also preparing for TOEFL/IELTS! They'll get a great tool, and you'll get free premium.</p>
+    </div>
+
+    <div class="page-break"></div>
+
+    <!-- FAQ -->
+    <h2 id="faq">8. Frequently Asked Questions ❓</h2>
+
+    <h3>Q: How is EduBot different from other practice apps?</h3>
+    <p>A: EduBot uses AI to provide personalized learning. Unlike static apps, we adapt to your level, track your mistakes, and create a study plan just for you.</p>
+
+    <h3>Q: How long does it take to see results?</h3>
+    <p>A: Most students see improvement within 2-3 weeks of consistent practice. Your first 2 weeks are the most important!</p>
+
+    <h3>Q: Can I use EduBot on my phone?</h3>
+    <p>A: Yes! EduBot works perfectly on mobile. Just open Telegram — no app download needed.</p>
+
+    <h3>Q: What if I don't have time for long sessions?</h3>
+    <p>A: Even 15-20 minutes daily is effective. Use <span class="command">/today</span> for a quick focused session.</p>
+
+    <h3>Q: Is my payment secure?</h3>
+    <p>A: Yes! We use Telegram's payment system for Stars purchases, which is fully secure. For bank transfer, payments go directly to our verified account.</p>
+
+    <h3>Q: Can I cancel my subscription?</h3>
+    <p>A: Yes, you can stop using Premium anytime. There's no auto-renewal — you only pay for what you purchase.</p>
+
+    <h3>Q: How does speaking practice work?</h3>
+    <p>A: Send a voice message in the bot, and our AI will transcribe it, evaluate your response, and provide feedback on grammar, vocabulary, and pronunciation.</p>
+
+    <div class="page-break"></div>
+
+    <!-- Support -->
+    <h2 id="support">9. Support & Contact 📞</h2>
+
+    <h3>Need Help?</h3>
+    <p>We're here for you!</p>
+    <ul>
+      <li>📱 <strong>WhatsApp:</strong> wa.me/628112467784</li>
+      <li>💬 <strong>Telegram:</strong> @oseeadmin</li>
+      <li>🌐 <strong>Website:</strong> osee.co.id</li>
+    </ul>
+
+    <h3>Quick Troubleshooting</h3>
+    <div class="highlight">
+      <p><strong>Bot not responding?</strong></p>
+      <p>→ Send /start first to activate the bot</p>
+    </div>
+    <div class="highlight">
+      <p><strong>Questions not loading?</strong></p>
+      <p>→ Check your internet connection and try again</p>
+    </div>
+    <div class="highlight">
+      <p><strong>Payment not working?</strong></p>
+      <p>→ Contact us via WhatsApp with your payment proof</p>
+    </div>
+
+    <div class="footer">
+      <p>© 2025 EduBot | osee.co.id</p>
+      <p>AI-Powered TOEFL & IELTS Preparation for Indonesian Students</p>
+    </div>
+  </div>
+</body>
+</html>

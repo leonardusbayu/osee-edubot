@@ -31,6 +31,8 @@ interface StudentInfo {
   questions_answered: number;
   correct_answers: number;
   accuracy: number;
+  study_type: 'test' | 'bot_only' | 'inactive';
+  bot_questions: number;
   latest_score: number | null;
   diagnostic_band: number | null;
   last_active: string | null;
@@ -53,6 +55,7 @@ interface StudentInfo {
     accuracy: number;
     minutes: number;
     active_days: number;
+    messages?: number;
   };
 }
 
@@ -404,95 +407,173 @@ export default function AdminStudents() {
                       </div>
                       
                       <div className="grid grid-cols-4 gap-2 text-center border-t border-tg-hint/20 pt-3">
-                        <div>
-                          <p className="text-sm font-bold">{student.tests_taken}</p>
-                          <p className="text-[10px] text-tg-hint uppercase tracking-wider">Tests</p>
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold">{student.questions_answered}</p>
-                          <p className="text-[10px] text-tg-hint uppercase tracking-wider">Questions</p>
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold text-tg-button">{student.accuracy}%</p>
-                          <p className="text-[10px] text-tg-hint uppercase tracking-wider">Accuracy</p>
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold">{student.latest_score != null ? student.latest_score : '-'}</p>
-                          <p className="text-[10px] text-tg-hint uppercase tracking-wider">Score</p>
-                        </div>
+                        {student.study_type === 'bot_only' ? (
+                          <>
+                            <div>
+                              <p className="text-sm font-bold">{student.messages_sent}</p>
+                              <p className="text-[10px] text-tg-hint uppercase tracking-wider">Messages</p>
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold">{student.bot_questions || 0}</p>
+                              <p className="text-[10px] text-tg-hint uppercase tracking-wider">Bot Q's</p>
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-blue-400">{student.active_days}d</p>
+                              <p className="text-[10px] text-tg-hint uppercase tracking-wider">Active</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-bold text-yellow-400">Bot Only</p>
+                              <p className="text-[10px] text-tg-hint uppercase tracking-wider">Mode</p>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div>
+                              <p className="text-sm font-bold">{student.tests_taken}</p>
+                              <p className="text-[10px] text-tg-hint uppercase tracking-wider">Tests</p>
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold">{student.questions_answered}</p>
+                              <p className="text-[10px] text-tg-hint uppercase tracking-wider">Questions</p>
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-tg-button">{student.accuracy}%</p>
+                              <p className="text-[10px] text-tg-hint uppercase tracking-wider">Accuracy</p>
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold">{student.latest_score != null ? student.latest_score : '-'}</p>
+                              <p className="text-[10px] text-tg-hint uppercase tracking-wider">Score</p>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </button>
 
                     {isExpanded && (
                       <div className="border-t border-tg-hint/20 px-4 py-3 space-y-3">
                         <div className="grid grid-cols-2 gap-3">
-                          <div className="bg-tg-bg/50 rounded-lg p-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg">📝</span>
-                              <p className="text-xs text-tg-hint">Study Progress</p>
-                            </div>
-                            <p className="text-sm font-bold">{student.questions_answered} questions</p>
-                            <p className="text-xs text-tg-hint">{student.correct_answers} correct / {student.questions_answered} total</p>
-                            <p className="text-xs text-tg-hint mt-1">
-                              🔥 {student.current_streak || 0}d current streak
-                              {student.longest_streak > 0 && ` · ${student.longest_streak}d best`}
-                            </p>
-                            <p className="text-xs text-tg-hint">Joined {formatDate(student.created_at)}</p>
-                          </div>
-                          <div className="bg-tg-bg/50 rounded-lg p-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg">📅</span>
-                              <p className="text-xs text-tg-hint">This Week</p>
-                            </div>
-                            <p className="text-sm font-bold">
-                              {student.week_stats?.questions || 0} questions
-                              {student.week_stats?.minutes > 0 && ` · ${student.week_stats?.minutes}m`}
-                            </p>
-                            <p className="text-xs text-tg-hint">
-                              {student.week_stats?.accuracy || 0}% accuracy
-                              {student.week_stats?.active_days > 0 && ` · ${student.week_stats?.active_days}d active`}
-                            </p>
-                          </div>
-                          <div className="bg-tg-bg/50 rounded-lg p-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg">💬</span>
-                              <p className="text-xs text-tg-hint">Bot Interaction</p>
-                            </div>
-                            <p className="text-sm font-bold">{student.messages_sent} messages</p>
-                            <p className="text-xs text-tg-hint">Last: {timeAgo(student.last_message)}</p>
-                            <p className="text-xs text-tg-hint mt-1">/today used: {student.today_usage}x</p>
-                          </div>
-                          <div className="bg-tg-bg/50 rounded-lg p-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg">⭐</span>
-                              <p className="text-xs text-tg-hint">Gamification</p>
-                            </div>
-                            <p className="text-sm font-bold">Level {student.level}</p>
-                            <p className="text-xs text-tg-hint">{student.xp} XP</p>
-                            {student.estimated_band && (
-                              <p className="text-xs text-tg-hint mt-1">Est. Band: {student.estimated_band}</p>
-                            )}
-                          </div>
-                          <div className="bg-tg-bg/50 rounded-lg p-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg">⏱️</span>
-                              <p className="text-xs text-tg-hint">Time Analysis</p>
-                            </div>
-                            <p className="text-sm font-bold">
-                              {student.avg_time_per_question != null ? `${student.avg_time_per_question}s` : 'N/A'}
-                            </p>
-                            <p className="text-xs text-tg-hint">avg per question</p>
-                          </div>
-                          <div className="bg-tg-bg/50 rounded-lg p-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg">⚠️</span>
-                              <p className="text-xs text-tg-hint">Weakest Section</p>
-                            </div>
-                            <p className="text-sm font-bold">
-                              {student.weakest_section || 'N/A'}
-                            </p>
-                            <p className="text-xs text-tg-hint">most wrong answers</p>
-                          </div>
+                          {student.study_type === 'bot_only' ? (
+                            <>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">💬</span>
+                                  <p className="text-xs text-tg-hint">Chat Activity</p>
+                                </div>
+                                <p className="text-sm font-bold">{student.messages_sent} messages</p>
+                                <p className="text-xs text-tg-hint">{student.bot_questions || 0} study questions via bot</p>
+                                <p className="text-xs text-tg-hint mt-1">
+                                  🔥 {student.current_streak || 0}d current streak
+                                  {student.longest_streak > 0 && ` · ${student.longest_streak}d best`}
+                                </p>
+                                <p className="text-xs text-tg-hint">Joined {formatDate(student.created_at)}</p>
+                              </div>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">📅</span>
+                                  <p className="text-xs text-tg-hint">This Week</p>
+                                </div>
+                                <p className="text-sm font-bold">
+                                  {student.week_stats?.messages || student.week_stats?.questions || 0} messages
+                                </p>
+                                <p className="text-xs text-tg-hint">
+                                  {student.week_stats?.active_days || 0}d active this week
+                                </p>
+                                <p className="text-xs text-tg-hint">Last: {timeAgo(student.last_message)}</p>
+                              </div>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">📊</span>
+                                  <p className="text-xs text-tg-hint">Engagement</p>
+                                </div>
+                                <p className="text-sm font-bold">{student.active_days}d active</p>
+                                <p className="text-xs text-tg-hint">/today used: {student.today_usage}x</p>
+                                <p className="text-xs text-tg-hint mt-1 text-yellow-400">
+                                  No mini app tests yet
+                                </p>
+                              </div>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">⭐</span>
+                                  <p className="text-xs text-tg-hint">Gamification</p>
+                                </div>
+                                <p className="text-sm font-bold">Level {student.level}</p>
+                                <p className="text-xs text-tg-hint">{student.xp} XP</p>
+                                {student.estimated_band && (
+                                  <p className="text-xs text-tg-hint mt-1">Est. Band: {student.estimated_band}</p>
+                                )}
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">📝</span>
+                                  <p className="text-xs text-tg-hint">Study Progress</p>
+                                </div>
+                                <p className="text-sm font-bold">{student.questions_answered} questions</p>
+                                <p className="text-xs text-tg-hint">{student.correct_answers} correct / {student.questions_answered} total</p>
+                                <p className="text-xs text-tg-hint mt-1">
+                                  🔥 {student.current_streak || 0}d current streak
+                                  {student.longest_streak > 0 && ` · ${student.longest_streak}d best`}
+                                </p>
+                                <p className="text-xs text-tg-hint">Joined {formatDate(student.created_at)}</p>
+                              </div>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">📅</span>
+                                  <p className="text-xs text-tg-hint">This Week</p>
+                                </div>
+                                <p className="text-sm font-bold">
+                                  {student.week_stats?.questions || 0} questions
+                                  {student.week_stats?.minutes > 0 && ` · ${student.week_stats?.minutes}m`}
+                                </p>
+                                <p className="text-xs text-tg-hint">
+                                  {student.week_stats?.accuracy || 0}% accuracy
+                                  {student.week_stats?.active_days > 0 && ` · ${student.week_stats?.active_days}d active`}
+                                </p>
+                              </div>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">💬</span>
+                                  <p className="text-xs text-tg-hint">Bot Interaction</p>
+                                </div>
+                                <p className="text-sm font-bold">{student.messages_sent} messages</p>
+                                <p className="text-xs text-tg-hint">Last: {timeAgo(student.last_message)}</p>
+                                <p className="text-xs text-tg-hint mt-1">/today used: {student.today_usage}x</p>
+                              </div>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">⭐</span>
+                                  <p className="text-xs text-tg-hint">Gamification</p>
+                                </div>
+                                <p className="text-sm font-bold">Level {student.level}</p>
+                                <p className="text-xs text-tg-hint">{student.xp} XP</p>
+                                {student.estimated_band && (
+                                  <p className="text-xs text-tg-hint mt-1">Est. Band: {student.estimated_band}</p>
+                                )}
+                              </div>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">⏱️</span>
+                                  <p className="text-xs text-tg-hint">Time Analysis</p>
+                                </div>
+                                <p className="text-sm font-bold">
+                                  {student.avg_time_per_question != null ? `${student.avg_time_per_question}s` : 'N/A'}
+                                </p>
+                                <p className="text-xs text-tg-hint">avg per question</p>
+                              </div>
+                              <div className="bg-tg-bg/50 rounded-lg p-3">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-lg">⚠️</span>
+                                  <p className="text-xs text-tg-hint">Weakest Section</p>
+                                </div>
+                                <p className="text-sm font-bold">
+                                  {student.weakest_section || 'N/A'}
+                                </p>
+                                <p className="text-xs text-tg-hint">most wrong answers</p>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     )}

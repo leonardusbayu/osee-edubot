@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { authedFetch } from '../api/authedFetch';
 
 // ─── Types ─────────────────────────────────────────────────────
@@ -106,6 +107,18 @@ function OverviewTab({ data }: { data: Overview }) {
   return (
     <div>
       <h1 className="text-xl font-bold mb-4">Admin Dashboard</h1>
+
+      {/* Teacher Dashboard Link */}
+      <Link to="/admin/teacher"
+        className="block bg-gradient-to-r from-tg-button/20 to-tg-button/5 border border-tg-button/30 rounded-xl p-3 mb-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="font-bold text-sm">📊 Teacher Dashboard</p>
+            <p className="text-[10px] text-tg-hint">Alerts, weakness heatmap, score trends, engagement</p>
+          </div>
+          <span className="text-tg-button text-lg">→</span>
+        </div>
+      </Link>
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 mb-6">

@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EduBot TOEFL iBT Full Metrics Report</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; color: #333; line-height: 1.4; font-size: 13px; }
+        .container { max-width: 1800px; margin: 0 auto; padding: 20px; }
+        
+        .header { background: linear-gradient(135deg, #168acd 0%, #0d5c8a 100%); color: white; padding: 35px; border-radius: 12px; margin-bottom: 25px; }
+        .header h1 { font-size: 2.2em; margin-bottom: 8px; }
+        .header p { opacity: 0.9; font-size: 1.05em; }
+        
+        .summary-cards { display: grid; grid-template-columns: repeat(7, 1fr); gap: 15px; margin-bottom: 25px; }
+        .card { background: white; padding: 18px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); text-align: center; }
+        .card h3 { color: #666; font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+        .card .value { font-size: 1.8em; font-weight: bold; color: #168acd; }
+        .card.green .value { color: #22c55e; }
+        .card.yellow .value { color: #eab308; }
+        .card.red .value { color: #ef4444; }
+        .card.purple .value { color: #8b5cf6; }
+        
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px; }
+        .panel { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 15px rgba(0,0,0,0.08); }
+        .panel h2 { color: #168acd; font-size: 1.1em; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #168acd; }
+        .panel h3 { color: #333; font-size: 0.9em; margin-bottom: 10px; }
+        
+        .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+        .stat-row:last-child { border-bottom: none; }
+        .stat-label { color: #666; }
+        .stat-value { font-weight: 600; }
+        
+        .category-section { margin-bottom: 25px; }
+        .category-header { background: linear-gradient(90deg, #f8fafc 0%, #f1f5f9 100%); padding: 15px 20px; border-radius: 10px 10px 0 0; border-bottom: 2px solid #e2e8f0; }
+        .category-header h2 { font-size: 1.1em; color: #333; }
+        .category-header p { font-size: 0.85em; color: #666; margin-top: 3px; }
+        
+        table { width: 100%; border-collapse: collapse; background: white; }
+        th { background: #0d5c8a; color: white; padding: 12px 10px; text-align: center; font-size: 0.72em; text-transform: uppercase; font-weight: 600; }
+        th:first-child { text-align: left; }
+        td { padding: 12px 10px; border-bottom: 1px solid #eee; vertical-align: middle; }
+        td:first-child { text-align: left; font-weight: 500; }
+        tr:hover { background: #f8fafc; }
+        tr:last-child td { border-bottom: none; }
+        
+        .rank { font-weight: bold; color: #168acd; min-width: 30px; }
+        .student-name { font-weight: 600; }
+        .chat-count { color: #8b5cf6; font-weight: bold; }
+        .chat-count.low { color: #666; font-weight: normal; }
+        .chat-count.zero { color: #ef4444; }
+        
+        .skill-box { text-align: center; padding: 8px 4px; border-radius: 6px; background: #f9fafb; }
+        .skill-score { font-weight: bold; font-size: 1.1em; }
+        .skill-max { font-size: 0.65em; color: #999; }
+        .skill-bar { width: 100%; height: 4px; background: #e5e7eb; border-radius: 2px; margin-top: 4px; }
+        .skill-fill { height: 100%; border-radius: 2px; }
+        .skill-fill.grammar { background: #8b5cf6; }
+        .skill-fill.vocab { background: #06b6d4; }
+        .skill-fill.reading { background: #10b981; }
+        .skill-fill.listening { background: #f59e0b; }
+        .skill-fill.writing { background: #ec4899; }
+        
+        .practice-box { text-align: center; padding: 8px 4px; border-radius: 6px; }
+        .practice-box.has-data { background: #f0fdf4; }
+        .practice-box.no-data { background: #fef2f2; }
+        .practice-count { font-weight: bold; font-size: 1em; }
+        .practice-box.has-data .practice-count { color: #15803d; }
+        .practice-box.no-data .practice-count { color: #dc2626; }
+        .practice-accuracy { font-size: 0.65em; color: #666; }
+        
+        .band-badge { display: inline-block; padding: 4px 10px; border-radius: 15px; font-weight: bold; font-size: 0.85em; }
+        .band-badge.high { background: #dcfce7; color: #15803d; }
+        .band-badge.mid { background: #fef9c3; color: #a16207; }
+        .band-badge.low { background: #fee2e2; color: #dc2626; }
+        .band-badge.none { background: #f1f5f9; color: #64748b; }
+        
+        .status-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.7em; font-weight: 600; }
+        .status-badge.hyper { background: #22c55e; color: white; }
+        .status-badge.active { background: #3b82f6; color: white; }
+        .status-badge.engaged { background: #ec4899; color: white; }
+        .status-badge.practice { background: #eab308; color: white; }
+        .status-badge.dormant { background: #ef4444; color: white; }
+        
+        .assessment { font-size: 0.85em; color: #444; line-height: 1.5; }
+        .assessment strong { color: #168acd; }
+        
+        .priority-row { background: #fef2f2 !important; }
+        .priority-row td:first-child { border-left: 3px solid #ef4444; }
+        
+        .footer { text-align: center; padding: 25px; color: #888; font-size: 0.85em; }
+        
+        .legend { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 20px; }
+        .legend-item { display: flex; align-items: center; gap: 8px; font-size: 0.8em; }
+        .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+        
+        @media print { body { font-size: 10px; } .header { -webkit-print-color-adjust: exact; } }
+        @media (max-width: 1400px) { .summary-cards { grid-template-columns: repeat(4, 1fr); } }
+        @media (max-width: 1000px) { .summary-cards { grid-template-columns: repeat(3, 1fr); } .grid-2 { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        
+        <div class="header">
+            <h1>📊 TOEFL iBT Full Metrics Report</h1>
+            <p>Complete engagement + diagnostic + practice data for all 20 TOEFL iBT students</p>
+            <p style="margin-top:12px;font-size:0.9em;opacity:0.8;">Generated: April 7, 2026 | Data: conversation_messages (4,828 msgs) + diagnostic_results + attempt_answers</p>
+        </div>
+        
+        <div class="summary-cards">
+            <div class="card"><h3>Total TOEFL iBT</h3><div class="value">20</div></div>
+            <div class="card green"><h3>Total Chats</h3><div class="value">4,352</div></div>
+            <div class="card purple"><h3>Hyper Chatters</h3><div class="value">5</div></div>
+            <div class="card yellow"><h3>With Diagnostic</h3><div class="value">8</div></div>
+            <div class="card"><h3>Practicing</h3><div class="value">10</div></div>
+            <div class="card red"><h3>Zero Activity</h3><div class="value">3</div></div>
+            <div class="card"><h3>Total Practice</h3><div class="value">422 Q</div></div>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item"><div class="legend-dot" style="background:#22c55e;"></div> Hyper (500+ chats)</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#3b82f6;"></div> Active (100-500 chats)</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#ec4899;"></div> Engaged (20-100 chats)</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#eab308;"></div> Practice-focused (heavy Q, low chat)</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#ef4444;"></div> Dormant (&lt;20 chats, no practice)</div>
+        </div>
+
+        <!-- PRIORITY STUDENTS SECTION -->
+        <div class="category-section">
+            <div class="category-header" style="background:linear-gradient(90deg, #fee2e2 0%, #fef2f2 100%);border-color:#ef4444;">
+                <h2>🚨 PRIORITY - Need Immediate Attention</h2>
+                <p>Low band scores + zero/low practice + active chat engagement</p>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:180px;">Student</th>
+                        <th style="width:50px;">Chats</th>
+                        <th style="width:60px;">Band</th>
+                        <th style="width:70px;">Grammar/9</th>
+                        <th style="width:70px;">Vocab/4</th>
+                        <th style="width:70px;">Read/3</th>
+                        <th style="width:70px;">Listen/3</th>
+                        <th style="width:70px;">Write/5</th>
+                        <th style="width:70px;">Listen Q</th>
+                        <th style="width:70px;">Read Q</th>
+                        <th style="width:70px;">Speak Q</th>
+                        <th style="width:70px;">Write Q</th>
+                        <th style="width:250px;">Assessment & Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="priority-row">
+                        <td><span class="rank">#18</span> Hendry Awan</td>
+                        <td class="chat-count">102</td>
+                        <td><span class="band-badge low">2.5</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">2</span><div class="skill-bar"><div class="skill-fill grammar" style="width:22%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">4</span><div class="skill-bar"><div class="skill-fill vocab" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill reading" style="width:67%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill writing" style="width:20%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>LOWEST BAND + 0 PRACTICE</strong><br>Strong vocab (4/4) but grammar weak (2/9), zero listening. 102 chats but not practicing.<br><em>Action: Personal outreach. "Hendry, your vocab is great! Let's work on grammar and listening together."</em></td>
+                    </tr>
+                    <tr class="priority-row">
+                        <td><span class="rank">#27</span> Ressy Melfriza</td>
+                        <td class="chat-count">78</td>
+                        <td><span class="band-badge low">1.0</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">6</span><div class="skill-bar"><div class="skill-fill grammar" style="width:67%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill writing" style="width:20%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>LOWEST BAND + NEWEST (Apr 5)</strong><br>Grammar decent (6/9) but vocab/reading/listening all 0. Possible overwhelming experience.<br><em>Action: Gentle onboarding. "Hi Ressy! Your grammar is great. Let's start with vocabulary!"</em></td>
+                    </tr>
+                    <tr class="priority-row">
+                        <td><span class="rank">#11</span> Iin Budiyana</td>
+                        <td class="chat-count" style="color:#22c55e;font-weight:bold;">762</td>
+                        <td><span class="band-badge mid">4.0</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">7</span><div class="skill-bar"><div class="skill-fill grammar" style="width:78%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill vocab" style="width:50%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill reading" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill listening" style="width:67%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill writing" style="width:40%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>#2 CHATTER / 0 PRACTICE</strong><br>Band 4.0, strong reading, but 0 practice questions. Vocab and writing need work.<br><em>Action: Bridge to practice. "Iin, you've learned so much! Ready to test your skills?"</em></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- HYPER LEARNERS -->
+        <div class="category-section">
+            <div class="category-header" style="background:linear-gradient(90deg, #dcfce7 0%, #f0fdf4 100%);border-color:#22c55e;">
+                <h2>🌟 Hyper Learners - Top Chatters (500+ messages)</h2>
+                <p>Highest engagement but practice varies significantly</p>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:180px;">Student</th>
+                        <th style="width:50px;">Chats</th>
+                        <th style="width:60px;">Band</th>
+                        <th style="width:70px;">Grammar/9</th>
+                        <th style="width:70px;">Vocab/4</th>
+                        <th style="width:70px;">Read/3</th>
+                        <th style="width:70px;">Listen/3</th>
+                        <th style="width:70px;">Write/5</th>
+                        <th style="width:70px;">Listen Q</th>
+                        <th style="width:70px;">Read Q</th>
+                        <th style="width:70px;">Speak Q</th>
+                        <th style="width:70px;">Write Q</th>
+                        <th style="width:220px;">Assessment</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="rank">#14</span> Ahmad arifai</td>
+                        <td class="chat-count" style="color:#22c55e;font-weight:bold;">1,090</td>
+                        <td><span class="band-badge mid">3.5</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">9</span><div class="skill-bar"><div class="skill-fill grammar" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill vocab" style="width:25%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill reading" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill listening" style="width:33%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill writing" style="width:20%"></div></div></td>
+                        <td class="practice-box has-data"><span class="practice-count">26</span><br><span class="practice-accuracy">31%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">15</span><br><span class="practice-accuracy">40%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">19</span><br><span class="practice-accuracy">-</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>#1 CHATTER</strong> Perfect grammar! Key gaps: vocab (1/4), listening (1/3), writing. Focus: vocabulary building.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#11</span> Iin Budiyana</td>
+                        <td class="chat-count" style="color:#22c55e;font-weight:bold;">762</td>
+                        <td><span class="band-badge mid">4.0</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">7</span><div class="skill-bar"><div class="skill-fill grammar" style="width:78%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill vocab" style="width:50%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill reading" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill listening" style="width:67%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill writing" style="width:40%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>#2 CHATTER</strong> Strong reading (3/3). Zero practice! Vocab/writing need work. Bridge to practice ASAP.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#13</span> Mug Doank</td>
+                        <td class="chat-count" style="color:#22c55e;font-weight:bold;">686</td>
+                        <td><span class="band-badge high">4.5</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">6</span><div class="skill-bar"><div class="skill-fill grammar" style="width:67%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">4</span><div class="skill-bar"><div class="skill-fill vocab" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill reading" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill listening" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill writing" style="width:20%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">24</span><br><span class="practice-accuracy">-</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>WELL-ROUNDED</strong> Excellent vocab/reading/listening. Writing only weakness (Band 1). Focus: writing practice!</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#19</span> Florentinus</td>
+                        <td class="chat-count" style="color:#22c55e;font-weight:bold;">624</td>
+                        <td><span class="band-badge high">5.0</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">9</span><div class="skill-bar"><div class="skill-fill grammar" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">4</span><div class="skill-bar"><div class="skill-fill vocab" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill reading" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill listening" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill writing" style="width:40%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">1</span><br><span class="practice-accuracy">0%</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>🌟 TOP DIAGNOSTIC</strong> Band 5.0! Near-perfect skills. Only 1 reading Q practiced. Challenge with advanced content!</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#9</span> Iyuz</td>
+                        <td class="chat-count" style="color:#22c55e;font-weight:bold;">310</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box has-data"><span class="practice-count">63</span><br><span class="practice-accuracy">22%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">21</span><br><span class="practice-accuracy">29%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">34</span><br><span class="practice-accuracy">21%</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>PRACTICE CHAMPION</strong> 118 Q but NO diagnostic! Needs diagnostic for personalized plan. Strong speaking (34 Q).</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ACTIVE LEARNERS -->
+        <div class="category-section">
+            <div class="category-header" style="background:linear-gradient(90deg, #dbeafe 0%, #eff6ff 100%);border-color:#3b82f6;">
+                <h2>📘 Active Learners (100-500 chats)</h2>
+                <p>Good engagement, varying practice levels</p>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:180px;">Student</th>
+                        <th style="width:50px;">Chats</th>
+                        <th style="width:60px;">Band</th>
+                        <th style="width:70px;">Grammar/9</th>
+                        <th style="width:70px;">Vocab/4</th>
+                        <th style="width:70px;">Read/3</th>
+                        <th style="width:70px;">Listen/3</th>
+                        <th style="width:70px;">Write/5</th>
+                        <th style="width:70px;">Listen Q</th>
+                        <th style="width:70px;">Read Q</th>
+                        <th style="width:70px;">Speak Q</th>
+                        <th style="width:70px;">Write Q</th>
+                        <th style="width:220px;">Assessment</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="rank">#10</span> Ahmad Khoirul</td>
+                        <td class="chat-count" style="color:#3b82f6;font-weight:bold;">248</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>CHAT-ONLY</strong> 248 chats but 0 practice. Needs diagnostic + bridge to practice.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#21</span> irene</td>
+                        <td class="chat-count" style="color:#3b82f6;font-weight:bold;">200</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>NEW + ENGAGED</strong> 200 chats but no test target set, no diagnostic. Onboard properly.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#17</span> Dima Ahmad</td>
+                        <td class="chat-count" style="color:#3b82f6;font-weight:bold;">182</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box has-data"><span class="practice-count">6</span><br><span class="practice-accuracy">17%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">10</span><br><span class="practice-accuracy">10%</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>LOW ACCURACY</strong> 16 Q with low accuracy (17% listen, 10% read). Needs diagnostic + support.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#16</span> Sugiarto</td>
+                        <td class="chat-count" style="color:#3b82f6;font-weight:bold;">160</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box has-data"><span class="practice-count">36</span><br><span class="practice-accuracy">42%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">11</span><br><span class="practice-accuracy">36%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">9</span><br><span class="practice-accuracy">22%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">2</span><br><span class="practice-accuracy">-</span></td>
+                        <td class="assessment"><strong>BALANCED PRACTICE</strong> 58 Q across skills. Good variety! Needs diagnostic.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#15</span> Rahmat</td>
+                        <td class="chat-count" style="color:#3b82f6;font-weight:bold;">104</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box has-data"><span class="practice-count">18</span><br><span class="practice-accuracy">61%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">5</span><br><span class="practice-accuracy">40%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">1</span><br><span class="practice-accuracy">-</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>ACCURATE LISTENER</strong> 24 Q, 61% listening accuracy (best rate!). Needs diagnostic.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#18</span> Hendry Awan</td>
+                        <td class="chat-count">102</td>
+                        <td><span class="band-badge low">2.5</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">2</span><div class="skill-bar"><div class="skill-fill grammar" style="width:22%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">4</span><div class="skill-bar"><div class="skill-fill vocab" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill reading" style="width:67%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill writing" style="width:20%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>⚠️ LOWEST BAND + 0 PRACTICE</strong> Strong vocab, weak grammar, zero listening. Urgent re-engagement!</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#22</span> Fahrur Rizqi</td>
+                        <td class="chat-count">52</td>
+                        <td><span class="band-badge low">0.0</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill writing" style="width:20%"></div></div></td>
+                        <td class="practice-box has-data"><span class="practice-count">30</span><br><span class="practice-accuracy">20%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">10</span><br><span class="practice-accuracy">20%</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">45</span><br><span class="practice-accuracy">24%</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>119 Q / ZEROS ON DIAG</strong> Heavy practice but all diagnostic zeros. Possible diag error. Retake recommended.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ENGAGED LEARNERS -->
+        <div class="category-section">
+            <div class="category-header" style="background:linear-gradient(90deg, #fce7f3 0%, #fdf2f8 100%);border-color:#ec4899;">
+                <h2>💗 Engaged Learners (20-100 chats)</h2>
+                <p>Moderate engagement, varying levels of practice</p>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:180px;">Student</th>
+                        <th style="width:50px;">Chats</th>
+                        <th style="width:60px;">Band</th>
+                        <th style="width:70px;">Grammar/9</th>
+                        <th style="width:70px;">Vocab/4</th>
+                        <th style="width:70px;">Read/3</th>
+                        <th style="width:70px;">Listen/3</th>
+                        <th style="width:70px;">Write/5</th>
+                        <th style="width:70px;">Listen Q</th>
+                        <th style="width:70px;">Read Q</th>
+                        <th style="width:70px;">Speak Q</th>
+                        <th style="width:70px;">Write Q</th>
+                        <th style="width:220px;">Assessment</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="rank">#27</span> Ressy Melfriza</td>
+                        <td class="chat-count">78</td>
+                        <td><span class="band-badge low">1.0</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">6</span><div class="skill-bar"><div class="skill-fill grammar" style="width:67%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill writing" style="width:20%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>🚨 NEWEST + LOWEST BAND</strong> Joined Apr 5. Grammar ok, everything else 0. Needs gentle onboarding.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#8</span> riyadi</td>
+                        <td class="chat-count">42</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>DORMANT</strong> 42 chats but no diagnostic, no practice. Needs re-engagement.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#23</span> Bang Cabut</td>
+                        <td class="chat-count">44</td>
+                        <td><span class="band-badge high">4.5</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">8</span><div class="skill-bar"><div class="skill-fill grammar" style="width:89%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">4</span><div class="skill-bar"><div class="skill-fill vocab" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill reading" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill listening" style="width:67%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">1</span><div class="skill-bar"><div class="skill-fill writing" style="width:20%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>Note: ITP Student</strong> Band 4.5 ITP (different test). Strong diagnostic but no practice. ITP doesn't have speaking.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#6</span> Irfan A.F.</td>
+                        <td class="chat-count">28</td>
+                        <td><span class="band-badge high">5.0</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">8</span><div class="skill-bar"><div class="skill-fill grammar" style="width:89%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">4</span><div class="skill-bar"><div class="skill-fill vocab" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill reading" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#eab308;">2</span><div class="skill-bar"><div class="skill-fill listening" style="width:67%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill writing" style="width:60%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">1</span><br><span class="practice-accuracy">-</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>🌟 TOP DIAGNOSTIC</strong> Band 5.0 (highest!). Only 1 speaking practice. Challenge with advanced content!</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- DORMANT STUDENTS -->
+        <div class="category-section">
+            <div class="category-header" style="background:linear-gradient(90deg, #fee2e2 0%, #fef2f2 100%);border-color:#ef4444;">
+                <h2>😴 Dormant Students (&lt;20 chats, no practice)</h2>
+                <p>Minimal or no activity - need re-activation</p>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:180px;">Student</th>
+                        <th style="width:50px;">Chats</th>
+                        <th style="width:60px;">Band</th>
+                        <th style="width:70px;">Grammar/9</th>
+                        <th style="width:70px;">Vocab/4</th>
+                        <th style="width:70px;">Read/3</th>
+                        <th style="width:70px;">Listen/3</th>
+                        <th style="width:70px;">Write/5</th>
+                        <th style="width:70px;">Listen Q</th>
+                        <th style="width:70px;">Read Q</th>
+                        <th style="width:70px;">Speak Q</th>
+                        <th style="width:70px;">Write Q</th>
+                        <th style="width:220px;">Assessment</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="rank">#3</span> Aditya</td>
+                        <td class="chat-count zero">0</td>
+                        <td><span class="band-badge high">4.0</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">7</span><div class="skill-bar"><div class="skill-fill grammar" style="width:78%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">4</span><div class="skill-bar"><div class="skill-fill vocab" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill reading" style="width:100%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#ef4444;">0</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#22c55e;">3</span><div class="skill-bar"><div class="skill-fill writing" style="width:60%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>HIGH POTENTIAL - DORMANT</strong> Band 4.0! Zero listening. No chat, no practice. Priority outreach!</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#2</span> Ren</td>
+                        <td class="chat-count">16</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>DORMANT</strong> 16 chats, no diagnostic, no practice. Needs onboarding.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#7</span> Yuhuuu</td>
+                        <td class="chat-count">2</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>NEAR INACTIVE</strong> Only 2 chats. No diagnostic, no practice. Needs re-activation.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#12</span> Novia</td>
+                        <td class="chat-count zero">0</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>INACTIVE</strong> Zero chats, no diagnostic, no practice. May have left.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#24</span> bhara</td>
+                        <td class="chat-count">14</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>DORMANT</strong> 14 chats, no diagnostic, no practice.</td>
+                    </tr>
+                    <tr>
+                        <td><span class="rank">#25</span> Frans</td>
+                        <td class="chat-count">4</td>
+                        <td><span class="band-badge none">-</span></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill grammar" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill vocab" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill reading" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill listening" style="width:0%"></div></div></td>
+                        <td class="skill-box"><span class="skill-score" style="color:#94a3b8;">-</span><div class="skill-bar"><div class="skill-fill writing" style="width:0%"></div></div></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box has-data"><span class="practice-count">1</span><br><span class="practice-accuracy">-</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="practice-box no-data"><span class="practice-count">0</span></td>
+                        <td class="assessment"><strong>MINIMAL</strong> 4 chats, 1 reading question. Needs onboarding.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ACTION PLAN SUMMARY -->
+        <div class="grid-2">
+            <div class="panel">
+                <h2>📋 Immediate Actions Required</h2>
+                <div class="stat-row"><span class="stat-label">P0 - Urgent (Band ≤2.5 + 0 practice)</span><span class="stat-value" style="color:#ef4444;">2</span></div>
+                <div class="stat-row"><span class="stat-label">P1 - High (Strong diag, dormant)</span><span class="stat-value" style="color:#f59e0b;">2</span></div>
+                <div class="stat-row"><span class="stat-label">P2 - Medium (Chat-heavy, 0 practice)</span><span class="stat-value" style="color:#3b82f6;">3</span></div>
+                <div class="stat-row"><span class="stat-label">P3 - Low (No diagnostic, no activity)</span><span class="stat-value" style="color:#666;">6</span></div>
+            </div>
+            <div class="panel">
+                <h2>📊 Skill Weaknesses Summary</h2>
+                <div class="stat-row"><span class="stat-label">Zero listening (0/3 on diagnostic)</span><span class="stat-value" style="color:#ef4444;">5 students</span></div>
+                <div class="stat-row"><span class="stat-label">Weak vocabulary (0-1/4)</span><span class="stat-value" style="color:#ef4444;">4 students</span></div>
+                <div class="stat-row"><span class="stat-label">Low writing (Band 1)</span><span class="stat-value" style="color:#f59e0b;">5 students</span></div>
+                <div class="stat-row"><span class="stat-label">Missing diagnostic entirely</span><span class="stat-value" style="color:#666;">12 students</span></div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>EduBot TOEFL iBT Full Metrics Report | April 7, 2026</p>
+            <p style="margin-top:8px;"><strong>Key Insight:</strong> 12/20 TOEFL iBT students haven't taken diagnostic | 10/20 have 0 practice questions</p>
+        </div>
+    </div>
+</body>
+</html>

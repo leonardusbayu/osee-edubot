@@ -89,6 +89,6 @@ Respond in JSON only:
       suggested_phrases: result.suggested_phrases || [],
     });
   } catch (e: any) {
-    return c.json({ error: e.message }, 500);
+    return c.json({ error: 'Writing evaluation failed' }, 500);
   }
 });

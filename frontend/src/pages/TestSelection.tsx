@@ -32,6 +32,19 @@ interface AvailableResponse {
   quota: QuotaInfo | null;
 }
 
+interface ResumeAttempt {
+  has_active: boolean;
+  attempt_id?: number;
+  test_type?: string;
+  sections?: { id: string; name: string; duration_minutes: number }[];
+  current_section?: string;
+  current_question_index?: number;
+  answers_submitted?: number;
+  section_progress?: Record<string, number>;
+  started_at?: string;
+  metadata?: any;
+}
+
 const SECTION_INFO: Record<string, { icon: string; name: string; color: string; desc: string }> = {
   reading: { icon: '📖', name: 'Reading', color: 'bg-blue-500', desc: 'Passages, vocabulary, comprehension' },
   listening: { icon: '🎧', name: 'Listening', color: 'bg-green-500', desc: 'Conversations, lectures, announcements' },
@@ -65,11 +78,14 @@ export default function TestSelection() {
   const [mode, setMode] = useState<'menu' | 'full_test' | 'section'>('menu');
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
   const [testType, setTestType] = useState<string>('TOEFL_IBT');
+  const [resumeAttempt, setResumeAttempt] = useState<ResumeAttempt | null>(null);
+  const [showResumeModal, setShowResumeModal] = useState(false);
   const navigate = useNavigate();
   const { startTest } = useTestStore();
   const [searchParams] = useSearchParams();
 
   useEffect(() => {
+    checkResume();
     loadData();
   }, [testType]);
 
@@ -78,6 +94,21 @@ export default function TestSelection() {
       setError('Batas harian tercapai! Upgrade ke premium untuk akses unlimited.');
     }
   }, [searchParams]);
+
+  async function checkResume() {
+    try {
+      const res = await authedFetch('/api/tests/attempt/resume');
+      if (res.ok) {
+        const data: ResumeAttempt = await res.json();
+        if (data.has_active) {
+          setResumeAttempt(data);
+          setShowResumeModal(true);
+        }
+      }
+    } catch {
+      // Silently fail resume check
+    }
+  }
 
   async function loadData() {
     setLoading(true);
@@ -99,6 +130,19 @@ export default function TestSelection() {
       }
     } catch {}
     setLoading(false);
+  }
+
+  function handleResumeTest() {
+    if (resumeAttempt?.attempt_id) {
+      setShowResumeModal(false);
+      navigate(`/test/${resumeAttempt.attempt_id}`);
+    }
+  }
+
+  async function handleStartNewTest() {
+    setShowResumeModal(false);
+    setResumeAttempt(null);
+    // Old attempt will auto-expire via 2-hour cleanup in /start
   }
 
   function getSectionCounts(section: string) {
@@ -186,6 +230,65 @@ export default function TestSelection() {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-tg-button"></div>
+      </div>
+    );
+  }
+
+  // Resume modal
+  if (showResumeModal && resumeAttempt) {
+    const testConfig = tests.find(t => t.test_type === resumeAttempt.test_type);
+    const startedTime = new Date(resumeAttempt.started_at || '');
+    const elapsedMinutes = Math.floor((Date.now() - startedTime.getTime()) / 60000);
+
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-end z-50">
+        <div className="w-full bg-tg-bg rounded-t-3xl p-6 animate-slide-up">
+          <div className="text-center mb-6">
+            <div className="text-5xl mb-3">⏸️</div>
+            <h2 className="text-2xl font-bold mb-2">Lanjutkan Tes?</h2>
+            <p className="text-tg-hint">Kamu punya tes yang belum selesai</p>
+          </div>
+
+          <div className="bg-tg-secondary rounded-xl p-4 mb-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="text-3xl">
+                {testConfig?.display_name.includes('IELTS') ? '🇬🇧' :
+                 testConfig?.display_name.includes('TOEIC') ? '🏢' :
+                 testConfig?.display_name.includes('ITP') ? '📋' :
+                 '🇺🇸'}
+              </div>
+              <div className="flex-1">
+                <p className="font-semibold">{testConfig?.display_name}</p>
+                <p className="text-sm text-tg-hint">
+                  Section: {resumeAttempt.current_section}
+                </p>
+              </div>
+            </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-tg-hint">Soal dijawab</span>
+                <span className="font-medium">{resumeAttempt.answers_submitted || 0}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-tg-hint">Waktu berlalu</span>
+                <span className="font-medium">{elapsedMinutes} menit</span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={handleResumeTest}
+            className="w-full bg-tg-button text-tg-button-text py-3 rounded-xl font-bold mb-3"
+          >
+            Lanjutkan
+          </button>
+          <button
+            onClick={handleStartNewTest}
+            className="w-full bg-tg-secondary text-tg-text py-3 rounded-xl font-semibold"
+          >
+            Mulai Tes Baru
+          </button>
+        </div>
       </div>
     );
   }

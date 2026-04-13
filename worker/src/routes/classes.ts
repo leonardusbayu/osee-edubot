@@ -91,13 +91,21 @@ classRoutes.get('/all/students', async (c) => {
        FROM users ORDER BY name`
     ).all();
 
-    // Step 2: attempt stats per user
+    // Step 2: attempt stats per user (speaking/writing use score in answer_data, not is_correct)
     const statsResult = await c.env.DB.prepare(
       `SELECT ta.user_id,
-         COUNT(aa.id) as questions_answered,
-         SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct_answers,
-         COUNT(DISTINCT ta.id) as tests_taken,
-         MAX(aa.submitted_at) as last_active
+         COUNT(CASE WHEN aa.id IS NOT NULL AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing')) THEN 1 END) as questions_answered,
+         SUM(CASE
+           WHEN aa.is_correct = 1 THEN 1
+           WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+                AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+           ELSE 0
+         END) as correct_answers,
+         COUNT(DISTINCT CASE WHEN ta.status = 'completed' THEN ta.id END) as tests_taken,
+         (SELECT MAX(last_ts) FROM (
+            SELECT MAX(cm.created_at) as last_ts FROM conversation_messages cm WHERE cm.user_id = ta.user_id
+            UNION ALL SELECT MAX(aa2.submitted_at) FROM attempt_answers aa2 JOIN test_attempts ta2 ON aa2.attempt_id = ta2.id WHERE ta2.user_id = ta.user_id
+         )) as last_active
        FROM test_attempts ta
        LEFT JOIN attempt_answers aa ON aa.attempt_id = ta.id
        GROUP BY ta.user_id`
@@ -135,21 +143,24 @@ classRoutes.get('/all/students', async (c) => {
        FROM user_gamification`
     ).all();
 
-    // Step 7: active days per user (join through test_attempts to get user_id)
+    // Step 7: active days per user (conversation_messages + attempt_answers)
     const streakResult = await c.env.DB.prepare(
-      `SELECT ta.user_id, COUNT(DISTINCT DATE(aa.submitted_at)) as active_days
-       FROM attempt_answers aa
-       JOIN test_attempts ta ON aa.attempt_id = ta.id
-       GROUP BY ta.user_id`
+      `SELECT user_id, COUNT(DISTINCT date) as active_days FROM (
+         SELECT ta.user_id, DATE(aa.submitted_at) as date
+         FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
+         UNION
+         SELECT user_id, DATE(created_at) as date FROM conversation_messages
+       ) GROUP BY user_id`
     ).all();
 
     // Step 8: avg time per question and weakest section per user
+    // weakest = most wrong for MC sections, or lowest avg score for speaking/writing
     const timeAndSectionResult = await c.env.DB.prepare(
       `SELECT ta.user_id,
          AVG(aa.time_spent_seconds) as avg_time_per_question,
          (SELECT aa2.section FROM attempt_answers aa2
           JOIN test_attempts ta2 ON aa2.attempt_id = ta2.id
-          WHERE ta2.user_id = ta.user_id AND aa2.is_correct = 0
+          WHERE ta2.user_id = ta.user_id AND (aa2.is_correct = 0 OR (aa2.is_correct IS NULL AND aa2.section IN ('speaking','writing') AND json_extract(aa2.answer_data, '$.score') < 5))
           GROUP BY aa2.section ORDER BY COUNT(*) DESC LIMIT 1) as weakest_section
        FROM attempt_answers aa
        JOIN test_attempts ta ON aa.attempt_id = ta.id
@@ -164,18 +175,40 @@ classRoutes.get('/all/students', async (c) => {
        GROUP BY user_id`
     ).all();
 
-    // Step 10: week stats (last 7 days) per user
+    // Step 10: week stats (last 7 days) per user — handle speaking/writing scores
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
     const weekStatsResult = await c.env.DB.prepare(
       `SELECT ta.user_id,
           COUNT(aa.id) as week_questions,
-          CAST(SUM(aa.is_correct) AS FLOAT) / NULLIF(COUNT(*), 0) * 100 as week_accuracy,
+          CAST(SUM(CASE
+            WHEN aa.is_correct = 1 THEN 1
+            WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing')
+                 AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+            ELSE 0
+          END) AS FLOAT) / NULLIF(COUNT(*), 0) * 100 as week_accuracy,
           SUM(COALESCE(aa.time_spent_seconds, 0)) as week_seconds,
           COUNT(DISTINCT DATE(aa.submitted_at)) as active_days
        FROM attempt_answers aa
        JOIN test_attempts ta ON aa.attempt_id = ta.id
        WHERE aa.submitted_at >= ?
+         AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))
        GROUP BY ta.user_id`
+    ).bind(sevenDaysAgo).all();
+
+    // Step 11: daily_question_logs (bot study questions, separate from mini app tests)
+    const dqlResult = await c.env.DB.prepare(
+      `SELECT user_id, SUM(questions_answered) as bot_questions
+       FROM daily_question_logs GROUP BY user_id`
+    ).all();
+
+    // Step 12: week messages from conversation_messages (for bot-only students)
+    const weekMsgsResult = await c.env.DB.prepare(
+      `SELECT user_id,
+          COUNT(*) as week_messages,
+          COUNT(DISTINCT DATE(created_at)) as msg_active_days
+       FROM conversation_messages
+       WHERE role = 'user' AND created_at >= ?
+       GROUP BY user_id`
     ).bind(sevenDaysAgo).all();
 
     // Build lookup maps (normalize user_id to integer to handle .0 suffix)
@@ -220,6 +253,14 @@ classRoutes.get('/all/students', async (c) => {
     for (const s of weekStatsResult.results as any[]) {
       weekStatsMap[normalizeId(s.user_id)] = s;
     }
+    const dqlMap: Record<number, any> = {};
+    for (const s of dqlResult.results as any[]) {
+      dqlMap[normalizeId(s.user_id)] = s;
+    }
+    const weekMsgsMap: Record<number, any> = {};
+    for (const s of weekMsgsResult.results as any[]) {
+      weekMsgsMap[normalizeId(s.user_id)] = s;
+    }
 
     const result = (usersResult.results as any[]).map((u: any) => {
       const uid = normalizeId(u.id);
@@ -232,6 +273,18 @@ classRoutes.get('/all/students', async (c) => {
       const timeAndSection = timeAndSectionMap[uid] || { avg_time_per_question: null, weakest_section: null };
       const todayUsage = todayUsageMap[uid] || { today_usage: 0 };
       const weekStats = weekStatsMap[uid] || { week_questions: 0, week_accuracy: 0, week_seconds: 0, active_days: 0 };
+      const dql = dqlMap[uid] || { bot_questions: 0 };
+      const weekMsgs = weekMsgsMap[uid] || { week_messages: 0, msg_active_days: 0 };
+
+      // Total questions = mini app test answers + bot study questions
+      const testQuestions = stats.questions_answered || 0;
+      const botQuestions = dql.bot_questions || 0;
+      const totalQuestions = testQuestions + botQuestions;
+
+      // Determine study type for display
+      const hasTests = testQuestions > 0;
+      const hasMessages = (conv.message_count || 0) > 0;
+      const studyType = hasTests ? 'test' : hasMessages ? 'bot_only' : 'inactive';
 
       return {
         id: uid,
@@ -241,15 +294,17 @@ classRoutes.get('/all/students', async (c) => {
         proficiency_level: u.proficiency_level,
         target_test: u.target_test,
         tests_taken: stats.tests_taken || 0,
-        questions_answered: stats.questions_answered || 0,
+        questions_answered: totalQuestions,
         correct_answers: stats.correct_answers || 0,
-        accuracy: stats.questions_answered > 0
-          ? Math.round(((stats.correct_answers || 0) / stats.questions_answered) * 100)
+        accuracy: testQuestions > 0
+          ? Math.round(((stats.correct_answers || 0) / testQuestions) * 100)
           : 0,
+        study_type: studyType,
+        bot_questions: botQuestions,
         latest_score: score.total_score,
         diagnostic_band: diag.estimated_band || score.band_score,
         estimated_band: diag.estimated_band || null,
-        last_active: stats.last_active || null,
+        last_active: stats.last_active || conv.last_message || null,
         messages_sent: conv.message_count || 0,
         last_message: conv.last_message || null,
         xp: gam.xp || 0,
@@ -267,14 +322,15 @@ classRoutes.get('/all/students', async (c) => {
           questions: weekStats.week_questions || 0,
           accuracy: Math.round(weekStats.week_accuracy || 0),
           minutes: Math.round((weekStats.week_seconds || 0) / 60),
-          active_days: weekStats.active_days || 0,
+          active_days: Math.max(weekStats.active_days || 0, weekMsgs.msg_active_days || 0),
+          messages: weekMsgs.week_messages || 0,
         },
       };
     });
 
     return c.json(result);
   } catch (e: any) {
-    return c.json({ error: e.message }, 500);
+    return c.json({ error: 'Class operation failed' }, 500);
   }
 });
 
@@ -315,9 +371,13 @@ classRoutes.get('/export', async (c) => {
     // Reuse the same queries as /all/students for data
     const statsResult = await c.env.DB.prepare(
       `SELECT ta.user_id,
-         COUNT(aa.id) as questions_answered,
-         SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct_answers,
-         COUNT(DISTINCT ta.id) as tests_taken,
+         COUNT(CASE WHEN aa.id IS NOT NULL AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing')) THEN 1 END) as questions_answered,
+         SUM(CASE
+           WHEN aa.is_correct = 1 THEN 1
+           WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1
+           ELSE 0
+         END) as correct_answers,
+         COUNT(DISTINCT CASE WHEN ta.status = 'completed' THEN ta.id END) as tests_taken,
          MAX(aa.submitted_at) as last_active
        FROM test_attempts ta
        LEFT JOIN attempt_answers aa ON aa.attempt_id = ta.id
@@ -445,7 +505,7 @@ classRoutes.get('/export', async (c) => {
       },
     });
   } catch (e: any) {
-    return c.json({ error: e.message }, 500);
+    return c.json({ error: 'Class operation failed' }, 500);
   }
 });
 
@@ -462,8 +522,8 @@ classRoutes.get('/:id/students', async (c) => {
   const students = await c.env.DB.prepare(
     `SELECT u.id, u.name, u.username, u.proficiency_level, u.target_test,
        (SELECT COUNT(*) FROM test_attempts WHERE user_id = u.id AND status = 'completed') as tests_taken,
-       (SELECT COUNT(*) FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE ta.user_id = u.id) as questions_answered,
-       (SELECT COUNT(*) FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE ta.user_id = u.id AND aa.is_correct = 1) as correct_answers,
+       (SELECT COUNT(*) FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE ta.user_id = u.id AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))) as questions_answered,
+       (SELECT SUM(CASE WHEN aa.is_correct = 1 THEN 1 WHEN aa.is_correct IS NULL AND aa.section IN ('speaking','writing') AND json_extract(aa.answer_data, '$.score') >= 5 THEN 1 ELSE 0 END) FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE ta.user_id = u.id AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))) as correct_answers,
        (SELECT total_score FROM test_results tr JOIN test_attempts ta ON tr.attempt_id = ta.id WHERE ta.user_id = u.id ORDER BY tr.created_at DESC LIMIT 1) as latest_score,
        (SELECT estimated_band FROM diagnostic_results WHERE user_id = u.id ORDER BY created_at DESC LIMIT 1) as diagnostic_band
      FROM users u

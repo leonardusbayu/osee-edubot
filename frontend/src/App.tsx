@@ -5,12 +5,15 @@ import TestSelection from './pages/TestSelection';
 import TestRunner from './pages/TestRunner';
 import TestResults from './pages/TestResults';
 import Progress from './pages/Progress';
+import ReportCard from './pages/ReportCard';
 import Dashboard from './pages/Dashboard';
 import AdminContent from './pages/AdminContent';
 import AdminStudents from './pages/AdminStudents';
 import AdminAnalytics from './pages/AdminAnalytics';
 import WeaknessDashboard from './pages/WeaknessDashboard';
 import AdminPanel from './pages/AdminPanel';
+import TeacherDashboard from './pages/TeacherDashboard';
+import ErrorBoundary from './components/ErrorBoundary';
 
 declare global {
   interface Window {
@@ -95,14 +98,16 @@ function App() {
       <Routes>
         <Route path="/" element={<TestSelection />} />
         <Route path="/test" element={<TestSelection />} />
-        <Route path="/test/:attemptId" element={<TestRunner />} />
-        <Route path="/test/:attemptId/results" element={<TestResults />} />
-        <Route path="/progress" element={<Progress />} />
+        <Route path="/test/:attemptId" element={<ErrorBoundary fallbackMessage="Soal gagal dimuat. Coba muat ulang halaman."><TestRunner /></ErrorBoundary>} />
+        <Route path="/test/:attemptId/results" element={<ErrorBoundary fallbackMessage="Hasil tes gagal dimuat."><TestResults /></ErrorBoundary>} />
+        <Route path="/progress" element={<ErrorBoundary fallbackMessage="Progress gagal dimuat."><Progress /></ErrorBoundary>} />
+        <Route path="/report-card" element={<ErrorBoundary fallbackMessage="Laporan gagal dimuat."><ReportCard /></ErrorBoundary>} />
         <Route path="/admin/content" element={<AdminContent />} />
         <Route path="/admin/students" element={<AdminStudents />} />
         <Route path="/admin/analytics" element={<AdminAnalytics />} />
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="/admin/weaknesses" element={<WeaknessDashboard />} />
+        <Route path="/admin/teacher" element={<TeacherDashboard />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/admin/panel" element={<AdminPanel />} />
       </Routes>

@@ -82,6 +82,9 @@ export const api = {
     return request<any>(url);
   },
 
+  getQuestionsBatch: (attemptId: number) =>
+    request<any>(`/tests/attempt/${attemptId}/questions-batch`),
+
   uploadRecording: async (file: Blob) => {
     const { accessToken } = useAuthStore.getState();
     const formData = new FormData();

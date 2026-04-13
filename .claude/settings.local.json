@@ -79,7 +79,13 @@
       "Bash(python scripts/import-itp-reading.py)",
       "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 npx wrangler r2 bucket list)",
       "mcp__0f611187-90f3-446a-8261-2c219425c100__r2_bucket_create",
-      "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 npx wrangler deploy)"
+      "Bash(CLOUDFLARE_API_TOKEN=cfut_28l0tEkYzywTicfRbbRcRAl8VLuvTDhBfItQPB5Udca04c87 npx wrangler deploy)",
+      "WebSearch",
+      "Bash(npm -v)",
+      "Bash(npm install:*)",
+      "Bash(claude --version)",
+      "Bash(powershell -Command \"[Environment]::SetEnvironmentVariable\\(''PATH'', [Environment]::GetEnvironmentVariable\\(''PATH'', ''User''\\) + '';C:\\\\Users\\\\user\\\\.local\\\\bin'', ''User''\\)\")",
+      "Bash(\"C:\\\\Users\\\\user\\\\.local\\\\bin\\\\claude.exe\" --version)"
     ]
   }
 }

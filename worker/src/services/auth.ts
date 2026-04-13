@@ -188,18 +188,20 @@ export async function getAuthUser(request: Request, env: Env) {
   // but sufficient for a practice test app since there's no sensitive data)
   let tgUserId = headers['x-telegram-user-id'];
   if (tgUserId) {
-    // Strip .0 suffix if present
-    tgUserId = tgUserId.replace('.0', '');
-    // Try as integer first (most common D1 type)
-    const tgIdInt = parseInt(tgUserId);
-    let result = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(tgIdInt).first();
+    // Normalize: strip .0 suffix to get clean integer string
+    const cleanId = tgUserId.replace('.0', '');
+    // Try clean string first (after migration 022, all telegram_ids are clean strings)
+    let result = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(cleanId).first();
     if (!result) {
-      // Try as string
-      result = await env.DB.prepare('SELECT * FROM users WHERE CAST(telegram_id AS TEXT) = ?').bind(tgUserId).first();
+      // Legacy fallback: try with .0 suffix (pre-migration data)
+      result = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(cleanId + '.0').first();
     }
     if (!result) {
-      // Try with the raw value as-is
-      result = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(tgUserId).first();
+      // Try as integer bind
+      const tgIdInt = parseInt(cleanId);
+      if (!isNaN(tgIdInt)) {
+        result = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(tgIdInt).first();
+      }
     }
     return result as any;
   }
