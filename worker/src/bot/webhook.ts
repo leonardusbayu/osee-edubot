@@ -278,9 +278,15 @@ function buildProgressBarInline(percent: number): string {
 // SKILL-BASED LEARNING PATHS KEYBOARDS
 // ═══════════════════════════════════════════════════════
 
-function studyTopicKeyboard() {
+function studyTopicKeyboard(targetTest?: string | null) {
+  const testEmoji: Record<string, string> = {
+    'TOEFL_IBT': '🇺🇸', 'IELTS': '🇬🇧', 'TOEFL_ITP': '📚', 'TOEIC': '🏢',
+  };
+  const tt = targetTest || 'TOEFL_IBT';
+  const emoji = testEmoji[tt] || '📝';
   return {
     inline_keyboard: [
+      [{ text: `${emoji} Target: ${tt.replace(/_/g, ' ')}  [Ganti →]`, callback_data: 'switch_test' }],
       [
         { text: '📖 Reading', callback_data: 'cat_reading' },
         { text: '🎧 Listening', callback_data: 'cat_listening' },
@@ -839,8 +845,13 @@ async function handleMessage(message: any, env: Env) {
         ).bind(user.id).run();
 
         if (user.onboarding_complete) {
+          const testEmoji: Record<string, string> = {
+            'TOEFL_IBT': '🇺🇸', 'IELTS': '🇬🇧', 'TOEFL_ITP': '📚', 'TOEIC': '🏢',
+          };
+          const tt = user.target_test || 'TOEFL_IBT';
+          const tEmoji = testEmoji[tt] || '📝';
           await sendMessage(env, chatId,
-            `Halo lagi, ${user.name}! 👋\n\nMau ngapain hari ini?`,
+            `Halo lagi, ${user.name}! 👋\n\n${tEmoji} Target: *${tt.replace(/_/g, ' ')}*\n\nMau ngapain hari ini?`,
             mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id),
           );
         } else {
@@ -1121,7 +1132,7 @@ async function handleMessage(message: any, env: Env) {
         return;
 
       case '/study':
-        await sendMessage(env, chatId, 'Mau belajar apa?', studyTopicKeyboard());
+        await sendMessage(env, chatId, '📚 *Menu Belajar*\n\nPilih skill yang mau dilatih:', studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
         return;
 
       // ═══════════════════════════════════════════════════════
@@ -2558,7 +2569,7 @@ async function handleMessage(message: any, env: Env) {
   }
 
   if (text === '📖 Belajar') {
-    await sendMessage(env, chatId, 'Mau belajar apa nih? Pilih kategori di bawah, atau langsung ketik aja, misal "belajar grammar" 👇', studyTopicKeyboard());
+    await sendMessage(env, chatId, 'Mau belajar apa nih? Pilih kategori di bawah, atau langsung ketik aja, misal "belajar grammar" 👇', studyTopicKeyboard(user.target_test));
     return;
   }
 
@@ -2943,6 +2954,46 @@ async function handleCallbackQuery(query: any, env: Env) {
     return;
   }
 
+  // Quick test switch from study menu
+  if (data === 'switch_test') {
+    const currentTest = user.target_test || 'TOEFL_IBT';
+    const testOptions: Record<string, string> = {
+      'TOEFL_IBT': '🇺🇸 TOEFL iBT',
+      'IELTS': '🇬🇧 IELTS',
+      'TOEFL_ITP': '📚 TOEFL ITP',
+      'TOEIC': '🏢 TOEIC',
+    };
+    const buttons = Object.entries(testOptions).map(([key, label]) => ({
+      text: key === currentTest ? `✅ ${label}` : label,
+      callback_data: `quickswitch_${key}`,
+    }));
+    await editMessage(env, chatId, messageId,
+      `🎯 *Ganti Target Tes*\n\nTarget kamu sekarang: *${currentTest.replace(/_/g, ' ')}*\n\nPilih tes yang mau kamu pelajari:`,
+      {
+        inline_keyboard: [
+          [buttons[0], buttons[1]],
+          [buttons[2], buttons[3]],
+          [{ text: '⬅️ Kembali ke Belajar', callback_data: 'back_study' }],
+        ],
+      }
+    );
+    return;
+  }
+
+  if (data.startsWith('quickswitch_')) {
+    const test = data.replace('quickswitch_', '');
+    const SWITCH_VALID = ['TOEFL_IBT', 'TOEFL_ITP', 'IELTS', 'TOEIC'];
+    if (!SWITCH_VALID.includes(test)) return;
+    await env.DB.prepare('UPDATE users SET target_test = ? WHERE id = ?').bind(test, user.id).run();
+    // Show updated study menu with new test badge
+    const tt = test;
+    await editMessage(env, chatId, messageId,
+      `✅ Target tes diubah ke *${tt.replace(/_/g, ' ')}*!\n\nMau belajar apa nih? Pilih kategori di bawah 👇`,
+      studyTopicKeyboard(tt),
+    );
+    return;
+  }
+
   // Settings changes
   const VALID_TEST_TYPES = ['TOEFL_IBT', 'TOEFL_ITP', 'IELTS', 'TOEIC'];
   const VALID_LEVELS = ['beginner', 'intermediate', 'advanced'];
@@ -3269,7 +3320,7 @@ async function handleCallbackQuery(query: any, env: Env) {
     return;
   }
   if (data === 'back_study') {
-    await editMessage(env, chatId, messageId, 'Mau belajar apa?', studyTopicKeyboard());
+    await editMessage(env, chatId, messageId, '📚 *Menu Belajar*\n\nPilih skill yang mau dilatih:', studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
     return;
   }
 
@@ -3593,7 +3644,7 @@ async function handleCallbackQuery(query: any, env: Env) {
       } else {
         msg = `Challenge hari ini: jawab ${target} soal.\n\nProgress: ${count}/${target} ${'🟩'.repeat(Math.min(count, target))}${'⬜'.repeat(Math.max(0, target - count))}\n\nTinggal ${target - count} lagi! Pilih topik:`;
       }
-      await editMessage(env, chatId, messageId, msg, studyTopicKeyboard());
+      await editMessage(env, chatId, messageId, msg, studyTopicKeyboard(user.target_test));
       return;
     }
 
@@ -3854,7 +3905,7 @@ async function handleCallbackQuery(query: any, env: Env) {
 
   // study_menu callback (back to main study menu)
   if (data === 'study_menu') {
-    await editMessage(env, chatId, messageId, 'Mau belajar apa?', studyTopicKeyboard());
+    await editMessage(env, chatId, messageId, '📚 *Menu Belajar*\n\nPilih skill yang mau dilatih:', studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
     return;
   }
 
