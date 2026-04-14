@@ -679,6 +679,15 @@ async function handleVoiceMessage(message: any, env: Env) {
 
           const { score, feedback } = await scoreTextAnswer(env, activeExercise.type, meta.lesson, meta.step, transcription);
           meta.scores.push(score);
+
+          // Theory-of-Mind: record evidence for voice-answered exercise
+          try {
+            const { recordEvidence } = await import('../services/mental-model');
+            const evidenceType = score >= 60 ? 'correct_answer' : 'wrong_answer';
+            const weight = score >= 80 ? 0.7 : score >= 50 ? 0.4 : 0.6;
+            await recordEvidence(env, user.id, activeExercise.type, evidenceType, `voice step ${meta.step} score=${score}`, weight);
+          } catch (e) { console.error('recordEvidence (voice) error:', e); }
+
           meta.step += 1;
           const total = getTotalSteps(activeExercise.type);
 
@@ -2700,6 +2709,15 @@ async function handleMessage(message: any, env: Env) {
 
         const { score, feedback } = await scoreTextAnswer(env, activeExercise.type, meta.lesson, meta.step, text);
         meta.scores.push(score);
+
+        // Theory-of-Mind: record evidence about this concept
+        try {
+          const { recordEvidence } = await import('../services/mental-model');
+          const evidenceType = score >= 60 ? 'correct_answer' : 'wrong_answer';
+          const weight = score >= 80 ? 0.7 : score >= 50 ? 0.4 : 0.6;
+          await recordEvidence(env, user.id, activeExercise.type, evidenceType, `step ${meta.step} score=${score}`, weight);
+        } catch (e) { console.error('recordEvidence (text) error:', e); }
+
         meta.step += 1;
         const total = getTotalSteps(activeExercise.type);
 
@@ -3323,6 +3341,15 @@ async function handleCallbackQuery(query: any, env: Env) {
     await editMessage(env, chatId, messageId, '📚 *Menu Belajar*\n\nPilih skill yang mau dilatih:', studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
     return;
   }
+  if (data === 'back_target') {
+    // User hit "Kembali" on level selection — return to target-test picker
+    await editMessage(env, chatId, messageId,
+      `📋 *Step 1 dari 2 — Pilih Target Tes*\n\n` +
+      `Kamu mau persiapan tes yang mana?`,
+      testTypeKeyboard,
+    );
+    return;
+  }
 
   // ═══════════════════════════════════════════════════════
   // PRONUNCIATION BANK CALLBACKS
@@ -3853,6 +3880,15 @@ async function handleCallbackQuery(query: any, env: Env) {
       if (action === 'a' && mcqOption) {
         const { score, feedback } = scoreMCQ(exerciseType, meta.lesson, meta.step, mcqOption);
         meta.scores.push(score);
+
+        // Theory-of-Mind: record evidence
+        try {
+          const { recordEvidence } = await import('../services/mental-model');
+          const evidenceType = score >= 60 ? 'correct_answer' : 'wrong_answer';
+          const weight = score >= 80 ? 0.6 : 0.5; // MCQ evidence is slightly weaker than free-text
+          await recordEvidence(env, user.id, exerciseType, evidenceType, `MCQ step ${meta.step} picked=${mcqOption}`, weight);
+        } catch (e) { console.error('recordEvidence (mcq) error:', e); }
+
         meta.step += 1;
 
         const isLastStep = meta.step >= total;

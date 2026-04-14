@@ -56,6 +56,55 @@ export default function TestResults() {
     navigate('/test');
   }
 
+  function handleShareScore() {
+    if (!result) return;
+    const score = result.band_score || result.total_score;
+    const testName = (result.test_type || '').replace('_', ' ');
+    const shareText = `🎯 Aku baru dapat skor *${score}/6.0* di latihan ${testName}!\n\nCoba juga di EduBot — tutor AI TOEFL/IELTS: https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot`;
+    try {
+      const tg: any = (window as any).Telegram?.WebApp;
+      if (tg?.switchInlineQuery) {
+        tg.switchInlineQuery(shareText, ['users', 'groups', 'channels']);
+        return;
+      }
+      if (tg?.openTelegramLink) {
+        const encoded = encodeURIComponent(shareText);
+        tg.openTelegramLink(`https://t.me/share/url?url=https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot&text=${encoded}`);
+        return;
+      }
+    } catch {}
+    // Fallback: copy to clipboard
+    try {
+      navigator.clipboard.writeText(shareText);
+      alert('Skor disalin! Paste di chat manapun.');
+    } catch {
+      alert(shareText);
+    }
+  }
+
+  function handleAskWhy(item: ReviewItem) {
+    const qText = (item.question_text || '').substring(0, 300);
+    const userAns = item.answer_data?.selected || item.answer_data?.text || '(kosong)';
+    const correct = item.correct_answer || '(n/a)';
+    const question = `Aku salah di soal ini, tolong jelasin kenapa:\n\nSoal: "${qText}"\nJawaban aku: ${userAns}\nJawaban benar: ${correct}`;
+    try {
+      const tg: any = (window as any).Telegram?.WebApp;
+      if (tg?.openTelegramLink) {
+        const encoded = encodeURIComponent(question);
+        tg.openTelegramLink(`https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=ask&text=${encoded}`);
+        tg.close?.();
+        return;
+      }
+    } catch {}
+    // Fallback: copy to clipboard and show instruction
+    try {
+      navigator.clipboard.writeText(question);
+      alert('Pertanyaan disalin. Paste ke bot di Telegram untuk minta penjelasan.');
+    } catch {
+      alert(question);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -205,6 +254,15 @@ export default function TestResults() {
                     </div>
                   )}
 
+                  {item.is_correct === false && (
+                    <button
+                      onClick={() => handleAskWhy(item)}
+                      className="mt-2 w-full text-xs bg-purple-100 text-purple-800 py-2 px-3 rounded-lg font-medium hover:bg-purple-200"
+                    >
+                      🤖 Tanya AI kenapa salah
+                    </button>
+                  )}
+
                   {item.answer_data?.text && (
                     <div className="mt-2">
                       <p className="text-xs text-tg-hint mb-1">Jawaban kamu:</p>
@@ -217,6 +275,19 @@ export default function TestResults() {
           )}
         </div>
       )}
+
+      {/* Share score CTA */}
+      <div className="mb-20">
+        <button
+          onClick={handleShareScore}
+          className="w-full bg-gradient-to-r from-blue-500 to-purple-500 text-white py-3 rounded-xl font-medium"
+        >
+          📤 Share skor kamu
+        </button>
+        <p className="text-xs text-tg-hint text-center mt-2">
+          Pamer ke teman + dapat bonus referral 🎁
+        </p>
+      </div>
 
       {/* Actions */}
       <div className="fixed bottom-0 left-0 right-0 bg-tg-bg border-t border-tg-secondary p-4">

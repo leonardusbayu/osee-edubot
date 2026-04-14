@@ -770,8 +770,8 @@ async function handlePaymentExpiryCron(env: Env) {
   try {
     // Cancel pending payments that have expired
     const result = await env.DB.prepare(
-      `UPDATE payment_requests 
-       SET status = 'expired' 
+      `UPDATE payment_requests
+       SET status = 'expired'
        WHERE status = 'pending' AND expires_at < datetime('now')`
     ).run();
 
@@ -780,6 +780,77 @@ async function handlePaymentExpiryCron(env: Env) {
     }
   } catch (e) {
     console.error('Payment expiry cron error:', e);
+  }
+}
+
+// Hourly — notify premium users whose access expires within 2 hours (one-shot per user)
+async function handleTrialExpiryPush(env: Env) {
+  try {
+    // Ensure tracking table exists (idempotent)
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS premium_expiry_notifications (
+         user_id INTEGER PRIMARY KEY,
+         notified_at TEXT NOT NULL,
+         notified_for_expiry TEXT NOT NULL
+       )`
+    ).run();
+
+    // Find users whose premium_until is between now and now+2h,
+    // and who haven't been notified for this specific expiry yet
+    const soon = await env.DB.prepare(
+      `SELECT u.id, u.telegram_id, u.name, u.premium_until
+       FROM users u
+       LEFT JOIN premium_expiry_notifications n ON n.user_id = u.id
+       WHERE u.is_premium = 1
+         AND u.is_founding_student = 0
+         AND u.premium_until IS NOT NULL
+         AND datetime(u.premium_until) > datetime('now')
+         AND datetime(u.premium_until) <= datetime('now', '+2 hours')
+         AND (n.notified_for_expiry IS NULL OR n.notified_for_expiry != u.premium_until)`
+    ).all();
+
+    for (const row of (soon.results || []) as any[]) {
+      const tgId = parseInt(String(row.telegram_id || '').replace('.0', ''));
+      if (!tgId) continue;
+
+      const until = new Date(row.premium_until);
+      const minsLeft = Math.max(0, Math.round((until.getTime() - Date.now()) / 60000));
+
+      const text = `⏰ *Premium kamu akan expire sebentar lagi!*\n\n` +
+        `Hai ${row.name || 'kamu'}, premium kamu berakhir dalam ~${minsLeft} menit.\n\n` +
+        `Perpanjang sekarang biar nggak kehilangan:\n` +
+        `• ✅ Unlimited question\n` +
+        `• 🎤 Speaking evaluation\n` +
+        `• 📝 Writing feedback AI\n` +
+        `• 🤖 AI Tutor 24/7\n\n` +
+        `Ketik /premium untuk lihat harga.`;
+
+      try {
+        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: tgId,
+            text,
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '💳 Perpanjang Premium', callback_data: 'buy_premium' },
+              ]],
+            },
+          }),
+        });
+
+        await env.DB.prepare(
+          `INSERT OR REPLACE INTO premium_expiry_notifications (user_id, notified_at, notified_for_expiry)
+           VALUES (?, datetime('now'), ?)`
+        ).bind(row.id, row.premium_until).run();
+      } catch (e) {
+        console.error('Trial expiry push per-user error:', e);
+      }
+    }
+  } catch (e) {
+    console.error('Trial expiry push cron error:', e);
   }
 }
 
@@ -1098,10 +1169,11 @@ export default {
       // Notion attempts sync (separate from students to stay under subrequest limit)
       ctx.waitUntil(handleNotionSync(env, 'attempts'));
     } else if (event.cron === '30 * * * *') {
-      // Hourly — channel content rotation + cancel expired payments + cleanup abandoned attempts
+      // Hourly — channel content rotation + cancel expired payments + cleanup abandoned attempts + trial expiry nudge
       ctx.waitUntil(handleHourlyChannelCron(env));
       ctx.waitUntil(handlePaymentExpiryCron(env));
       ctx.waitUntil(handleAbandonedAttemptCleanup(env));
+      ctx.waitUntil(handleTrialExpiryPush(env));
     } else {
       console.warn(`Unknown cron pattern: ${event.cron}`);
     }

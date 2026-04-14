@@ -240,17 +240,21 @@ export async function checkTestAccess(env: Env, userId: number): Promise<TestAcc
     };
   }
 
-  // Get today's date string (WIB = UTC+7)
+  // Get today's date string in WIB (Asia/Jakarta) using Intl to avoid timezone bugs
   const now = new Date();
-  const wibOffset = 7 * 60 * 60 * 1000;
-  const wibNow = new Date(now.getTime() + wibOffset);
-  const todayStr = wibNow.toISOString().split('T')[0]; // YYYY-MM-DD
+  const wibFmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const todayStr = wibFmt.format(now); // YYYY-MM-DD in WIB
 
-  // Calculate reset time (midnight WIB = 17:00 UTC)
-  const resetAt = new Date(wibNow);
-  resetAt.setUTCHours(17, 0, 0, 0);
+  // Calculate next midnight WIB (17:00 UTC). WIB = UTC+7, so midnight WIB = 17:00 UTC previous calendar day UTC-wise.
+  // Build the reset as "tomorrow-in-WIB at 00:00 WIB" = UTC date whose UTC hour is 17 on the day before
+  const [y, m, d] = todayStr.split('-').map(Number);
+  // 00:00 WIB on (today+1) = 17:00 UTC on today (UTC date matching WIB today)
+  const resetAt = new Date(Date.UTC(y, m - 1, d, 17, 0, 0));
   if (resetAt <= now) {
-    resetAt.setDate(resetAt.getDate() + 1);
+    resetAt.setUTCDate(resetAt.getUTCDate() + 1);
   }
 
   // Get or create today's log
@@ -297,9 +301,11 @@ export async function trackQuestionAnswer(env: Env, userId: number): Promise<{ s
   }
 
   const now = new Date();
-  const wibOffset = 7 * 60 * 60 * 1000;
-  const wibNow = new Date(now.getTime() + wibOffset);
-  const todayStr = wibNow.toISOString().split('T')[0];
+  const wibFmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const todayStr = wibFmt.format(now);
 
   // Check if using bonus quota or daily limit
   const usedDaily = access.used_today;

@@ -47,9 +47,10 @@ export async function authedFetch(url: string, options: RequestInit = {}): Promi
   const apiBase = (import.meta.env.VITE_API_URL as string) || 'https://edubot-api.edubot-leonardus.workers.dev/api';
   const fullUrl = url.startsWith('/api') ? `${apiBase}${url.substring(4)}` : url;
 
+  const adminSecret = (import.meta.env.VITE_ADMIN_SECRET as string) || '';
   const mergedHeaders: Record<string, string> = {
     ...authHeaders,
-    'x-admin-secret': (import.meta.env.VITE_ADMIN_SECRET as string) || 'bayuganteng',
+    ...(adminSecret ? { 'x-admin-secret': adminSecret } : {}),
     ...(options.headers as Record<string, string> || {}),
   };
 

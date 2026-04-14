@@ -91,14 +91,15 @@ testRoutes.get('/available', async (c) => {
 testRoutes.post('/start', async (c) => {
   try {
     const user = await getAuthUser(c.req.raw, c.env);
-    const userId = user?.id || 1;
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+    const userId = user.id;
 
     const { test_type, section_only, question_type } = await c.req.json();
     const config = TEST_CONFIGS[test_type];
     if (!config) return c.json({ error: 'Unknown test type' }, 404);
 
     // Check quota for non-premium users
-    if (user?.id) {
+    {
       const { checkTestAccess } = await import('../services/premium');
       const access = await checkTestAccess(c.env, user.id);
       if (!access.allowed) {

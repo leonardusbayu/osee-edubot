@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 const WORKER_BASE = 'https://edubot-api.edubot-leonardus.workers.dev';
-const ADMIN_SECRET = 'bayuganteng';
+const ADMIN_SECRET = (import.meta.env.VITE_ADMIN_SECRET as string) || '';
 
 async function adminFetch(url: string): Promise<Response> {
   const fullUrl = url.startsWith('/api') ? `${WORKER_BASE}${url}` : url;

@@ -1,7 +1,15 @@
 import { Hono } from 'hono';
 import type { Env } from '../types';
+import { getAuthUser } from '../services/auth';
 
 export const ttsRoutes = new Hono<{ Bindings: Env }>();
+
+// Require any authenticated user (free tier included) — prevents anonymous OpenAI credit burn
+async function requireAuthedTTS(c: any): Promise<boolean> {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return false;
+  return true;
+}
 
 // Simple hash for cache key
 async function hashText(text: string): Promise<string> {
@@ -229,6 +237,7 @@ ttsRoutes.post('/dialogue', async (c) => {
   if (!c.env.OPENAI_API_KEY) {
     return c.json({ error: 'OpenAI API key not configured' }, 500);
   }
+  if (!(await requireAuthedTTS(c))) return c.json({ error: 'Unauthorized' }, 401);
 
   const { text } = await c.req.json();
   if (!text) return c.json({ error: 'Missing text' }, 400);
@@ -249,6 +258,7 @@ ttsRoutes.get('/speak', async (c) => {
   if (!c.env.OPENAI_API_KEY) {
     return c.json({ error: 'TTS not configured' }, 500);
   }
+  if (!(await requireAuthedTTS(c))) return c.json({ error: 'Unauthorized' }, 401);
 
   const text = c.req.query('text');
   const voice = c.req.query('voice') || 'alloy';

@@ -36,11 +36,20 @@ premiumRoutes.get('/options', async (c) => {
 // This endpoint is for external payment aggregator webhooks
 premiumRoutes.post('/stars/callback', async (c) => {
   try {
+    // Verify Telegram secret header (if configured) OR require signed hash
+    const telegramSecret = c.req.header('x-telegram-bot-api-secret-token');
+    const expectedSecret = c.env.TELEGRAM_BOT_SECRET;
+    const hasValidSecretHeader = !!(expectedSecret && telegramSecret === expectedSecret);
+
     const payload = await c.req.json();
     const botToken = c.env.TELEGRAM_BOT_TOKEN;
 
-    // Verify webhook signature if hash provided
-    if (payload.hash) {
+    // Require either a valid Telegram secret header OR a valid HMAC hash
+    if (!hasValidSecretHeader) {
+      if (!payload.hash) {
+        console.error('Payment webhook rejected: missing both secret header and hash');
+        return c.json({ error: 'Unauthorized' }, 401);
+      }
       const isValid = await verifyPaymentWebhook(botToken, payload);
       if (!isValid) {
         console.error('Invalid payment webhook signature');
@@ -80,13 +89,29 @@ premiumRoutes.post('/stars/callback', async (c) => {
       return c.json({ error: 'Invalid payload format' }, 400);
     }
 
+    // Idempotency: use telegram_payment_charge_id or provider_payment_charge_id, fall back to payload string
+    const paymentId = payload.telegram_payment_charge_id
+      || payload.provider_payment_charge_id
+      || payload.payment_id
+      || invoicePayload;
+
+    if (paymentId) {
+      const existing = await c.env.DB.prepare(
+        'SELECT id FROM star_transactions WHERE payment_id = ? LIMIT 1'
+      ).bind(paymentId).first();
+      if (existing) {
+        console.log('Duplicate payment webhook, already processed:', paymentId);
+        return c.json({ success: true, duplicate: true });
+      }
+    }
+
     // Grant premium (extends existing if active)
     await grantPremium(c.env, userId, days);
 
-    // Log transaction
+    // Log transaction with payment_id for idempotency
     await c.env.DB.prepare(
-      'INSERT INTO star_transactions (user_id, amount, type, description) VALUES (?, ?, ?, ?)'
-    ).bind(userId, days * 100, 'purchase', `Premium ${days} days via webhook`).run();
+      'INSERT INTO star_transactions (user_id, amount, type, description, payment_id) VALUES (?, ?, ?, ?, ?)'
+    ).bind(userId, days * 100, 'purchase', `Premium ${days} days via webhook`, paymentId || null).run();
 
     return c.json({ success: true });
   } catch (e: any) {
