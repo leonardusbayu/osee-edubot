@@ -57,20 +57,51 @@ function buildTtsUrl(text: string, opts: { multi?: boolean; voice?: string; maxC
   return `${API_URL}/tts/speak?${params.toString()}`;
 }
 
-const AudioWithError = ({ src, className, onPlay }: { src: string; className?: string; onPlay?: () => void }) => {
+const AudioWithError = ({
+  src,
+  className,
+  onPlay,
+  fallbackText,
+}: {
+  src: string;
+  className?: string;
+  onPlay?: () => void;
+  // Optional: the spoken text so the user can still do the exercise visually
+  // even when TTS is down (OpenAI outage, worker 5xx, CORS quirk on iOS
+  // webview, etc.). For listen-and-repeat this is the sentence to repeat;
+  // showing it beats leaving the user staring at "coba refresh" forever.
+  fallbackText?: string;
+}) => {
   const [err, setErr] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   if (!src) return null;
   if (err) {
     return (
-      <div className="bg-tg-secondary rounded-lg p-3 text-sm text-tg-hint">
-        Audio tidak dapat diputar — coba refresh halaman
+      <div className="bg-tg-secondary rounded-lg p-3 text-sm space-y-2">
+        <p className="text-tg-hint">
+          🔇 Audio belum bisa diputar. Coba lagi, atau lanjut pakai teks.
+        </p>
+        {fallbackText && (
+          <p className="text-tg-text font-medium leading-relaxed">{fallbackText}</p>
+        )}
+        <button
+          type="button"
+          onClick={() => { setErr(false); setAttempt((a) => a + 1); }}
+          className="text-xs px-2 py-1 rounded-lg bg-tg-button/10 text-tg-button font-medium"
+        >
+          🔄 Coba lagi
+        </button>
       </div>
     );
   }
   return (
     <audio
+      // Bust the browser's negative-cache on retry by bumping a query param —
+      // without this, clicking "Coba lagi" would just replay the error since
+      // <audio> remembers the failed src.
+      key={attempt}
       controls
-      src={src}
+      src={attempt > 0 ? `${src}${src.includes('?') ? '&' : '?'}_r=${attempt}` : src}
       className={className}
       onError={() => setErr(true)}
       onPlay={onPlay}
@@ -1580,8 +1611,11 @@ export default function TestRunner() {
           </>
         )}
 
-        {/* Non-listening, non-writing types — show passage, instruction, audio, prompt, question */}
-        {currentQuestion.type !== 'listening' && currentQuestion.type !== 'listening_passage' && currentQuestion.type !== 'write_email' && currentQuestion.type !== 'write_academic_discussion' && currentQuestion.type !== 'ielts_task1' && currentQuestion.type !== 'fill_blank' && (
+        {/* Non-listening, non-writing types — show passage, instruction, audio, prompt, question.
+            listen_and_repeat + take_interview render their own audio + prompt in the speaking
+            block below (see line ~1967); including them here caused two failed-audio widgets
+            to stack on top of each other for the IELTS Speaking flow. */}
+        {currentQuestion.type !== 'listening' && currentQuestion.type !== 'listening_passage' && currentQuestion.type !== 'write_email' && currentQuestion.type !== 'write_academic_discussion' && currentQuestion.type !== 'ielts_task1' && currentQuestion.type !== 'fill_blank' && currentQuestion.type !== 'listen_and_repeat' && currentQuestion.type !== 'take_interview' && (
           <>
             {/* Image for IELTS graph/map/diagram questions */}
             {currentQuestion.image_url && (
@@ -1970,14 +2004,21 @@ export default function TestRunner() {
               <p className="text-sm font-semibold text-tg-button mb-2">{currentQuestion.group_name}</p>
             )}
 
-            {/* Audio prompt */}
+            {/* Audio prompt. We pass the prompt text as fallbackText so when
+                TTS fails (OpenAI outage, Telegram iOS webview quirks, etc.)
+                the student can still read the sentence and record their
+                attempt instead of being blocked. */}
             {currentQuestion.audio_url && !speakingResult && (
               <div className="bg-tg-secondary rounded-xl p-4 mb-4 text-center">
                 <p className="text-3xl mb-2">{currentQuestion.type === 'listen_and_repeat' ? '🔊' : '🎙️'}</p>
                 <p className="text-sm font-medium mb-3">
                   {currentQuestion.type === 'listen_and_repeat' ? 'Dengarkan kalimat ini:' : 'Dengarkan pertanyaan:'}
                 </p>
-                <AudioWithError src={currentQuestion.audio_url} className="w-full mb-3" />
+                <AudioWithError
+                  src={currentQuestion.audio_url}
+                  className="w-full mb-3"
+                  fallbackText={currentQuestion.prompt}
+                />
               </div>
             )}
 
