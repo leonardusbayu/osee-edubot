@@ -16,8 +16,33 @@ Thumbs.db
 
 # Build
 *.tsbuildinfo
+dist-*/
+dist_*/
+dist2/
 
 # Temp
 *.log
 import-questions.sql
 test-bot.sh
+
+# Windows temp paths accidentally captured by build tools
+**/C:\\Users\\**
+**/AppData/**
+
+# Platform-specific binaries that shouldn't be in source
+*.exe
+
+# Generated reports / deliverables (regenerate on demand)
+*.docx
+*.pptx
+*.xlsx
+!docs/**/*.docx
+!docs/**/*.pptx
+!docs/**/*.xlsx
+reports/
+HANDOFF.md
+QA-REPORT.md
+flagged.txt
+
+# Ad-hoc audit outputs
+scripts/*.out.json

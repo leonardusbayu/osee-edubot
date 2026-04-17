@@ -1,16 +1,60 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTestStore } from '../stores/test';
-import { authedFetch } from '../api/authedFetch';
+import { authedFetch, getTelegramUserId } from '../api/authedFetch';
 import { startOfflineSyncService, stopOfflineSyncService, syncPendingAnswers } from '../utils/offline-sync';
 import Timer from '../components/Timer';
 import AudioRecorder from '../components/AudioRecorder';
+import ReportIssueButton from '../components/ReportIssueButton';
+import { hapticTap, hapticCorrect, hapticWrong, hapticHeavy, hapticSelection } from '../utils/haptic';
 
 const API_URL = (import.meta.env.VITE_API_URL as string) || 'https://edubot-api.edubot-leonardus.workers.dev/api';
 
 function stripHtml(str: string): string {
   if (!str) return '';
   return str.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+}
+
+// Join a possibly-root-relative media path (e.g. `/api/audio/images/ielts/3882.png`
+// for IELTS Task 1 charts) with API_URL, avoiding the common trap where both
+// halves include `/api` and you end up hitting `/api/api/...` which 404s.
+// Kept local because the codebase already uses `${API_URL}${path}` in several
+// spots and we want to centralise the normalisation without changing call shape.
+function toAbsoluteApiUrl(path: string): string {
+  if (!path) return path;
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  const apiEndsWithApi = /\/api\/?$/.test(API_URL);
+  const normalized = apiEndsWithApi && path.startsWith('/api/') ? path.slice(4) : path;
+  // Guarantee exactly one `/` at the seam.
+  const base = API_URL.replace(/\/+$/, '');
+  const tail = normalized.startsWith('/') ? normalized : `/${normalized}`;
+  return `${base}${tail}`;
+}
+
+// Resolve the Telegram user ID for direct media requests. The <audio> element
+// loads TTS URLs via a plain GET without our JWT header, so we append tg_id as
+// a query param — the worker's auth fallback accepts it. Uses the shared
+// cached helper (sessionStorage) so navigation like `/test` → `/test/:id`
+// (which wipes query params) doesn't leave us without a tg_id mid-session.
+function getTgIdForMedia(): string | null {
+  return getTelegramUserId();
+}
+
+// Build a TTS URL that will authenticate correctly when loaded by <audio>.
+// Appends tg_id query param when available so the worker can resolve the user
+// without JWT/X-Telegram-User-Id headers (which the browser does not send for
+// <audio src>).
+function buildTtsUrl(text: string, opts: { multi?: boolean; voice?: string; maxChars?: number } = {}): string | null {
+  const clean = (text || '').trim();
+  if (!clean) return null;
+  const maxChars = opts.maxChars ?? 4000;
+  const params = new URLSearchParams();
+  if (opts.multi) params.set('multi', 'true');
+  if (opts.voice) params.set('voice', opts.voice);
+  params.set('text', clean.substring(0, maxChars));
+  const tgId = getTgIdForMedia();
+  if (tgId) params.set('tg_id', tgId);
+  return `${API_URL}/tts/speak?${params.toString()}`;
 }
 
 const AudioWithError = ({ src, className, onPlay }: { src: string; className?: string; onPlay?: () => void }) => {
@@ -63,7 +107,20 @@ export default function TestRunner() {
   const [questionsLoading, setQuestionsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [offlineMode, setOfflineMode] = useState(false);
+  const [encouragement, setEncouragement] = useState<string | null>(null);
   const questionStartTimeRef = useRef<number>(Date.now());
+  // Tracks whether the component is still mounted. Used to guard async
+  // setState calls (notably the speaking evaluation pipeline, which awaits a
+  // multi-second upload+Whisper+GPT chain and often outlives the section the
+  // user was on). React emits warnings when you setState on an unmounted
+  // component, and the state mutation leaks memory in longer sessions.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const currentQuestion = questions[currentQuestionIndex];
   const currentSectionInfo = sections.find((s) => s.id === currentSection);
@@ -105,7 +162,21 @@ export default function TestRunner() {
       }
 
       // Fallback: fetch from API
-      const url = `/api/tests/questions/${currentSection}?limit=10${qType ? '&question_type=' + qType : ''}`;
+      // Drill mode: shorter limit + skill_tag filter so we load exactly the
+      // concept-targeted questions. Falls back gracefully if the tag isn't
+      // recognized server-side (backend ignores unknown drill_concept).
+      const drillConcept = state.drillConcept;
+      const drillCount = state.drillCount || 3;
+      const effectiveLimit = drillConcept ? Math.max(1, Math.min(10, drillCount)) : 10;
+      const params = new URLSearchParams({ limit: String(effectiveLimit) });
+      if (qType) params.set('question_type', qType);
+      if (drillConcept) params.set('drill_concept', drillConcept);
+      // Pass test_type so the backend doesn't default to TOEFL_IBT for
+      // IELTS / TOEFL_ITP / TOEIC attempts. Without this, an IELTS Writing
+      // attempt was getting 0 rows (TOEFL_IBT has no task1/task2) and the
+      // UI fell through to the reading-passage fallback below.
+      if (state.testType) params.set('test_type', state.testType);
+      const url = `/api/tests/questions/${currentSection}?${params.toString()}`;
       console.log('[EduBot] Loading questions from API:', url);
       const response = await authedFetch(url);
       if (response.ok) {
@@ -230,7 +301,7 @@ export default function TestRunner() {
     if (c.type === 'grouped_listening' && c.questions?.length > 0) {
       const passageScript = stripHtml(c.passage_script || '');
       const ttsUrl = passageScript.length > 10
-        ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(passageScript.substring(0, 4000))}`
+        ? buildTtsUrl(passageScript, { multi: true, maxChars: 4000 })
         : null;
 
       const items: any[] = [];
@@ -256,12 +327,12 @@ export default function TestRunner() {
         let qAudioUrl = null;
         const qScript = stripHtml(sq.script || '');
         if (qScript.length > 10) {
-          qAudioUrl = `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(qScript.substring(0, 2000))}`;
+          qAudioUrl = buildTtsUrl(qScript, { multi: true, maxChars: 2000 });
         }
 
         // Per-question image (e.g., TOEIC Part 1 photographs)
         const qImageUrl = sq.image_url
-          ? (sq.image_url.startsWith('http') ? sq.image_url : `${API_URL}${sq.image_url}`)
+          ? toAbsoluteApiUrl(sq.image_url)
           : null;
 
         // Determine if it's fill-in-blank (no options) or multiple choice
@@ -391,12 +462,25 @@ export default function TestRunner() {
         }
         return items.length === 1 ? items[0] : { _grouped: true, items };
       }
-      // Fallback single question
+      // Fallback single question. The AI-generated error_id schema embeds
+      // the instruction at the top of question_text (e.g. "Identify the
+      // error in the following sentence:\n<actual sentence>"). Split on the
+      // first newline so the instruction doesn't show up twice — once as
+      // the generic instruction and again inside the displayed sentence.
+      const rawQText = stripHtml(c.question_text || '');
+      let instr = stripHtml(c.direction || '');
+      let sentence = rawQText;
+      const nlIdx = rawQText.indexOf('\n');
+      if (nlIdx > 0 && /identif|find the error/i.test(rawQText.slice(0, nlIdx))) {
+        if (!instr) instr = rawQText.slice(0, nlIdx).replace(/:$/, '').trim();
+        sentence = rawQText.slice(nlIdx + 1).trim();
+      }
+      if (!instr) instr = 'Find the error in this sentence.';
       return {
         id: q.id,
         type: 'error_identification',
-        instruction: stripHtml(c.direction || 'Find the error in this sentence.'),
-        sentence: stripHtml(c.question_text || ''),
+        instruction: instr,
+        sentence,
         portions: (c.options || []).map((o: any) => ({ key: o.key, text: stripHtml(o.text || '') })),
         correct: (c.answers?.[0] || '').toUpperCase(),
         explanation: stripHtml(c.explanation || ''),
@@ -406,7 +490,7 @@ export default function TestRunner() {
     if (['read_in_daily_life', 'read_academic_passage'].includes(type)) {
       const passageText = c.passage_text || '';
       const audioUrl = passageText.length > 10 && passageText.length <= 2000
-        ? `${API_URL}/tts/speak?text=${encodeURIComponent(passageText.substring(0, 2000))}`
+        ? buildTtsUrl(passageText, { maxChars: 2000 })
         : null;
       return {
         id: q.id,
@@ -432,7 +516,7 @@ export default function TestRunner() {
       if (c.type === 'grouped_listening' && c.questions?.length > 0) {
         const passageScript = stripHtml(c.passage_script || '');
         const ttsUrl = passageScript.length > 10
-          ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(passageScript.substring(0, 4000))}`
+          ? buildTtsUrl(passageScript, { multi: true, maxChars: 4000 })
           : null;
 
         const items: any[] = [];
@@ -456,11 +540,11 @@ export default function TestRunner() {
           let qAudioUrl = null;
           const qScript = stripHtml(sq.script || '');
           if (qScript.length > 10) {
-            qAudioUrl = `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(qScript.substring(0, 2000))}`;
+            qAudioUrl = buildTtsUrl(qScript, { multi: true, maxChars: 2000 });
           }
 
           const qImageUrl = sq.image_url
-            ? (sq.image_url.startsWith('http') ? sq.image_url : `${API_URL}${sq.image_url}`)
+            ? toAbsoluteApiUrl(sq.image_url)
             : null;
 
           items.push({
@@ -483,7 +567,7 @@ export default function TestRunner() {
       // Fallback: old single-question format
       const audioText = c.passage_text || c.passage_script || '';
       const ttsUrl = audioText.length > 10
-        ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(audioText.substring(0, 2000))}`
+        ? buildTtsUrl(audioText, { multi: true, maxChars: 2000 })
         : null;
 
       let options = getOptions(c);
@@ -513,7 +597,7 @@ export default function TestRunner() {
           const sq = c.questions[i];
           const script = stripHtml(sq.script || '');
           const ttsUrl = script.length > 3
-            ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(script.substring(0, 2000))}`
+            ? buildTtsUrl(script, { multi: true, maxChars: 2000 })
             : null;
 
           if (type === 'listen_and_repeat') {
@@ -550,7 +634,7 @@ export default function TestRunner() {
         instruction: stripHtml(c.direction || ''),
         prompt,
         audio_url: prompt.length > 0
-          ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(prompt.substring(0, 2000))}`
+          ? buildTtsUrl(prompt, { multi: true, maxChars: 2000 })
           : null,
       };
     }
@@ -605,7 +689,7 @@ export default function TestRunner() {
             }));
             // Generate audio for the scenario
             const scenarioAudio = prompt.length > 10
-              ? `${API_URL}/tts/speak?voice=alloy&text=${encodeURIComponent(prompt.substring(0, 2000))}`
+              ? buildTtsUrl(prompt, { voice: 'alloy', maxChars: 2000 })
               : null;
             items.push({
               id: q.id,
@@ -626,7 +710,7 @@ export default function TestRunner() {
             }));
             // Generate audio for professor's lecture (first context)
             const profAudio = contexts.length > 0 && contexts[0].text.length > 10
-              ? `${API_URL}/tts/speak?multi=true&text=${encodeURIComponent(contexts[0].text.substring(0, 2000))}`
+              ? buildTtsUrl(contexts[0].text, { multi: true, maxChars: 2000 })
               : null;
             items.push({
               id: q.id,
@@ -768,17 +852,19 @@ export default function TestRunner() {
       }));
       // Chart/graph image for IELTS Task 1 (top-level or nested)
       const chartImage = sq.image_url || c.image_url || null;
-      const chartImageUrl = chartImage
-        ? (chartImage.startsWith('http') ? chartImage : `${API_URL}${chartImage}`)
-        : null;
+      const chartImageUrl = chartImage ? toAbsoluteApiUrl(chartImage) : null;
+      // Use a dedicated render type — previously reused 'write_email', which
+      // put an "Email Writing" badge, "Dear Professor..." placeholder, and a
+      // "formal email response" hint on a chart-description task. Those are
+      // iBT academic-discussion copy, wrong for IELTS Task 1.
       return {
         id: q.id,
-        type: 'write_email',
+        type: 'ielts_task1',
         instruction: stripHtml(c.direction || sq.direction || 'Describe the chart in at least 150 words.'),
         passage: sq.passage_text || sq.passage || c.passage_text || '',
         contexts,
         prompt: sq.question_text || c.question_text || 'Describe the chart below.',
-        time_limit: 600,
+        time_limit: 1200, // IELTS Task 1: 20 minutes
         model_answer: stripHtml(sq.model_answer || c.model_answer || ''),
         premium_only: true,
         image_url: chartImageUrl,
@@ -814,7 +900,7 @@ export default function TestRunner() {
         instruction: stripHtml(c.direction || 'Answer the following questions naturally.'),
         prompt: script,
         audio_url: script.length > 3
-          ? `${API_URL}/tts/speak?text=${encodeURIComponent(script.substring(0, 2000))}`
+          ? buildTtsUrl(script, { maxChars: 2000 })
           : null,
         premium_only: true,
       };
@@ -909,33 +995,15 @@ export default function TestRunner() {
     };
   }
 
-  function getFallbackQuestions() {
-    return [
-      {
-        id: 'fallback-1',
-        type: 'multiple_choice',
-        passage: 'The development of writing systems represents one of humanity\'s greatest achievements.',
-        question: 'What does the passage discuss?',
-        options: ['A. Writing systems', 'B. Mathematics', 'C. Agriculture', 'D. Art'],
-        correct: 'A',
-      },
-      {
-        id: 'fallback-2',
-        type: 'multiple_choice',
-        passage: 'Learning a new language opens doors to different cultures and opportunities.',
-        question: 'What is the main idea of the passage?',
-        options: ['A. Languages are difficult', 'B. Learning opens opportunities', 'C. Travel is necessary', 'D. Speaking is hard'],
-        correct: 'B',
-      },
-      {
-        id: 'fallback-3',
-        type: 'multiple_choice',
-        passage: 'Technology changes constantly, reshaping the way we communicate and work.',
-        question: 'What does the text say about technology?',
-        options: ['A. It never changes', 'B. It is static', 'C. It changes constantly', 'D. It is outdated'],
-        correct: 'C',
-      },
-    ];
+  // Previously returned three hardcoded reading-passage questions as a
+  // "graceful degradation" when the API returned nothing. That masked real
+  // bugs (e.g. IELTS Writing fetched with wrong test_type → 0 rows → user
+  // sees a reading question in the Writing section). Worse, the fallback
+  // IDs were strings like 'fallback-1', which broke the Report button
+  // (backend rejects non-numeric content_id). Returning [] surfaces the
+  // underlying problem; the UI now shows an explicit empty state instead.
+  function getFallbackQuestions(): any[] {
+    return [];
   }
 
   useEffect(() => {
@@ -985,8 +1053,12 @@ export default function TestRunner() {
           const data = await res.json();
           activeSessionId = data.session_id;
           setSessionId(data.session_id);
+        } else {
+          console.warn('[TestRunner] analytics/session/start returned', res.status);
         }
-      } catch {}
+      } catch (e) {
+        console.warn('[TestRunner] analytics/session/start errored:', e);
+      }
 
       // Prefetch all questions for offline-first mode
       if (attemptId) {
@@ -1027,6 +1099,7 @@ export default function TestRunner() {
   const handleSubmitAnswer = useCallback(async () => {
     if (!currentSection || !currentQuestion || submitting) return;
     setSubmitting(true);
+    hapticTap();
 
     let answerData: any = {};
 
@@ -1052,7 +1125,7 @@ export default function TestRunner() {
 
     if (currentQuestion.type === 'multiple_choice' || currentQuestion.type === 'listening' || currentQuestion.type === 'error_identification' || currentQuestion.type === 'true_false_not_given' || currentQuestion.type === 'matching') {
       answerData = { selected: selectedAnswer, correct_answer: currentQuestion.correct };
-    } else if (currentQuestion.type === 'write_email' || currentQuestion.type === 'write_academic_discussion') {
+    } else if (currentQuestion.type === 'write_email' || currentQuestion.type === 'write_academic_discussion' || currentQuestion.type === 'ielts_task1') {
       answerData = { text: writingText };
     } else if (currentQuestion.type === 'build_sentence') {
       answerData = { text: sentenceOrder.join(' ') };
@@ -1094,6 +1167,14 @@ export default function TestRunner() {
           saved = true;
           setSubmitError(null);
           setSubmitRetries(0);
+          // Check for encouragement message (struggle detection, milestones)
+          try {
+            const resData = await response.json();
+            if (resData.encouragement) {
+              setEncouragement(resData.encouragement);
+              setTimeout(() => setEncouragement(null), 8000); // Auto-dismiss after 8s
+            }
+          } catch { /* ignore parse error */ }
           break;
         }
 
@@ -1134,9 +1215,12 @@ export default function TestRunner() {
 
     // Types that have a definite correct answer and should show explanation
     const hasExplanation = currentQuestion.explanation &&
-      !['listening_passage', 'write_email', 'write_academic_discussion', 'listen_and_repeat', 'take_interview'].includes(currentQuestion.type);
+      !['listening_passage', 'write_email', 'write_academic_discussion', 'ielts_task1', 'listen_and_repeat', 'take_interview'].includes(currentQuestion.type);
 
     if (hasExplanation) {
+      // Haptic feedback based on correctness
+      const isCorrect = answerData.selected === answerData.correct_answer;
+      isCorrect ? hapticCorrect() : hapticWrong();
       // Show explanation for 1.5s then advance
       setCurrentExplanation(currentQuestion.explanation || '');
       setShowExplanation(true);
@@ -1153,7 +1237,11 @@ export default function TestRunner() {
         advanceWithTransition(() => setQuestionIndex(currentQuestionIndex + 1));
       } else {
         const currentIdx = sections.findIndex((s) => s.id === currentSection);
-        if (currentIdx + 1 < sections.length) {
+        // Guard: if currentSection isn't in the sections list (edge case: stale
+        // state, dynamic section swap), findIndex returns -1 and the naive
+        // `currentIdx + 1` check would jump back to sections[0] instead of
+        // finishing. Treat "not found" as "past the end".
+        if (currentIdx >= 0 && currentIdx + 1 < sections.length) {
           const nextSection = sections[currentIdx + 1].id;
           advanceWithTransition(() => setCurrentSection(nextSection));
           authedFetch(`/api/tests/attempt/${attemptId}/section/${nextSection}`, { method: 'POST' }).catch(() => {});
@@ -1165,6 +1253,7 @@ export default function TestRunner() {
   }, [selectedAnswer, writingText, sentenceOrder, currentSection, currentQuestionIndex, questions, submitting, currentQuestion]);
 
   async function handleFinish() {
+    hapticHeavy(); // Strong feedback on test completion
     // First, try to sync all pending answers if network is available
     if (networkAvailable && attemptId) {
       console.log('[EduBot] Syncing pending answers before finish...');
@@ -1175,7 +1264,17 @@ export default function TestRunner() {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const res = await authedFetch(`/api/tests/attempt/${attemptId}/finish`, { method: 'POST' });
-        if (res.ok) break;
+        if (res.ok) {
+          // Check for growth message
+          try {
+            const finishData = await res.json();
+            if (finishData.growth_message) {
+              // Store temporarily so TestResults can display it
+              try { sessionStorage.setItem('edubot_growth_msg', finishData.growth_message); } catch {}
+            }
+          } catch { /* ignore */ }
+          break;
+        }
         // Wait before retry
         if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
       } catch {
@@ -1187,7 +1286,8 @@ export default function TestRunner() {
 
   function handleSectionExpire() {
     const currentIdx = sections.findIndex((s) => s.id === currentSection);
-    if (currentIdx + 1 < sections.length) {
+    // Same -1 guard as advanceToNext: unknown section → finish, don't wrap to 0.
+    if (currentIdx >= 0 && currentIdx + 1 < sections.length) {
       setCurrentSection(sections[currentIdx + 1].id);
     } else {
       handleFinish();
@@ -1197,13 +1297,29 @@ export default function TestRunner() {
   async function handleRecordingComplete(blob: Blob) {
     if (!currentSection || !currentQuestion) return;
 
-    setSpeakingResult(null);
-    setSpeakingLoading(true);
+    // Helper: only setState when still mounted. The evaluate() call can take
+    // 10+ seconds (upload → Whisper → GPT scoring), and the user may have
+    // navigated away mid-request.
+    const safeSetResult = (v: any) => { if (isMountedRef.current) setSpeakingResult(v); };
+    const safeSetLoading = (v: boolean) => { if (isMountedRef.current) setSpeakingLoading(v); };
+
+    safeSetResult(null);
+    safeSetLoading(true);
 
     try {
+      // Pick a filename that matches the blob type so the server MIME whitelist
+      // (audio/webm, audio/mp4, audio/ogg, etc.) accepts it. Safari on iOS records
+      // as audio/mp4 — forcing .webm there would make the backend reject it.
+      const blobType = (blob.type || 'audio/webm').toLowerCase();
+      let filename = 'recording.webm';
+      if (blobType.includes('mp4') || blobType.includes('m4a') || blobType.includes('aac')) filename = 'recording.mp4';
+      else if (blobType.includes('ogg')) filename = 'recording.ogg';
+      else if (blobType.includes('mpeg') || blobType.includes('mp3')) filename = 'recording.mp3';
+      else if (blobType.includes('wav')) filename = 'recording.wav';
+
       // Upload audio + evaluate in one call
       const formData = new FormData();
-      formData.append('audio', blob, 'recording.webm');
+      formData.append('audio', blob, filename);
       formData.append('prompt', currentQuestion.prompt || '');
       formData.append('question_type', currentQuestion.type || 'interview');
 
@@ -1212,11 +1328,17 @@ export default function TestRunner() {
         body: formData,
       });
 
-      if (response.ok) {
-        const result = await response.json();
-        setSpeakingResult(result);
+      // Parse JSON body even on error responses — the server ships useful
+      // error context (e.g. PREMIUM_REQUIRED with an upgrade URL) that we must
+      // surface to the user instead of a generic "Evaluasi gagal".
+      let result: any = null;
+      try { result = await response.json(); } catch { /* non-JSON error */ }
 
-        // Save answer with score
+      if (response.ok && result) {
+        safeSetResult(result);
+
+        // Save answer with score (saveAnswer updates Zustand which survives
+        // unmount, so it's fine to call regardless of mount state).
         saveAnswer(currentSection, currentQuestionIndex, {
           audio: true,
           transcription: result.transcription,
@@ -1225,7 +1347,7 @@ export default function TestRunner() {
 
         // Submit to backend
         try {
-          const response = await authedFetch(`/api/tests/attempt/${attemptId}/answer`, {
+          const submitResp = await authedFetch(`/api/tests/attempt/${attemptId}/answer`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1237,22 +1359,45 @@ export default function TestRunner() {
             }),
           });
 
-          if (!response.ok) {
-            const data = await response.json();
-            if (data.code === 'LIMIT_REACHED') {
-              navigate('/test?limit_reached=1');
-              return;
-            }
-            console.error('Speaking answer submission failed:', response.status);
+          if (!submitResp.ok) {
+            try {
+              const data = await submitResp.json();
+              if (data.code === 'LIMIT_REACHED') {
+                navigate('/test?limit_reached=1');
+                return;
+              }
+            } catch {}
+            console.error('Speaking answer submission failed:', submitResp.status);
           }
-        } catch {}
+        } catch (err) {
+          console.error('Speaking answer sync error:', err);
+        }
       } else {
-        setSpeakingResult({ error: 'Evaluasi gagal. Coba lagi.' });
+        // Build a useful error message from the server payload.
+        const code = result?.code;
+        const serverMsg = result?.message || result?.error;
+
+        if (code === 'PREMIUM_REQUIRED') {
+          safeSetResult({
+            error: serverMsg || 'Speaking evaluation hanya untuk pengguna Premium. Upgrade untuk akses unlimited.',
+            upgrade_url: result?.upgrade_url || 'https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=premium',
+            premium_required: true,
+          });
+        } else if (response.status === 401) {
+          safeSetResult({ error: 'Sesi login kamu sudah habis. Buka ulang mini app dari bot Telegram.' });
+        } else if (response.status === 400 && serverMsg) {
+          // Surface MIME / "no audio" messages directly
+          safeSetResult({ error: serverMsg });
+        } else {
+          safeSetResult({
+            error: serverMsg || `Evaluasi gagal (status ${response.status}). Coba rekam ulang.`,
+          });
+        }
       }
     } catch (e: any) {
-      setSpeakingResult({ error: e.message || 'Network error' });
+      safeSetResult({ error: e?.message || 'Network error. Cek koneksi internet dan coba lagi.' });
     } finally {
-      setSpeakingLoading(false);
+      safeSetLoading(false);
     }
   }
 
@@ -1262,7 +1407,8 @@ export default function TestRunner() {
       setQuestionIndex(currentQuestionIndex + 1);
     } else {
       const currentIdx = sections.findIndex((s) => s.id === currentSection);
-      if (currentIdx + 1 < sections.length) {
+      // Same -1 guard: finish if currentSection isn't in the sections list.
+      if (currentIdx >= 0 && currentIdx + 1 < sections.length) {
         setCurrentSection(sections[currentIdx + 1].id);
       } else {
         handleFinish();
@@ -1270,7 +1416,7 @@ export default function TestRunner() {
     }
   }
 
-  if (!currentSection || !currentQuestion || questionsLoading) {
+  if (!currentSection || questionsLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen p-4">
         <div className="text-center">
@@ -1281,8 +1427,44 @@ export default function TestRunner() {
     );
   }
 
+  // Empty state: loading finished but we have no questions for this section.
+  // This happens when the bank legitimately has no rows for this (test_type,
+  // section, question_type) combo, or when an auth failure prevented prefetch.
+  // Either way: don't silently show wrong-section content.
+  if (!currentQuestion) {
+    return (
+      <div className="flex items-center justify-center min-h-screen p-4">
+        <div className="text-center max-w-sm">
+          <div className="text-4xl mb-4">📭</div>
+          <h2 className="text-lg font-semibold mb-2">Belum ada soal</h2>
+          <p className="text-sm text-tg-hint mb-4">
+            Bagian <span className="capitalize font-medium">{currentSection}</span> belum
+            memiliki soal yang bisa dimuat untuk tes ini. Coba bagian lain atau kembali
+            ke daftar tes.
+          </p>
+          <button
+            onClick={() => navigate('/test')}
+            className="px-4 py-2 rounded-lg bg-tg-button text-tg-button-text text-sm font-medium"
+          >
+            Kembali ke daftar tes
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col">
+      {/* Encouragement toast */}
+      {encouragement && (
+        <div
+          className="fixed top-2 left-2 right-2 z-50 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm shadow-lg animate-fade-in"
+          style={{ animation: 'fadeIn 0.3s ease-out' }}
+          onClick={() => setEncouragement(null)}
+        >
+          {encouragement}
+        </div>
+      )}
       {/* Header */}
       <div className="sticky top-0 bg-tg-bg border-b border-tg-secondary z-10 px-4 py-3">
         <div className="flex items-center justify-between">
@@ -1298,7 +1480,14 @@ export default function TestRunner() {
               <span className="text-xs text-blue-500 ml-2">💾 Cached</span>
             )}
           </div>
-          <Timer initialSeconds={sectionTimeSeconds} onExpire={handleSectionExpire} />
+          <div className="flex items-center gap-3">
+            <ReportIssueButton
+              contentId={currentQuestion?.id}
+              attemptId={attemptId ? Number(attemptId) : null}
+              compact
+            />
+            <Timer initialSeconds={sectionTimeSeconds} onExpire={handleSectionExpire} />
+          </div>
         </div>
         <div className="flex gap-1 mt-2">
           {sections.map((s) => (
@@ -1384,7 +1573,7 @@ export default function TestRunner() {
         )}
 
         {/* Non-listening, non-writing types — show passage, instruction, audio, prompt, question */}
-        {currentQuestion.type !== 'listening' && currentQuestion.type !== 'listening_passage' && currentQuestion.type !== 'write_email' && currentQuestion.type !== 'write_academic_discussion' && currentQuestion.type !== 'fill_blank' && (
+        {currentQuestion.type !== 'listening' && currentQuestion.type !== 'listening_passage' && currentQuestion.type !== 'write_email' && currentQuestion.type !== 'write_academic_discussion' && currentQuestion.type !== 'ielts_task1' && currentQuestion.type !== 'fill_blank' && (
           <>
             {/* Image for IELTS graph/map/diagram questions */}
             {currentQuestion.image_url && (
@@ -1440,7 +1629,7 @@ export default function TestRunner() {
                   return (
                     <button
                       key={opt}
-                      onClick={() => setSelectedAnswer(letter)}
+                      onClick={() => { hapticSelection(); setSelectedAnswer(letter); }}
                       className={`w-full text-left p-3 rounded-lg border-2 transition-colors ${
                         selectedAnswer === letter ? 'border-tg-button bg-tg-button/10' : 'border-tg-secondary bg-tg-secondary'
                       }`}
@@ -1461,7 +1650,7 @@ export default function TestRunner() {
                   return (
                     <button
                       key={key || i}
-                      onClick={() => setSelectedAnswer(String(key))}
+                      onClick={() => { hapticSelection(); setSelectedAnswer(String(key)); }}
                       className={`w-full text-left p-3 rounded-lg border-2 transition-colors ${
                         selectedAnswer === String(key) ? 'border-tg-button bg-tg-button/10' : 'border-tg-secondary bg-tg-secondary'
                       }`}
@@ -1479,29 +1668,36 @@ export default function TestRunner() {
         {/* Error Identification — sentence with labeled portions */}
         {currentQuestion.type === 'error_identification' && currentQuestion.portions && (
           <div className="mb-4">
-            {currentQuestion.instruction && (
-              <p className="text-sm text-tg-hint mb-3">{currentQuestion.instruction}</p>
-            )}
+            {/* Instruction is already rendered by the generic non-listening
+                block above — don't render it again here or it shows twice
+                (e.g. "Find the error." printed on two consecutive lines). */}
             {/* Full sentence */}
             <div className="bg-tg-secondary rounded-lg p-4 mb-4">
               <p className="text-sm leading-relaxed">{currentQuestion.sentence}</p>
             </div>
-            {/* Tappable portion labels */}
+            {/* Tappable portion labels. When the portion text equals the
+                key (e.g. the AI-generated schema where options are just
+                labels "A"/"B"/"C"/"D" pointing back to inline markers in
+                the sentence), suppress the duplicate text so the button
+                shows "(A)" instead of the redundant "(A) A". */}
             <div className="grid grid-cols-2 gap-2">
-              {currentQuestion.portions.map((portion: { key: string; text: string }) => (
-                <button
-                  key={portion.key}
-                  onClick={() => setSelectedAnswer(portion.key)}
-                  className={`text-left p-3 rounded-lg border-2 transition-colors ${
-                    selectedAnswer === portion.key
-                      ? 'border-tg-button bg-tg-button/10'
-                      : 'border-tg-secondary bg-tg-secondary'
-                  }`}
-                >
-                  <span className="text-xs font-bold text-tg-button mr-1">({portion.key})</span>
-                  <span className="text-sm">{portion.text}</span>
-                </button>
-              ))}
+              {currentQuestion.portions.map((portion: { key: string; text: string }) => {
+                const isLabelOnly = !portion.text || portion.text.trim() === portion.key;
+                return (
+                  <button
+                    key={portion.key}
+                    onClick={() => { hapticSelection(); setSelectedAnswer(portion.key); }}
+                    className={`text-left p-3 rounded-lg border-2 transition-colors ${
+                      selectedAnswer === portion.key
+                        ? 'border-tg-button bg-tg-button/10'
+                        : 'border-tg-secondary bg-tg-secondary'
+                    }`}
+                  >
+                    <span className="text-xs font-bold text-tg-button mr-1">({portion.key})</span>
+                    {!isLabelOnly && <span className="text-sm">{portion.text}</span>}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
@@ -1514,7 +1710,7 @@ export default function TestRunner() {
               return (
                 <button
                   key={i}
-                  onClick={() => setSelectedAnswer(letter)}
+                  onClick={() => { hapticSelection(); setSelectedAnswer(letter); }}
                   className={`w-full text-left p-3 rounded-lg border-2 transition-colors ${
                     selectedAnswer === letter ? 'border-tg-button bg-tg-button/10' : 'border-tg-secondary bg-tg-secondary'
                   }`}
@@ -1578,7 +1774,7 @@ export default function TestRunner() {
         )}
 
         {/* Writing — Redesigned with visual hierarchy */}
-        {(currentQuestion.type === 'write_email' || currentQuestion.type === 'write_academic_discussion') && (
+        {(currentQuestion.type === 'write_email' || currentQuestion.type === 'write_academic_discussion' || currentQuestion.type === 'ielts_task1') && (
           <div className="mb-4">
 
             {/* Task type badge + timer header */}
@@ -1588,10 +1784,13 @@ export default function TestRunner() {
                   ? 'bg-green-100 text-green-700'
                   : currentQuestion.type === 'write_academic_discussion'
                   ? 'bg-purple-100 text-purple-700'
+                  : currentQuestion.type === 'ielts_task1'
+                  ? 'bg-blue-100 text-blue-700'
                   : 'bg-orange-100 text-orange-700'
               }`}>
                 {currentQuestion.type === 'write_email' ? '✉️ Email Writing' :
                  currentQuestion.type === 'write_academic_discussion' ? '💬 Academic Discussion' :
+                 currentQuestion.type === 'ielts_task1' ? '📊 IELTS Writing Task 1' :
                  '📝 Fill in the Blank'}
               </span>
               {currentQuestion.time_limit && (
@@ -1684,6 +1883,8 @@ export default function TestRunner() {
                   ? 'Write a complete email response. Use formal language and address all points.'
                   : currentQuestion.type === 'write_academic_discussion'
                   ? 'Write at least 100 words. Express your opinion and support it with reasons.'
+                  : currentQuestion.type === 'ielts_task1'
+                  ? 'Describe the chart/graph. Report main trends and make comparisons. Write at least 150 words.'
                   : 'Complete the text with appropriate words or phrases.'}
               </span>
             </div>
@@ -1696,14 +1897,16 @@ export default function TestRunner() {
                     ? "Dear Professor...\n\nI am writing to..."
                     : currentQuestion.type === 'write_academic_discussion'
                     ? "I believe that... The main reason is..."
+                    : currentQuestion.type === 'ielts_task1'
+                    ? "The chart shows...\n\nOverall,..."
                     : "Type your answer here..."
                 }
                 className="w-full h-52 p-4 rounded-xl border-2 border-tg-secondary bg-white resize-none focus:outline-none focus:border-tg-button transition-colors text-sm leading-relaxed" />
               {/* Word counter bar */}
               {(() => {
                 const wordCount = writingText.split(/\s+/).filter(Boolean).length;
-                const target = currentQuestion.type === 'write_email' ? 175 : 100;
-                const max = currentQuestion.type === 'write_email' ? 225 : 300;
+                const target = currentQuestion.type === 'write_email' ? 175 : currentQuestion.type === 'ielts_task1' ? 150 : 100;
+                const max = currentQuestion.type === 'write_email' ? 225 : currentQuestion.type === 'ielts_task1' ? 250 : 300;
                 const progress = Math.min(100, (wordCount / target) * 100);
                 const isOver = wordCount > max;
                 return (
@@ -1728,6 +1931,8 @@ export default function TestRunner() {
                           ? 'Target: 150-200 kata'
                           : currentQuestion.type === 'write_academic_discussion'
                           ? 'Min: 100 kata'
+                          : currentQuestion.type === 'ielts_task1'
+                          ? 'Min: 150 kata'
                           : ''}
                       </span>
                     </div>
@@ -1861,8 +2066,24 @@ export default function TestRunner() {
             {/* Error */}
             {speakingResult?.error && (
               <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
+                {speakingResult.premium_required ? '🔒 ' : ''}
                 {speakingResult.error}
-                <button onClick={() => setSpeakingResult(null)} className="block mt-2 text-tg-button">Coba lagi</button>
+                {speakingResult.premium_required && speakingResult.upgrade_url && (
+                  <a
+                    href={speakingResult.upgrade_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block mt-3 px-4 py-2 rounded-lg bg-tg-button text-tg-button-text font-medium text-center"
+                  >
+                    Upgrade ke Premium
+                  </a>
+                )}
+                <button
+                  onClick={() => setSpeakingResult(null)}
+                  className="block mt-2 text-tg-button"
+                >
+                  Coba lagi
+                </button>
               </div>
             )}
           </div>
