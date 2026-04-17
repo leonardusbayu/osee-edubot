@@ -30,22 +30,23 @@ export default function AdminContent() {
   const [formCorrect, setFormCorrect] = useState('');
   const [formPassage, setFormPassage] = useState('');
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   useEffect(() => {
     loadContent();
   }, []);
 
   async function loadContent() {
+    setLoadError(null);
     try {
       const res = await authedFetch('/api/admin/content/');
       if (res.ok) {
         setContents(await res.json());
+      } else {
+        setLoadError(`Gagal memuat konten (${res.status})`);
       }
-    } catch {
-      // Demo data
-      setContents([
-        { id: 1, test_type: 'TOEFL_IBT', section: 'reading', question_type: 'multiple_choice', title: 'Sample Reading Question', difficulty: 3, status: 'published', source: 'curated' },
-        { id: 2, test_type: 'TOEFL_IBT', section: 'writing', question_type: 'write_email', title: 'Email Writing Prompt', difficulty: 2, status: 'draft', source: 'curated' },
-      ]);
+    } catch (e: any) {
+      setLoadError(`Network error: ${e?.message || String(e)}`);
     } finally {
       setLoading(false);
     }
@@ -79,9 +80,12 @@ export default function AdminContent() {
       if (res.ok) {
         setShowCreate(false);
         loadContent();
+      } else {
+        const body = await res.json().catch(() => ({}));
+        alert(`Gagal menyimpan: ${body?.error || res.status}`);
       }
-    } catch {
-      alert('Failed to create content');
+    } catch (e: any) {
+      alert(`Network error: ${e?.message || String(e)}`);
     }
   }
 
@@ -112,6 +116,18 @@ export default function AdminContent() {
           {showCreate ? 'Cancel' : '+ New'}
         </button>
       </div>
+
+      {loadError && (
+        <div className="bg-red-500/10 text-red-500 rounded-xl p-3 mb-4 text-sm">
+          <p>{loadError}</p>
+          <button
+            onClick={loadContent}
+            className="mt-2 px-3 py-1 bg-red-500/20 rounded-lg text-xs font-medium"
+          >
+            Coba lagi
+          </button>
+        </div>
+      )}
 
       {/* Create Form */}
       {showCreate && (

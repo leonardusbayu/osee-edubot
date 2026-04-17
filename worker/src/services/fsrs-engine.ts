@@ -70,6 +70,13 @@ function stateToCard(state: FSRSCardState): Card {
 /**
  * Add a new item to spaced repetition with FSRS scheduling.
  * Creates a fresh FSRS card and schedules the first review based on initial grade.
+ * - wasCorrect=false → Rating.Again (relearning soon)
+ * - wasCorrect=true  → Rating.Good  (longer interval; we still review so it
+ *   doesn't decay into a gap, matching FSRS best practice)
+ *
+ * Dedups on (user_id, content_id) when contentId is provided — subsequent
+ * attempts on the same question go through markReviewed() instead, so we
+ * don't clone cards and lose their learning history.
  */
 export async function addToReview(
   env: Env,
@@ -80,12 +87,18 @@ export async function addToReview(
   correctAnswer: string,
   studentAnswer: string,
   contentId?: number,
+  wasCorrect: boolean = false,
 ) {
-  const card = createEmptyCard();
+  if (contentId) {
+    const existing = await env.DB.prepare(
+      'SELECT id FROM spaced_repetition WHERE user_id = ? AND content_id = ? LIMIT 1'
+    ).bind(userId, contentId).first();
+    if (existing) return;
+  }
 
-  // Initial scheduling: student got it wrong (that's why it's being added for review)
+  const card = createEmptyCard();
   const scheduling = f.repeat(card, new Date());
-  const result = scheduling[Rating.Again]; // They got it wrong initially
+  const result = scheduling[wasCorrect ? Rating.Good : Rating.Again];
 
   const cardState = cardToState(result.card);
   const nextReview = cardState.due;

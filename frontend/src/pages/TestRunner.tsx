@@ -1458,7 +1458,7 @@ export default function TestRunner() {
       {/* Encouragement toast */}
       {encouragement && (
         <div
-          className="fixed top-2 left-2 right-2 z-50 p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm shadow-lg animate-fade-in"
+          className="fixed top-2 left-2 right-2 z-50 p-3 rounded-lg bg-tg-secondary border border-tg-hint/20 text-tg-text text-sm shadow-lg animate-fade-in"
           style={{ animation: 'fadeIn 0.3s ease-out' }}
           onClick={() => setEncouragement(null)}
         >
@@ -2050,8 +2050,8 @@ export default function TestRunner() {
 
                 {/* Feedback */}
                 {speakingResult.feedback && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
-                    <p className="text-sm">{speakingResult.feedback}</p>
+                  <div className="bg-tg-secondary border border-tg-hint/20 rounded-xl p-3">
+                    <p className="text-sm text-tg-text">{speakingResult.feedback}</p>
                   </div>
                 )}
 
@@ -2100,9 +2100,9 @@ export default function TestRunner() {
             </div>
           )}
           {showExplanation && currentExplanation && currentExplanation.trim().length > 5 && (
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3 text-sm">
-              <p className="font-medium text-blue-700 mb-1">💡 Penjelasan:</p>
-              <p className="text-blue-800 leading-relaxed">{currentExplanation}</p>
+            <div className="bg-tg-secondary border border-tg-hint/20 rounded-xl p-3 mb-3 text-sm">
+              <p className="font-medium text-tg-link mb-1">💡 Penjelasan:</p>
+              <p className="text-tg-text leading-relaxed">{currentExplanation}</p>
             </div>
           )}
           <button onClick={handleSubmitAnswer} disabled={submitting || showExplanation}

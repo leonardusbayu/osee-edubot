@@ -233,8 +233,8 @@ export default function TestResults() {
                         const isCorrectOpt = item.correct_answer?.toUpperCase() === letter;
                         return (
                           <div key={i} className={`text-sm p-2 rounded-lg ${
-                            isCorrectOpt ? 'bg-green-100 text-green-800 font-medium' :
-                            isSelected ? 'bg-red-100 text-red-800' :
+                            isCorrectOpt ? 'bg-green-500/20 text-green-600 dark:text-green-400 font-medium' :
+                            isSelected ? 'bg-red-500/20 text-red-600 dark:text-red-400' :
                             'bg-tg-bg text-tg-text'
                           }`}>
                             <span className="font-bold mr-2">{letter}.</span>
@@ -248,9 +248,9 @@ export default function TestResults() {
                   )}
 
                   {item.explanation && (
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-2">
-                      <p className="text-xs font-medium text-blue-700 mb-1">💡 Penjelasan:</p>
-                      <p className="text-xs text-blue-800 leading-relaxed">{item.explanation}</p>
+                    <div className="bg-tg-secondary border border-tg-hint/20 rounded-lg p-3 mt-2">
+                      <p className="text-xs font-medium text-tg-link mb-1">💡 Penjelasan:</p>
+                      <p className="text-xs text-tg-text leading-relaxed">{item.explanation}</p>
                     </div>
                   )}
 

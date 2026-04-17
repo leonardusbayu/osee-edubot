@@ -109,11 +109,11 @@ export default function AdminStudents() {
       const res = await adminFetch('/api/classes');
       if (res.ok) {
         setClasses(await res.json());
+      } else {
+        setError(`Gagal memuat daftar kelas (${res.status})`);
       }
-    } catch {
-      setClasses([
-        { id: 1, name: 'Demo Class', invite_code: 'DEMO12', student_count: 5 },
-      ]);
+    } catch (e: any) {
+      setError(`Network error: ${e?.message || String(e)}`);
     } finally {
       setLoading(false);
     }
@@ -352,12 +352,15 @@ export default function AdminStudents() {
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-tg-button"></div>
             </div>
           ) : error ? (
-            <div className="bg-red-500/10 text-red-500 rounded-xl p-4 text-center text-sm font-medium">
-              <p className="font-mono text-xs text-left mb-1">token: {useAuthStore.getState().accessToken ? 'Yes' : 'No'}</p>
-              <p className="font-mono text-xs text-left mb-1">url_tg_id: {new URLSearchParams(window.location.search).get('tg_id') || 'None'}</p>
-              <p className="font-mono text-xs text-left mb-1">location: {window.location.href}</p>
-              <hr className="my-2 border-red-500/20" />
-              {error}
+            <div className="bg-red-500/10 text-red-500 rounded-xl p-4 text-sm font-medium">
+              <p className="font-semibold mb-1">Gagal memuat data</p>
+              <p className="text-xs text-red-400/80">{error}</p>
+              <button
+                onClick={() => selectedClassId && loadStudents(selectedClassId)}
+                className="mt-3 px-3 py-1.5 bg-red-500/20 text-red-400 rounded-lg text-xs font-medium"
+              >
+                Coba lagi
+              </button>
             </div>
           ) : students.length === 0 ? (
             <div className="bg-tg-secondary rounded-xl p-4 text-center">
