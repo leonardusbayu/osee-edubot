@@ -443,23 +443,29 @@ export default function TestRunner() {
     }
 
     if (type === 'error_identification') {
-      // Grouped error identification — flatten into individual questions
+      // Grouped error identification — flatten into individual questions.
+      // Skip sub-items whose sentence AND portion list are both empty:
+      // some legacy TOEFL_ITP imports have blank content that would render
+      // as a Q1/10 card with nothing to read or tap (silent dead end).
       if (c.type === 'grouped_reading' && c.questions?.length > 0) {
         const items: any[] = [];
         for (let i = 0; i < c.questions.length; i++) {
           const sq = c.questions[i];
+          const sentence = stripHtml(sq.question_text || '');
           const opts = (sq.options || []).map((o: any) => ({ key: o.key, text: stripHtml(o.text || '') }));
+          if (!sentence && opts.length === 0) continue;
           items.push({
             id: q.id,
             _subIndex: i,
             type: 'error_identification',
             instruction: stripHtml(c.direction || 'Find the error in this sentence.'),
-            sentence: stripHtml(sq.question_text || ''),
+            sentence,
             portions: opts,
             correct: (sq.answers?.[0] || '').toUpperCase(),
             explanation: stripHtml(sq.explanation || ''),
           });
         }
+        if (items.length === 0) return null;
         return items.length === 1 ? items[0] : { _grouped: true, items };
       }
       // Fallback single question. The AI-generated error_id schema embeds
@@ -476,12 +482,14 @@ export default function TestRunner() {
         sentence = rawQText.slice(nlIdx + 1).trim();
       }
       if (!instr) instr = 'Find the error in this sentence.';
+      const portions = (c.options || []).map((o: any) => ({ key: o.key, text: stripHtml(o.text || '') }));
+      if (!sentence && portions.length === 0) return null;
       return {
         id: q.id,
         type: 'error_identification',
         instruction: instr,
         sentence,
-        portions: (c.options || []).map((o: any) => ({ key: o.key, text: stripHtml(o.text || '') })),
+        portions,
         correct: (c.answers?.[0] || '').toUpperCase(),
         explanation: stripHtml(c.explanation || ''),
       };
