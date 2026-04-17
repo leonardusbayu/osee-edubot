@@ -513,14 +513,14 @@ testRoutes.get('/questions/:section', async (c) => {
       }
     }
 
-    return c.json({
-      section,
-      test_type: testType,
-      total: questions.length,
-    questions: questions.map((r: any) => {
-      let content = {};
+    // Shape + filter: drop questions whose payload is too empty to render
+    // (e.g. legacy TOEFL_ITP error_identification rows imported with blank
+    // question_text and no options — frontend would show "Q1/10" with an
+    // empty card and no way to answer). Keep the filter narrow: only skip
+    // rows where BOTH the top-level and every sub-question are blank.
+    const shaped = questions.map((r: any) => {
+      let content: any = {};
       try { content = JSON.parse(r.content || '{}'); } catch {}
-      // Only return media_url if it's a valid HTTP(S) URL, not a local file path
       const mediaUrl = r.media_url;
       const isValidUrl = mediaUrl && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'));
       return {
@@ -531,7 +531,24 @@ testRoutes.get('/questions/:section', async (c) => {
         media_url: isValidUrl ? mediaUrl : null,
         difficulty: r.difficulty,
       };
-    }),
+    }).filter((q: any) => {
+      const c = q.content || {};
+      const topText = String(c.question_text || c.passage_text || c.passage || '').trim();
+      const topOpts = Array.isArray(c.options) ? c.options.length : 0;
+      if (topText || topOpts > 0) return true;
+      const subs = Array.isArray(c.questions) ? c.questions : [];
+      return subs.some((sq: any) => {
+        const t = String(sq?.question_text || '').trim();
+        const o = Array.isArray(sq?.options) ? sq.options.length : 0;
+        return t.length > 0 || o > 0;
+      });
+    });
+
+    return c.json({
+      section,
+      test_type: testType,
+      total: shaped.length,
+      questions: shaped,
     });
   } catch (e: any) {
     console.error('questions error:', e);
@@ -660,7 +677,7 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
     ).bind(attempt.test_type, section.id).all();
 
     allQuestions[section.id] = (result.results || []).map((r: any) => {
-      let content = {};
+      let content: any = {};
       try { content = JSON.parse(r.content || '{}'); } catch {}
       const mediaUrl = r.media_url;
       const isValidUrl = mediaUrl && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'));
@@ -672,6 +689,20 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
         media_url: isValidUrl ? mediaUrl : null,
         difficulty: r.difficulty,
       };
+    }).filter((q: any) => {
+      // Mirror the /questions/:section filter: drop rows that would render
+      // as empty Q-cards (no question_text, no passage, no options, and no
+      // sub-questions with any of those).
+      const c = q.content || {};
+      const topText = String(c.question_text || c.passage_text || c.passage || '').trim();
+      const topOpts = Array.isArray(c.options) ? c.options.length : 0;
+      if (topText || topOpts > 0) return true;
+      const subs = Array.isArray(c.questions) ? c.questions : [];
+      return subs.some((sq: any) => {
+        const t = String(sq?.question_text || '').trim();
+        const o = Array.isArray(sq?.options) ? sq.options.length : 0;
+        return t.length > 0 || o > 0;
+      });
     });
   }
 
