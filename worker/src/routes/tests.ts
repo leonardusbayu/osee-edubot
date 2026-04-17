@@ -567,6 +567,101 @@ testRoutes.post('/attempt/:id/section/:nextSection', async (c) => {
   return c.json({ status: 'ok', current_section: nextSection });
 });
 
+/**
+ * Compute scores from an attempt's recorded answers.
+ *
+ * Handles both objective (reading/listening/structure) and AI-evaluated
+ * (speaking/writing) answers:
+ *   - Objective: is_correct IS NOT NULL → correct/total ratio × max_band
+ *   - Speaking/Writing: is_correct IS NULL, but answer_data.score is the
+ *     AI's band rating (1–max_band). Averaged per section.
+ *
+ * Previously the finish handler filtered is_correct !== null, which
+ * silently dropped ALL speaking/writing answers → sections scored 0
+ * even when the student had band-5 speaking. This was the main reason
+ * students reported "Speaking saya 5/6 tapi hasil 0."
+ *
+ * Returns null if the attempt has zero scorable answers (empty test or
+ * every answer malformed). Caller should NOT write a 0/0/0/0 row in
+ * that case — it's misleading data, not a result.
+ */
+interface AttemptScoring {
+  sectionScores: Record<string, number | null>;
+  totalScore: number;
+  scoredSectionCount: number;
+  scoredAnswerCount: number;
+}
+
+function scoreAttempt(
+  answers: any[],
+  testType: string,
+  configSections: any[] | undefined,
+  maxBand: number,
+): AttemptScoring | null {
+  const sectionScores: Record<string, number | null> = {};
+  let totalScoredAnswers = 0;
+
+  const AI_SCORED = new Set(['speaking', 'writing']);
+
+  for (const section of configSections || []) {
+    const sectionAnswers = answers.filter((a: any) => a.section === section.id);
+
+    if (AI_SCORED.has(section.id)) {
+      // AI-scored: pull the band score out of answer_data.score (1..max_band).
+      // Skip answers without a valid numeric score (e.g. speaking audio that
+      // never reached Whisper + scoring pipeline — these are "missing", not
+      // "zero").
+      const bands: number[] = [];
+      for (const a of sectionAnswers) {
+        let score: number | null = null;
+        try {
+          const data = typeof a.answer_data === 'string'
+            ? JSON.parse(a.answer_data || '{}')
+            : (a.answer_data || {});
+          const raw = data?.score;
+          if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+            score = Math.min(raw, maxBand);
+          }
+        } catch {}
+        if (score !== null) bands.push(score);
+      }
+      if (bands.length === 0) {
+        sectionScores[section.id] = null;
+      } else {
+        const avg = bands.reduce((a, b) => a + b, 0) / bands.length;
+        sectionScores[section.id] = Math.round(avg * 2) / 2;
+        totalScoredAnswers += bands.length;
+      }
+    } else {
+      // Objective: boolean correctness ratio × max_band.
+      const scored = sectionAnswers.filter((a: any) => a.is_correct !== null);
+      if (scored.length === 0) {
+        sectionScores[section.id] = null;
+      } else {
+        const correct = scored.filter((a: any) => a.is_correct === 1).length;
+        sectionScores[section.id] = Math.round((correct / scored.length) * maxBand * 2) / 2;
+        totalScoredAnswers += scored.length;
+      }
+    }
+  }
+
+  if (totalScoredAnswers === 0) return null;
+
+  const values = Object.values(sectionScores).filter(
+    (v): v is number => typeof v === 'number' && !isNaN(v),
+  );
+  const totalScore = values.length > 0
+    ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10
+    : 0;
+
+  return {
+    sectionScores,
+    totalScore,
+    scoredSectionCount: values.length,
+    scoredAnswerCount: totalScoredAnswers,
+  };
+}
+
 testRoutes.post('/attempt/:id/finish', async (c) => {
   try {
     const user = await getAuthUser(c.req.raw, c.env);
@@ -593,49 +688,66 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
       }
     } catch {}
 
+    const config = TEST_CONFIGS[attempt.test_type as string];
+    if (!config) {
+      // Don't silently default to the iBT scale — that was producing
+      // wrong band numbers for TOEFL_ITP/TOEIC. Leave the attempt
+      // in_progress so ops can repair it, and surface the cause.
+      console.error(`[finish] Unknown test_type "${attempt.test_type}" for attempt ${attemptId}`);
+      return c.json({ error: 'Unsupported test_type', test_type: attempt.test_type }, 500);
+    }
+
+    // Load answers and calculate scores
+    const answersResult = await c.env.DB.prepare(
+      'SELECT * FROM attempt_answers WHERE attempt_id = ?'
+    ).bind(attemptId).all();
+    const answers = (answersResult.results || []) as any[];
+
+    const maxBand = config.max_band || 6;
+    const scoring = scoreAttempt(answers, attempt.test_type as string, config.sections, maxBand);
+
+    if (!scoring) {
+      // Zero scorable answers — don't write a fake 0/0/0 row. That was
+      // happening before when students clicked finish without answering;
+      // the misleading "0 band" score muddied their history. Leave the
+      // attempt in_progress so they can either resume or the UI can show
+      // a clear "no answers submitted" state.
+      return c.json({
+        error: 'No scored answers',
+        code: 'EMPTY_ATTEMPT',
+        attempt_id: attemptId,
+      }, 400);
+    }
+
+    const { sectionScores, totalScore } = scoring;
+
+    // WRITE ORDER MATTERS: insert test_results FIRST, then flip status to
+    // completed. The previous order (status first, then insert) stranded
+    // students whenever the insert threw — they'd see status='completed'
+    // but /results would 404 forever with no recovery path.
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO test_results (attempt_id, user_id, test_type, total_score, section_scores, band_score)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(
+        attemptId, attempt.user_id || 0, attempt.test_type,
+        totalScore, JSON.stringify(sectionScores), totalScore,
+      ).run();
+    } catch (insertErr: any) {
+      console.error(`[finish] test_results INSERT failed for attempt ${attemptId}:`, insertErr?.message || insertErr);
+      return c.json({ error: 'Failed to save results', detail: insertErr?.message }, 500);
+    }
+
     await c.env.DB.prepare(
       'UPDATE test_attempts SET status = ?, finished_at = ? WHERE id = ?'
     ).bind(finalStatus, now, attemptId).run();
-
-    const config = TEST_CONFIGS[attempt.test_type as string];
-
-    // Load answers and calculate scores
-    const answers = await c.env.DB.prepare(
-      'SELECT * FROM attempt_answers WHERE attempt_id = ?'
-    ).bind(attemptId).all();
-
-    const sectionScores: Record<string, number> = {};
-
-    for (const section of config?.sections || []) {
-      const sectionAnswers = (answers.results || []).filter((a: any) => a.section === section.id);
-      // Only count objectively scored answers (is_correct not null) for band calculation
-      const scoredAnswers = sectionAnswers.filter((a: any) => a.is_correct !== null);
-      const correct = scoredAnswers.filter((a: any) => a.is_correct === 1).length;
-      const total = scoredAnswers.length;
-      const maxBand = config?.max_band || 6;
-      if (total === 0) {
-        sectionScores[section.id] = 0;
-      } else {
-        sectionScores[section.id] = Math.round((correct / total) * maxBand * 2) / 2;
-      }
-    }
-
-    const values = Object.values(sectionScores).filter((v: number) => !isNaN(v));
-    const totalScore = values.length > 0
-      ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10
-      : 0;
-
-    await c.env.DB.prepare(
-      `INSERT INTO test_results (attempt_id, user_id, test_type, total_score, section_scores, band_score)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(attemptId, attempt.user_id || 0, attempt.test_type, totalScore, JSON.stringify(sectionScores), totalScore).run();
 
     // ─── IRT + Learning Curve updates (non-blocking) ────────────
     const userId = attempt.user_id as number;
     if (userId > 0) {
       try {
         // 1. Build IRT responses from answers
-        const irtResponses: IRTResponse[] = (answers.results || [])
+        const irtResponses: IRTResponse[] = answers
           .filter((a: any) => a.is_correct !== null)
           .map((a: any) => ({
             content_id: (a.content_id as number) || 0,
@@ -650,7 +762,7 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
 
         // 3. Record learning curve points per section
         const sectionGroups = new Map<string, { correct: number; total: number }>();
-        for (const a of (answers.results || []) as any[]) {
+        for (const a of answers) {
           if (a.is_correct === null) continue;
           const sec = a.section as string;
           if (!sectionGroups.has(sec)) sectionGroups.set(sec, { correct: 0, total: 0 });
@@ -897,11 +1009,45 @@ testRoutes.get('/results/:id', async (c) => {
 
   if (!attempt) return c.json({ error: 'Not found' }, 404);
 
-  const result = await c.env.DB.prepare(
+  let result: any = await c.env.DB.prepare(
     'SELECT * FROM test_results WHERE attempt_id = ?'
   ).bind(attemptId).first();
 
-  if (!result) return c.json({ error: 'Results not found' }, 404);
+  // Recovery path: attempts that were marked completed/time_expired but
+  // never got a test_results row (e.g. the historical bug where status was
+  // flipped BEFORE the INSERT, and the INSERT failed). Re-score from
+  // attempt_answers rather than leave the student with "Hasil tidak
+  // ditemukan" forever. Only attempts that are already finished qualify —
+  // in-progress attempts should finish the normal way.
+  if (!result && (attempt.status === 'completed' || attempt.status === 'time_expired')) {
+    const config = TEST_CONFIGS[attempt.test_type as string];
+    if (config) {
+      const answersResult = await c.env.DB.prepare(
+        'SELECT * FROM attempt_answers WHERE attempt_id = ?'
+      ).bind(attemptId).all();
+      const answers = (answersResult.results || []) as any[];
+      const scoring = scoreAttempt(answers, attempt.test_type as string, config.sections, config.max_band || 6);
+      if (scoring) {
+        try {
+          await c.env.DB.prepare(
+            `INSERT INTO test_results (attempt_id, user_id, test_type, total_score, section_scores, band_score)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          ).bind(
+            attemptId, attempt.user_id || 0, attempt.test_type,
+            scoring.totalScore, JSON.stringify(scoring.sectionScores), scoring.totalScore,
+          ).run();
+          console.log(`[results] re-scored orphaned attempt ${attemptId}`);
+          result = await c.env.DB.prepare(
+            'SELECT * FROM test_results WHERE attempt_id = ?'
+          ).bind(attemptId).first();
+        } catch (e: any) {
+          console.error(`[results] re-score INSERT failed for ${attemptId}:`, e?.message || e);
+        }
+      }
+    }
+  }
+
+  if (!result) return c.json({ error: 'Results not found', code: 'NO_RESULT_ROW' }, 404);
 
   return c.json({
     attempt_id: attemptId,

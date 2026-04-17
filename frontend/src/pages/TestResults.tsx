@@ -200,20 +200,34 @@ export default function TestResults() {
       <div className="mb-6">
         <h2 className="font-semibold mb-3">Hasil Per Bagian</h2>
         <div className="space-y-3">
-          {Object.entries(result.section_scores || {}).map(([section, score]) => (
-            <div key={section} className="bg-tg-secondary rounded-xl p-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-medium">{sectionNames[section] || section}</span>
-                <span className="font-bold text-lg">{score}</span>
+          {Object.entries(result.section_scores || {}).map(([section, score]) => {
+            // A null score means the section had no scorable answers
+            // (e.g. the student skipped Speaking entirely). Show a
+            // neutral placeholder instead of "null" text or a broken
+            // progress bar, so the student can tell at a glance which
+            // sections weren't attempted.
+            const hasScore = typeof score === 'number' && !Number.isNaN(score);
+            const numericScore = hasScore ? (score as number) : 0;
+            return (
+              <div key={section} className="bg-tg-secondary rounded-xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-medium">{sectionNames[section] || section}</span>
+                  <span className={`font-bold text-lg ${hasScore ? '' : 'text-tg-hint'}`}>
+                    {hasScore ? score : '—'}
+                  </span>
+                </div>
+                <div className="w-full bg-tg-bg rounded-full h-2">
+                  <div
+                    className={`h-2 rounded-full ${sectionColors[section] || 'bg-tg-button'}`}
+                    style={{ width: `${(numericScore / 6) * 100}%` }}
+                  />
+                </div>
+                {!hasScore && (
+                  <p className="text-xs text-tg-hint mt-1">Belum ada jawaban yang terhitung</p>
+                )}
               </div>
-              <div className="w-full bg-tg-bg rounded-full h-2">
-                <div
-                  className={`h-2 rounded-full ${sectionColors[section] || 'bg-tg-button'}`}
-                  style={{ width: `${(score / 6) * 100}%` }}
-                />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
