@@ -424,7 +424,50 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
       } catch (e) { console.error('XP tracking error:', e); }
       try {
         const { awardXp } = await import('../services/gamification');
-        await awardXp(c.env, userId, isCorrect ? 'question_correct' : 'question_wrong');
+        const xpResult = await awardXp(c.env, userId, isCorrect ? 'question_correct' : 'question_wrong');
+        // Surface level-ups and new badges the user actually cares about.
+        // They're answering questions in the mini app, so a Telegram
+        // notification to their chat is the right channel (it'll pop up
+        // regardless of what screen they're on). Guarded to only fire on
+        // level_up or badge unlock so we don't spam every correct answer.
+        if ((xpResult.level_up || xpResult.new_badges.length > 0) && c.env.TELEGRAM_BOT_TOKEN) {
+          c.executionCtx?.waitUntil((async () => {
+            try {
+              const userRow = await c.env.DB.prepare(
+                'SELECT telegram_id FROM users WHERE id = ?'
+              ).bind(userId).first<any>();
+              const tgId = userRow?.telegram_id
+                ? parseInt(String(userRow.telegram_id).replace('.0', ''))
+                : null;
+              if (!tgId) return;
+              const parts: string[] = [];
+              if (xpResult.level_up) {
+                parts.push(`🎉 Level Up! Kamu sekarang level *${xpResult.level}*!`);
+              }
+              if (xpResult.new_badges.length > 0) {
+                const badgeLine = xpResult.new_badges
+                  .map((b) => `${b.icon} ${b.name}`)
+                  .join(', ');
+                parts.push(`🏅 Badge baru: ${badgeLine}`);
+              }
+              const text = parts.join('\n');
+              await fetch(
+                `https://api.telegram.org/bot${c.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: tgId,
+                    text,
+                    parse_mode: 'Markdown',
+                  }),
+                },
+              ).catch((e) => console.warn('[level-up] send failed:', e?.message || e));
+            } catch (e: any) {
+              console.warn('[level-up] notify error:', e?.message || e);
+            }
+          })());
+        }
       } catch (e) { console.error('Gamification XP error:', e); }
 
       // Spaced repetition: schedule every scored answer (not just wrong).

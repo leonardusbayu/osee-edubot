@@ -557,7 +557,9 @@ export async function handleCompanionReply(
     .replaceAll('{day_name}', dayName)
     .replaceAll('{last_conversation_summary}', lastConvSummary);
 
-  // Call GPT
+  // Call GPT. Log non-OK responses and API-level errors so silent degradation
+  // (invalid key, rate limit, quota exhausted) shows up in logs instead of
+  // just returning the canned fallback message with no diagnostic trail.
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -575,7 +577,10 @@ export async function handleCompanionReply(
     }),
   });
 
-  const data: any = await response.json();
+  const data: any = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    console.error(`[companion] OpenAI ${response.status}: ${data?.error?.message || data?.error || 'unknown error'}`);
+  }
   let reply = data.choices?.[0]?.message?.content || 'Aku dengerin kamu. Cerita lagi? 💙';
 
   // Parse sentiment and bridge-readiness from the response
@@ -790,6 +795,36 @@ export async function checkStudyBreakNeeded(env: Env, userId: number, name: stri
  * Run the proactive companion outreach. Called by daily cron.
  * Returns stats about how many students were contacted.
  */
+// Send a Telegram message and return whether it actually reached the user.
+// Prevents the stats counter from double-counting messages that were rejected
+// by Telegram (403 = user blocked bot, 400 = chat not found), which was making
+// the outreach logs falsely optimistic.
+async function sendCompanionMessage(
+  env: Env,
+  chatId: number | string,
+  body: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, ...body }),
+    });
+    if (!res.ok) {
+      // 403/400 are per-user (blocked / chat gone). Other codes may be
+      // transient (429, 5xx) — log for ops visibility.
+      if (res.status !== 403 && res.status !== 400) {
+        console.warn(`[companion] sendMessage ${chatId}: ${res.status}`);
+      }
+      return false;
+    }
+    return true;
+  } catch (e: any) {
+    console.warn(`[companion] sendMessage error for ${chatId}: ${e?.message || e}`);
+    return false;
+  }
+}
+
 export async function runCompanionOutreach(env: Env): Promise<{
   tier1_sent: number;
   tier2_sent: number;
@@ -807,12 +842,9 @@ export async function runCompanionOutreach(env: Env): Promise<{
         const message = await generateTier1Nudge(env, student.user_id, student.name);
         const convId = await startCompanionConversation(env, student.user_id, 1, message);
 
-        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: student.telegram_id, text: message }),
-        });
-        stats.tier1_sent++;
+        const delivered = await sendCompanionMessage(env, student.telegram_id, { text: message });
+        if (delivered) stats.tier1_sent++;
+        else stats.errors++;
       } catch (e) {
         console.error(`Companion tier1 error for user ${student.user_id}:`, e);
         stats.errors++;
@@ -825,27 +857,23 @@ export async function runCompanionOutreach(env: Env): Promise<{
         const message = generateTier2CheckIn(student.name, student.idle_days);
         await startCompanionConversation(env, student.user_id, 2, message);
 
-        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: student.telegram_id,
-            text: message,
-            reply_markup: JSON.stringify({
-              inline_keyboard: [
-                [
-                  { text: '😊 Baik-baik aja', callback_data: 'companion_mood_ok' },
-                  { text: '😔 Lagi banyak pikiran', callback_data: 'companion_mood_low' },
-                ],
-                [
-                  { text: '😤 Materinya susah', callback_data: 'companion_mood_hard' },
-                  { text: '💬 Mau cerita', callback_data: 'companion_mood_talk' },
-                ],
+        const delivered = await sendCompanionMessage(env, student.telegram_id, {
+          text: message,
+          reply_markup: JSON.stringify({
+            inline_keyboard: [
+              [
+                { text: '😊 Baik-baik aja', callback_data: 'companion_mood_ok' },
+                { text: '😔 Lagi banyak pikiran', callback_data: 'companion_mood_low' },
               ],
-            }),
+              [
+                { text: '😤 Materinya susah', callback_data: 'companion_mood_hard' },
+                { text: '💬 Mau cerita', callback_data: 'companion_mood_talk' },
+              ],
+            ],
           }),
         });
-        stats.tier2_sent++;
+        if (delivered) stats.tier2_sent++;
+        else stats.errors++;
       } catch (e) {
         console.error(`Companion tier2 error for user ${student.user_id}:`, e);
         stats.errors++;
@@ -858,24 +886,20 @@ export async function runCompanionOutreach(env: Env): Promise<{
         const message = await generateTier3WinBack(env, student.user_id, student.name, student.idle_days);
         await startCompanionConversation(env, student.user_id, 3, message);
 
-        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: student.telegram_id,
-            text: message,
-            reply_markup: JSON.stringify({
-              inline_keyboard: [
-                [
-                  { text: '💬 Mau ngobrol dulu', callback_data: 'companion_mood_talk' },
-                  { text: '📚 Mau coba latihan', callback_data: 'companion_bridge_accept' },
-                ],
-                [{ text: '🙏 Nanti aja', callback_data: 'companion_later' }],
+        const delivered = await sendCompanionMessage(env, student.telegram_id, {
+          text: message,
+          reply_markup: JSON.stringify({
+            inline_keyboard: [
+              [
+                { text: '💬 Mau ngobrol dulu', callback_data: 'companion_mood_talk' },
+                { text: '📚 Mau coba latihan', callback_data: 'companion_bridge_accept' },
               ],
-            }),
+              [{ text: '🙏 Nanti aja', callback_data: 'companion_later' }],
+            ],
           }),
         });
-        stats.tier3_sent++;
+        if (delivered) stats.tier3_sent++;
+        else stats.errors++;
       } catch (e) {
         console.error(`Companion tier3 error for user ${student.user_id}:`, e);
         stats.errors++;

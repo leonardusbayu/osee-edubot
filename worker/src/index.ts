@@ -623,6 +623,36 @@ app.get('*', async (c) => {
   }
 });
 
+// Push a message to a user's Telegram chat. Wraps the raw Bot API call so
+// one blocked/deactivated user (403/400 from Telegram) doesn't abort the
+// entire cron loop. Returns true on 2xx, false otherwise.
+async function safeSendMessage(
+  env: Env,
+  chatId: number,
+  body: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, ...body }),
+    });
+    if (!res.ok) {
+      const status = res.status;
+      // 403 = user blocked bot; 400 often = chat not found. Both are
+      // per-user and shouldn't cascade; just log and move on.
+      if (status !== 403 && status !== 400) {
+        console.warn(`[cron] sendMessage failed to ${chatId}: ${status}`);
+      }
+      return false;
+    }
+    return true;
+  } catch (e: any) {
+    console.warn(`[cron] sendMessage error to ${chatId}: ${e?.message || e}`);
+    return false;
+  }
+}
+
 // Cron handler for daily notifications
 async function handleCron(env: Env) {
   try {
@@ -648,11 +678,7 @@ async function handleCron(env: Env) {
 
       const message = `${greeting}\n\n${progressBar} ${progress}%\nDay ${user.current_day + 1} of ${user.total_days} — tinggal ${daysLeft} hari lagi!\n\nSiap belajar? Ketik /today yuk!`;
 
-      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: tgId, text: message }),
-      });
+      await safeSendMessage(env, tgId, { text: message });
     }
 
     // Also remind users with due spaced repetition items
@@ -673,13 +699,8 @@ async function handleCron(env: Env) {
       ];
       const nudge = nudges[Math.floor(Math.random() * nudges.length)];
 
-      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: tgId,
-          text: `Ada ${user.due_count} soal yang perlu kamu review nih! Ketik /review untuk mulai. 🧠\n\n${nudge}`,
-        }),
+      await safeSendMessage(env, tgId, {
+        text: `Ada ${user.due_count} soal yang perlu kamu review nih! Ketik /review untuk mulai. 🧠\n\n${nudge}`,
       });
     }
     // Emotional intelligence: exam countdown + monthly milestones
@@ -851,18 +872,13 @@ async function handleWeeklyCron(env: Env) {
 
       // Send report with inline keyboard button to view visual report card
       const webappUrl = env.WEBAPP_URL || 'https://edubot-webapp.pages.dev';
-      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: tgId,
-          text: report,
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '📊 Lihat Report Card', web_app: { url: `${webappUrl}/report-card` } }
-            ]]
-          }
-        }),
+      await safeSendMessage(env, tgId, {
+        text: report,
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '📊 Lihat Report Card', web_app: { url: `${webappUrl}/report-card` } }
+          ]]
+        }
       });
     }
   } catch (e) {
@@ -878,11 +894,7 @@ async function handleWeeklyCron(env: Env) {
       const tgId = parseInt(String(t.telegram_id).replace('.0', ''));
       if (!tgId) continue;
       const report = await generateTeacherWeeklyReport(env);
-      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: tgId, text: report }),
-      });
+      await safeSendMessage(env, tgId, { text: report });
     }
   } catch (e) {
     console.error('Teacher weekly report error:', e);
