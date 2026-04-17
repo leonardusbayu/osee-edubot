@@ -4,7 +4,7 @@ import { useAuthStore } from '../stores/auth';
  * Helper to get the Telegram user ID from URL params (primary) or WebApp SDK (fallback).
  * URL params are always available immediately; SDK may not be ready on first render.
  */
-function getTelegramUserId(): string | null {
+export function getTelegramUserId(): string | null {
   // Primary: check URL params first (available immediately when page loads)
   const urlParams = new URLSearchParams(window.location.search);
   const tgIdFromUrl = urlParams.get('tg_id');

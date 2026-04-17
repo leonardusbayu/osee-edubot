@@ -130,7 +130,7 @@ premiumRoutes.post('/check', async (c) => {
   if (!info.is_premium) {
     return c.json({
       allowed: false,
-      message: `Trial expired. Upgrade to continue!\n\nPrices:\n7 days = 90 ⭐\n30 days = 350 ⭐\n\nKetik /premium untuk beli.`,
+      message: `Trial expired. Upgrade to continue!\n\nPrices:\n7 days = 375 ⭐\n30 days = 1.238 ⭐\n90 days = 3.375 ⭐\n\nKetik /premium untuk beli.`,
       trial_ends: info.trial_ends,
     });
   }

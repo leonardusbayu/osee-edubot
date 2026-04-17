@@ -8,7 +8,7 @@
  * Usage: npx tsx scripts/enrich-explanations.ts
  * 
  * Prerequisites:
- *   cd worker && npx wrangler d1 local执行 sql or --remote after testing
+ *   cd worker && npx wrangler d1 local execute sql or --remote after testing
  */
 
 const D1_DATABASE_ID = 'd501b671-128e-4a45-9d90-74b22e6691ce';

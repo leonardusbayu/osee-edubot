@@ -8,7 +8,7 @@ import { authedFetch } from '../api/authedFetch';
 
 const SYNC_CHECK_INTERVAL = 5000; // Check every 5 seconds
 
-let syncIntervalId: NodeJS.Timeout | null = null;
+let syncIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Start background sync service

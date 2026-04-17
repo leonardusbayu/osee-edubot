@@ -19,6 +19,8 @@ interface TestState {
   answers: Record<string, Record<number, unknown>>;
   isFinished: boolean;
   questionType: string | null; // Filter for section-specific practice
+  drillConcept: string | null; // Targeted skill_tag for concept drills (e.g. "subject_verb_agreement")
+  drillCount: number | null; // Optional question count override for drill mode (1–10)
 
   // Offline-first mode
   prefetchedQuestions: Record<string, any[]>; // questions_by_section cache
@@ -54,6 +56,8 @@ export const useTestStore = create<TestState>((set, get) => ({
   answers: {},
   isFinished: false,
   questionType: null,
+  drillConcept: null,
+  drillCount: null,
 
   // Offline-first mode
   prefetchedQuestions: {},

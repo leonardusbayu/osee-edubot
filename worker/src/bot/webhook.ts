@@ -1255,15 +1255,15 @@ async function handleMessage(message: any, env: Env) {
 
         const activePlan = await getActivePlan(env, user.id);
 
-        if (activePlan && activePlan.current_step < activePlan.total_steps) {
+        const step = activePlan?.lessons?.[activePlan.current_step];
+        if (activePlan && activePlan.current_step < activePlan.total_steps && step) {
           // Continue existing plan
-          const step = activePlan.lessons[activePlan.current_step];
           const progressBar = buildProgressBarInline(activePlan.progress_percent);
 
           let msg = `📖 *${activePlan.title}*\n`;
-          msg += `Step ${step.index + 1}/${activePlan.total_steps} ${progressBar}\n\n`;
-          msg += `*${step.title}*\n`;
-          msg += `(${step.expected_minutes} menit)\n\n`;
+          msg += `Step ${(step.index ?? activePlan.current_step) + 1}/${activePlan.total_steps} ${progressBar}\n\n`;
+          msg += `*${step.title || 'Lesson step'}*\n`;
+          msg += `(${step.expected_minutes ?? 5} menit)\n\n`;
           msg += `Ketik sesuatu untuk mulai step ini, atau "skip" untuk lanjut ke step berikutnya.`;
 
           await sendMessage(env, chatId, msg, {
