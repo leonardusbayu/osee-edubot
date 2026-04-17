@@ -240,6 +240,7 @@ ttsRoutes.post('/dialogue', async (c) => {
 // Simple single-voice GET endpoint
 ttsRoutes.get('/speak', async (c) => {
   if (!c.env.OPENAI_API_KEY) {
+    console.error('[tts/speak] OPENAI_API_KEY missing — check wrangler secrets');
     return c.json({ error: 'TTS not configured' }, 500);
   }
 
@@ -249,11 +250,15 @@ ttsRoutes.get('/speak', async (c) => {
 
   if (!text) return c.json({ error: 'Missing text param' }, 400);
 
-  const decoded = decodeURIComponent(text).trim();
+  // Hono's c.req.query() returns the ALREADY-URL-DECODED value. Running
+  // decodeURIComponent on top double-decodes: any legitimate '%' in the
+  // script (e.g. "increased 20%") becomes an invalid escape sequence and
+  // throws URIError, which the outer catch swallows silently as "TTS
+  // generation failed" 500. That was the TOEFL iBT speaking audio failure.
+  // Just trim what Hono gave us.
+  const decoded = text.trim();
   if (decoded.length === 0) return c.json({ error: 'Empty text' }, 400);
-  if (decoded.length > 4096) {
-    // Truncate silently
-  }
+  // Truncation handled below via .substring(0, 4096) before the OpenAI call.
   const cacheKey = await hashText(decoded + (multi || '') + voice);
 
   // Cache-first serve. Auth is intentionally NOT required here — the browser's
@@ -314,7 +319,13 @@ ttsRoutes.get('/speak', async (c) => {
       }),
     });
 
-    if (!response.ok) return c.json({ error: 'TTS generation failed' }, 500);
+    if (!response.ok) {
+      // Surface OpenAI's actual error message — previously this path just
+      // returned an opaque 500, making auth/quota/model issues undiagnosable.
+      const errBody = await response.text().catch(() => '');
+      console.error(`[tts/speak] OpenAI ${response.status}: ${errBody.substring(0, 500)}`);
+      return c.json({ error: 'TTS generation failed', status: response.status }, 500);
+    }
 
     // Cache single voice result + log cost
     const audioData = await response.arrayBuffer();
@@ -330,7 +341,11 @@ ttsRoutes.get('/speak', async (c) => {
     return new Response(audioData, {
       headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=604800', 'X-Cache': 'MISS' },
     });
-  } catch {
-    return c.json({ error: 'TTS generation failed' }, 500);
+  } catch (e: any) {
+    // Don't swallow — these were silent 500s for months. Include the error
+    // type + message so `wrangler tail` shows what actually went wrong
+    // (URIError, TypeError from parseDialogue, D1 timeout, etc.).
+    console.error(`[tts/speak] threw: ${e?.name || 'Error'}: ${e?.message || e}`);
+    return c.json({ error: 'TTS generation failed', detail: e?.message || String(e) }, 500);
   }
 });

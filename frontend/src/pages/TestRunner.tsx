@@ -634,7 +634,13 @@ export default function TestRunner() {
 
         for (let i = 0; i < c.questions.length; i++) {
           const sq = c.questions[i];
-          const script = stripHtml(sq.script || '');
+          // Different ingestion paths populate different fields:
+          //   - parse-ielts / parse-ielts-extra put text in sq.script
+          //   - AI-generated iBT content puts it in sq.question_text
+          //   - TOEIC parser uses sq.script (from transcripts)
+          // Fall through to the first non-empty one so we don't silently ship
+          // an empty card with no audio AND no prompt.
+          const script = stripHtml(sq.script || sq.question_text || '');
           const ttsUrl = script.length > 3
             ? buildTtsUrl(script, { multi: true, maxChars: 2000 })
             : null;
