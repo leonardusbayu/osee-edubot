@@ -342,6 +342,40 @@ app.route('/api/premium', premiumRoutes);
 app.route('/api/handbook', handbookRoutes);
 app.route('/api/v1/admin', adminApiRoutes);
 
+// Lightweight content-issue report endpoint — used by the in-test "🚩 Lapor"
+// button. Writes to error_logs (source='client', error_type='content_report')
+// so existing admin tooling can surface flagged questions without a new table.
+app.post('/api/content/report', async (c) => {
+  try {
+    const { getAuthUser } = await import('./services/auth');
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const body = await c.req.json().catch(() => ({}));
+    const contentId = body?.content_id ?? null;
+    const reason = String(body?.reason || 'unspecified').slice(0, 64);
+    const note = body?.note ? String(body.note).slice(0, 500) : null;
+    const attemptId = body?.attempt_id ?? null;
+
+    if (!contentId) return c.json({ error: 'content_id required' }, 400);
+
+    await c.env.DB.prepare(
+      `INSERT INTO error_logs (source, error_type, message, user_id, url, metadata)
+       VALUES ('client', 'content_report', ?, ?, ?, ?)`
+    ).bind(
+      `Content report: ${reason}`,
+      user.id,
+      `content:${contentId}`,
+      JSON.stringify({ content_id: contentId, attempt_id: attemptId, reason, note }),
+    ).run();
+
+    return c.json({ ok: true });
+  } catch (e: any) {
+    console.error('content/report error:', e);
+    return c.json({ error: 'Failed to record report' }, 500);
+  }
+});
+
 // Serve R2 files (audio + images)
 app.get('/api/audio/:path{.+}', async (c) => {
   const bucket = c.env.AUDIO_BUCKET;

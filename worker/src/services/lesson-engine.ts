@@ -14,6 +14,7 @@ import type { Env, User } from '../types';
 import { getStudentProfile, getAllTopicMasteries, type StudentProfile, type TopicMastery } from './student-profile';
 import { getKnowledgeGaps, buildMentalModelContext, CONCEPT_MAP, type ConceptModel } from './mental-model';
 import { buildStudentReportForAI, buildStudentReport } from './student-report';
+import { checkPrerequisites } from './prerequisites';
 
 // ═══════════════════════════════════════════════════════
 // TYPES
@@ -111,7 +112,26 @@ export async function generatePersonalizedPlan(
     targetSkills = identifyHighPrioritySkills(profile, masteries, gaps);
   }
 
-  // Order by prerequisites
+  // Enforce prerequisites: if a target skill's prereqs aren't mastered,
+  // inject the missing prereqs into the plan first. Without this, a student
+  // assigned "complex_clauses" without "simple_past" would hit lessons they
+  // can't follow.
+  const skillSet = new Set(targetSkills);
+  for (const skill of [...targetSkills]) {
+    try {
+      const check = await checkPrerequisites(env, user.id, skill);
+      if (!check.ready) {
+        for (const missing of check.missing) {
+          if (!skillSet.has(missing)) {
+            skillSet.add(missing);
+          }
+        }
+      }
+    } catch (e) { console.error('Prerequisite check failed for', skill, e); }
+  }
+  targetSkills = Array.from(skillSet);
+
+  // Order by prerequisites (topo sort now covers injected prereqs too)
   const orderedSkills = topologicalSort(targetSkills);
 
   // Use report's suggested difficulty, or compute from depth level

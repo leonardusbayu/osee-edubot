@@ -336,13 +336,18 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
         await incrementDailyUsage(c.env, userId);
       } catch (e) { console.error('XP tracking error:', e); }
 
-      // Spaced repetition: add wrong answers to review queue
-      if (isCorrect === false) {
+      // Spaced repetition: schedule every scored answer (not just wrong).
+      // Correct answers still decay — FSRS picks longer initial interval.
+      // Dedup inside addToReview ensures re-answers update the existing card
+      // via markReviewed() rather than creating parallel cards.
+      if (isCorrect !== null) {
         try {
           const { addToReview } = await import('../services/fsrs-engine');
           await addToReview(
             c.env, userId, section, '',
             JSON.stringify(answer_data), answer_data.correct_answer || '', answer_data.selected || '',
+            content_id || undefined,
+            isCorrect === true,
           );
         } catch (e) { console.error('Spaced repetition error:', e); }
       }

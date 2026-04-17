@@ -111,7 +111,7 @@ export async function generateVocabularyOfTheDay(env: Env): Promise<{ text: stri
       indonesian: 'realistis / praktis / berdasarkan kenyataan',
       example: 'We need a pragmatic approach, not idealistic theories.',
       exampleTranslation: 'Kita butuh pendekatan yang realistis, bukan teori muluk-muluk.',
-      toeflContext: 'TOEFL & IELTS Speaking:好用 di part 4 Independent tasks tentang problem-solving',
+      toeflContext: 'TOEFL & IELTS Speaking: berguna di part 4 Independent tasks tentang problem-solving',
       articleSlug: 'pragmatic-vocab-speaking-tips'
     },
     {
@@ -120,7 +120,7 @@ export async function generateVocabularyOfTheDay(env: Env): Promise<{ text: stri
       indonesian: 'memperburuk / memperparah',
       example: 'Unemployment can exacerbate social inequality and crime rates.',
       exampleTranslation: 'Pengangguran bisa memperparah ketimpangan sosial dan tingkat kejahatan.',
-      toeflContext: 'TOEFL Reading: vocabulary questions sering测试这个词 di passages tentang sociology',
+      toeflContext: 'TOEFL Reading: vocabulary questions sering menguji kata ini di passages tentang sociology',
       articleSlug: 'exacerbate-vocab-toefl-reading'
     },
     {
@@ -224,7 +224,7 @@ export async function generateDailyQuiz(env: Env): Promise<QuizItem> {
       question: '"If I ___ more money, I would invest in real estate."',
       options: ['A) had', 'B) have', 'C) would have', 'D) had had'],
       correctIndex: 0,
-      explanation: 'Ini Second Conditional — tentang hypothetical situation di masa sekarang/kedepan. Structure: If + Past Simple + would/could/might + base verb. "If I had more money" = kalau saja aku punya lebih banyak uang (tapi реально nggak).',
+      explanation: 'Ini Second Conditional — tentang hypothetical situation di masa sekarang/kedepan. Structure: If + Past Simple + would/could/might + base verb. "If I had more money" = kalau saja aku punya lebih banyak uang (tapi kenyataannya nggak).',
       section: 'Grammar — Conditionals',
       testType: 'IELTS',
       articleSlug: 'second-conditional-ielts-speaking'
@@ -289,18 +289,18 @@ export function formatQuizPost(quiz: QuizItem, replyLink: string): string {
 export async function generateGrammarTip(env: Env): Promise<string> {
   const tips: GrammarTip[] = [
     {
-      title: '⚡ "Which" vs "That" — TOEFL/IELTS必考!',
-      rule: 'That = restrictive clause (identifying — gak bisa diapus). Which = non-restrictive ( дополнительная информация — bisa diapus tanpa mengubah arti).',
+      title: '⚡ "Which" vs "That" — Wajib Tau di TOEFL/IELTS!',
+      rule: 'That = restrictive clause (identifying — gak bisa dihapus). Which = non-restrictive (informasi tambahan — bisa dihapus tanpa mengubah arti).',
       examples: [
-        { en: 'The book that changed my life is on the table.', id: 'Buku yang mengubah hidupku ada di meja. → kalau diapus "The book is on the table" = masih ada arti.' },
-        { en: 'My phone, which is brand new, is already broken.', id: 'HP-ku, yang baru banget, udah rusak. → kalau diapus "My phone is already broken" = kehilangan info tambahan.' },
+        { en: 'The book that changed my life is on the table.', id: 'Buku yang mengubah hidupku ada di meja. → kalau dihapus "The book is on the table" = arti utamanya hilang.' },
+        { en: 'My phone, which is brand new, is already broken.', id: 'HP-ku, yang baru banget, udah rusak. → kalau dihapus "My phone is already broken" = cuma kehilangan info tambahan.' },
       ],
       toeflNote: '🎯 TOEFL/ IELTS Reading & Writing: kalau removal mengubah arti kalimat = THAT. Kalau removal nggak mengubah = WHICH. Sakti di soal vocabulary-in-context juga!',
       articleSlug: 'which-vs-that-definitive-guide',
       testTypes: ['TOEFL_IBT', 'IELTS']
     },
     {
-      title: '⚡ Neither...Nor — Proximity Rule yang Sering出错',
+      title: '⚡ Neither...Nor — Proximity Rule yang Sering Salah',
       rule: 'Verb agree dengan noun/pronoun PALING DEKAT dengan verb (proximity rule). Bukan yang lebih banyak!',
       examples: [
         { en: 'Neither the students nor the teacher is attending.', id: 'Yang paling deket verb "is" = "teacher" (singular) → verb singular "is".' },
@@ -340,7 +340,7 @@ export async function generateGrammarTip(env: Env): Promise<string> {
         { en: 'The student who scored highest will be honored.', id: 'Who = subject of "scored" → replace "who" with "she/he" → "The student she scored highest" ✅' },
         { en: 'The student whom we selected passed with honors.', id: 'Whom = object of "selected" → replace "whom" with "her/him" → "The student we selected her passed" ✅' },
       ],
-      toeflNote: '💡 Trick: replace whom dengan him/her/they. Kalau kalimat masih masuk akal = whom bener. TOEFL ITP Structure suka测试.',
+      toeflNote: '💡 Trick: replace whom dengan him/her/they. Kalau kalimat masih masuk akal = whom bener. TOEFL ITP Structure suka menguji ini.',
       articleSlug: 'relative-clauses-who-whom-whose',
       testTypes: ['TOEFL_ITP', 'IELTS']
     },
@@ -378,7 +378,7 @@ export async function generateIdiom(env: Env): Promise<string> {
     },
     {
       idiom: 'A blessing in disguise',
-      meaning: 'Hal buruk yang ternyata baik / erscheinungen磨',
+      meaning: 'Hal buruk yang ternyata baik / berkah terselubung',
       example: 'Losing that job was a blessing in disguise — I found a much better opportunity.',
       exampleTranslation: 'Kehilangan pekerjaan itu ternyata baik — aku nemu kesempatan yang lebih bagus.',
       articleSlug: 'idiom-blessing-in-disguise'
@@ -509,10 +509,10 @@ export function generatePromoCTA(): string {
   const random = testTypes[Math.floor(Math.random() * testTypes.length)];
 
   const ctas = [
-    `🎯 Lo tau nggak? Platform belajar TOEFL/IELTS yang bikin aku bisa скiaz skor 6.0 dalam 2 bulan!\n\nBeda dari yang lain:✅ AI feedback per kata — lo tau exatamente bagian mana yang salah\n✅ Explanations lengkap — bukan cuma jawaban, tapi JADI-LO KENAPA\n✅ Practice kapan aja, di mana aja — fleksibel banget\n\nCoba gratis dulu — 10 soal per hari tanpa batas waktu 👇\n👉 ${OSEE_BOT}promo\n\n#belajaringgris #toefl #ielts #premium`,
-    `📚 Mau скiaz skor TOEFL/IELTS tapi bingung mulai dari mana?\n\nAku pernah di posisi lo — пробовала YouTube, buku, semua apps. Tapi baru ngerasa cocok di EduBot.\n\nKenapa?\n• Adaptive learning — soal yang keluar sesuai level lo\n• Spaced repetition — lo review soal yang pernah salah\n• AI Tutor 24/7 — tanya kapan aja, dapat jawaban конкретный\n\nDaftar gratis sekarang 👇\n👉 ${OSEE_BOT}promo\n\n#toeflprep #ieltsprep #belajaringgris`,
-    `💡 Indonesian student证: Belajar TOEFL/IELTS itu nggak harus mahal!\n\nEduBot kasih akses ke:\n• 3,000+ soal dengan explanations\n• Speaking practice dengan AI evaluation\n• Diagnostic test — tau level lo sekarang\n• Personalized study plan\n\nSemua mulai dari Rp 99rb/bulan. Lebih murah dari 1x les private.\n\nCoba 1 hari premium gratis 👇\n👉 ${OSEE_BOT}promo`,
-    `🎓 TOEFL deadline approaching?\n\nУ тебя есть ${random.emoji} waktu buat persiapan — nggak harus nge-heavy course.\n\nDengan 30 menit sehari di EduBot, banyak student udah повысить skor mereka 0.5-1.0 band dalam 30 hari.\n\nKuncinya: consistently + the right practice.\n\nMulai sekarang 👇\n👉 ${OSEE_BOT}promo\n\n#${random.name.toLowerCase().replace(' ','')} #belajaringgris #studytips`,
+    `🎯 Lo tau nggak? Platform belajar TOEFL/IELTS yang bikin aku bisa naikin skor 6.0 dalam 2 bulan!\n\nBeda dari yang lain:\n✅ AI feedback per kata — lo tau persis bagian mana yang salah\n✅ Explanations lengkap — bukan cuma jawaban, tapi alasan KENAPA\n✅ Practice kapan aja, di mana aja — fleksibel banget\n\nCoba gratis dulu — 10 soal per hari tanpa batas waktu 👇\n👉 ${OSEE_BOT}promo\n\n#belajaringgris #toefl #ielts #premium`,
+    `📚 Mau naikin skor TOEFL/IELTS tapi bingung mulai dari mana?\n\nAku pernah di posisi lo — udah coba YouTube, buku, semua apps. Tapi baru ngerasa cocok di EduBot.\n\nKenapa?\n• Adaptive learning — soal yang keluar sesuai level lo\n• Spaced repetition — review soal yang pernah salah\n• AI Tutor 24/7 — tanya kapan aja, dapat jawaban konkret\n\nDaftar gratis sekarang 👇\n👉 ${OSEE_BOT}promo\n\n#toeflprep #ieltsprep #belajaringgris`,
+    `💡 Buat student Indonesia: belajar TOEFL/IELTS itu nggak harus mahal!\n\nEduBot kasih akses ke:\n• 3,000+ soal dengan explanations\n• Speaking practice dengan AI evaluation\n• Diagnostic test — tau level lo sekarang\n• Personalized study plan\n\nSemua mulai dari Rp 99rb/bulan. Lebih murah dari 1x les private.\n\nCoba 1 hari premium gratis 👇\n👉 ${OSEE_BOT}promo`,
+    `🎓 TOEFL deadline mepet?\n\nLo masih punya ${random.emoji} waktu buat persiapan — nggak harus ambil heavy course.\n\nDengan 30 menit sehari di EduBot, banyak student udah naikin skor 0.5–1.0 band dalam 30 hari.\n\nKuncinya: konsisten + latihan yang tepat.\n\nMulai sekarang 👇\n👉 ${OSEE_BOT}promo\n\n#${random.name.toLowerCase().replace(' ','')} #belajaringgris #studytips`,
   ];
 
   return ctas[Math.floor(Math.random() * ctas.length)];
@@ -520,8 +520,8 @@ export function generatePromoCTA(): string {
 
 export function generateSpeakingCTA(): string {
   const ctas = [
-    `🗣️ Tahu nggak? Bagian Speaking TOEFL/IELTS yang bikin orang gugup.\n\nBukan karena topsiks-nya, tapi karena lo nggak punya guru yang bisa koreksi pronunciation lo secara spesifik.\n\nDi EduBot:\n•🎙️ Lo rekam jawaban lo\n•🤖 AI evaluez точность pronunciation lo per kata\n•📝 Lo dapat feedback конкретный: "Kata 'research' lo salah pronunciation di bagian kedua"\n\nIni yang bikin beda. Bukan cuma skor — tapi lo tau persis apa yang harus diperbaiki.\n\nCoba speaking practice gratis 👇\n👉 ${OSEE_BOT}speaking\n\n#speakingpractice #toefl #ielts #pronunciation`,
-    `🎙️朗读 atau Interview — lo pilih jenis speaking yang mau lo-latihan.\n\nKedua-duanya ada AI evaluation yang kasih:\n•🎯 Pronunciation score per kata\n•📊 Fluency assessment\n•💡 Specific feedback: "Vowel sound di 'comPREHENSION' perlu diperbaiki"\n\nDi tempat lain? Lo cuma dapat skor tanpa объяснение.\n\nMulai gratis 👇\n👉 ${OSEE_BOT}speaking\n\n#toeflspeaking #ieltsspeaking #speakingpractice`,
+    `🗣️ Tahu nggak? Bagian Speaking TOEFL/IELTS yang bikin orang gugup.\n\nBukan karena topiknya, tapi karena lo nggak punya guru yang bisa koreksi pronunciation lo secara spesifik.\n\nDi EduBot:\n• 🎙️ Lo rekam jawaban lo\n• 🤖 AI nilai akurasi pronunciation lo per kata\n• 📝 Lo dapat feedback konkret: "Kata 'research' lo salah pronunciation di bagian kedua"\n\nIni yang bikin beda. Bukan cuma skor — tapi lo tau persis apa yang harus diperbaiki.\n\nCoba speaking practice gratis 👇\n👉 ${OSEE_BOT}speaking\n\n#speakingpractice #toefl #ielts #pronunciation`,
+    `🎙️ Read-aloud atau Interview — lo pilih jenis speaking yang mau dilatih.\n\nKeduanya ada AI evaluation yang kasih:\n• 🎯 Pronunciation score per kata\n• 📊 Fluency assessment\n• 💡 Specific feedback: "Vowel sound di 'comPREHENSION' perlu diperbaiki"\n\nDi tempat lain? Lo cuma dapat skor tanpa penjelasan.\n\nMulai gratis 👇\n👉 ${OSEE_BOT}speaking\n\n#toeflspeaking #ieltsspeaking #speakingpractice`,
     `💬 Di EduBot, Speaking practice itu bukan cuma "catat band score."\n\nSetiap jawaban lo dinilai oleh AI untuk:\n•🗣️ Pronunciation — lo ngomong pronouncing yang bener apa nggak\n•📖 Fluency — lo lancar atau TerPUTUS-PUTUS\n•🎯 Comprehension — lo ngerti pertanyaan dan bisa jawab dengan tepat\n\nBaru nemu platform yang nerjemahin "lo salah pronunciation di kata ini" dengan spesifik.\n\nCoba sekarang 👇\n👉 ${OSEE_BOT}speaking\n\n#speakingtips #toefl #ielts #englishspeaking`,
     `🗣️ Indonesian accent + TOEFL Speaking = tantangan terbesar.\n\nKenapa?\n•🇮🇩 Bahasa Indonesia punya vowel sounds yang beda dari English\n•🇬🇧 Banyak kata yang pronunciationnya beda dari penulisannya\n\nTapi kalau tau exactly apa yang salah — gampang diperbaiki.\n\nEduBot AI kasih feedback per fonem: bukan cuma "pronunciation perlu diperbaiki" tapi "bagian ini salah, coba pronounce ulang dengan cara ini."\n\nCoba sekarang 👇\n👉 ${OSEE_BOT}speaking\n\n#pronunciation #toeflielts #speakingpractice`,
   ];
