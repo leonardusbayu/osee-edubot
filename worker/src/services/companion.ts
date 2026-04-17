@@ -13,6 +13,151 @@
 
 import type { Env, User } from '../types';
 
+// ─────────────────── Personal Context Builder ───────────────────
+
+/**
+ * Rich per-student context for the companion. Pulls from the mental model,
+ * student profile, study plan, and recent wins/struggles so the companion
+ * can talk to the student as a specific human — not a generic "Teman".
+ *
+ * The shape here maps directly onto the placeholders in the system prompt;
+ * each field is a short, emotion-aware phrase (not a raw data dump).
+ */
+interface CompanionPersonalContext {
+  emotional_snapshot: string;      // "agak frustrasi, butuh ditenangkan" / "lagi pede" / "netral"
+  recent_wins: string;             // "streak 8 benar berturut-turut" / "udah kuasai conditionals"
+  recent_struggles: string;        // "masih bingung dengan passive voice" / "3x salah berturut-turut"
+  journey: string;                 // "target IELTS 7.0 Des 2026, lagi ngerjain reading inference"
+  goal_reminder: string;           // one-liner for GPT to use IF the moment is right
+  adaptive_mode: 'validate' | 'celebrate' | 'reconnect' | 'normal'; // drives tone shift
+}
+
+async function buildCompanionContext(
+  env: Env,
+  userId: number,
+  targetTest: string,
+): Promise<CompanionPersonalContext> {
+  // Best-effort pulls — any subsystem failure degrades gracefully to empty
+  // strings so we never block an outreach on missing profile data.
+  let profile: any = null;
+  try {
+    profile = await env.DB.prepare(
+      `SELECT frustration_score, confidence_score, engagement_level,
+              consecutive_correct, consecutive_wrong, longest_correct_streak,
+              current_topic, topics_in_progress, topics_completed,
+              study_goal, target_band_score, learning_pace
+         FROM student_profiles WHERE user_id = ?`
+    ).bind(userId).first();
+  } catch {}
+
+  let studyPlan: any = null;
+  try {
+    studyPlan = await env.DB.prepare(
+      `SELECT target_date FROM study_plans
+        WHERE user_id = ? AND status = 'active' LIMIT 1`
+    ).bind(userId).first();
+  } catch {}
+
+  // Mental-model highlights: top misconception + top mastered concept.
+  let topMisconception: string | null = null;
+  let topMastered: string | null = null;
+  try {
+    const mis = await env.DB.prepare(
+      `SELECT concept FROM student_mental_model
+        WHERE user_id = ? AND believed_understanding = 'misconception'
+        ORDER BY times_assessed DESC LIMIT 1`
+    ).bind(userId).first() as any;
+    topMisconception = mis?.concept || null;
+
+    const mas = await env.DB.prepare(
+      `SELECT concept FROM student_mental_model
+        WHERE user_id = ? AND believed_understanding IN ('mastered', 'solid')
+        ORDER BY confidence DESC LIMIT 1`
+    ).bind(userId).first() as any;
+    topMastered = mas?.concept || null;
+  } catch {}
+
+  const frustration = Number(profile?.frustration_score || 0);
+  const confidence = Number(profile?.confidence_score || 0.5);
+  const engagement = String(profile?.engagement_level || 'moderate');
+  const consecCorrect = Number(profile?.consecutive_correct || 0);
+  const consecWrong = Number(profile?.consecutive_wrong || 0);
+  const longestStreak = Number(profile?.longest_correct_streak || 0);
+  const currentTopic = profile?.current_topic || null;
+  const studyGoal = profile?.study_goal || null;
+  const targetBand = profile?.target_band_score ? Number(profile.target_band_score) : null;
+  const targetDate = studyPlan?.target_date || null;
+
+  // ── emotional_snapshot: what's the emotional weather right now? ──
+  let emotional_snapshot: string;
+  let adaptive_mode: CompanionPersonalContext['adaptive_mode'];
+  if (frustration >= 0.55 || consecWrong >= 3) {
+    emotional_snapshot = 'lagi agak frustrasi atau struggling — butuh divalidasi, bukan didorong';
+    adaptive_mode = 'validate';
+  } else if (confidence >= 0.7 || consecCorrect >= 5) {
+    emotional_snapshot = 'lagi pede / on a roll — boleh dirayain achievement-nya';
+    adaptive_mode = 'celebrate';
+  } else if (engagement === 'low') {
+    emotional_snapshot = 'engagement lagi rendah — pelan-pelan, reconnect dulu sebelum apa-apa';
+    adaptive_mode = 'reconnect';
+  } else {
+    emotional_snapshot = 'netral — santai aja, ikuti mood mereka';
+    adaptive_mode = 'normal';
+  }
+
+  // ── recent_wins: something specific + real to reference ──
+  const winParts: string[] = [];
+  if (longestStreak >= 5) winParts.push(`streak terbaiknya ${longestStreak} jawaban benar berturut-turut`);
+  if (topMastered) winParts.push(`udah kuasai ${humanizeConcept(topMastered)}`);
+  if (consecCorrect >= 3) winParts.push(`lagi ${consecCorrect} benar berturut-turut`);
+  const recent_wins = winParts.length > 0 ? winParts.join('; ') : 'belum banyak achievement nyata yang tercatat';
+
+  // ── recent_struggles: what's hard right now (don't lecture, just know) ──
+  const struggleParts: string[] = [];
+  if (consecWrong >= 3) struggleParts.push(`${consecWrong}x salah berturut-turut terakhir ini`);
+  if (topMisconception) struggleParts.push(`masih bingung dengan ${humanizeConcept(topMisconception)}`);
+  if (frustration >= 0.5) struggleParts.push('frustration-nya mulai naik');
+  const recent_struggles = struggleParts.length > 0 ? struggleParts.join('; ') : 'nggak ada red flag khusus';
+
+  // ── journey: where are they heading? ──
+  const journeyParts: string[] = [];
+  if (targetBand) journeyParts.push(`target ${targetTest} ${targetBand}`);
+  else journeyParts.push(`target ${targetTest}`);
+  if (targetDate) {
+    const daysToGo = Math.round((new Date(targetDate).getTime() - Date.now()) / 86400000);
+    if (daysToGo >= 0 && daysToGo <= 120) journeyParts.push(`tinggal ${daysToGo} hari`);
+  }
+  if (currentTopic) journeyParts.push(`lagi ngerjain ${humanizeConcept(currentTopic)}`);
+  const journey = journeyParts.join(', ');
+
+  // ── goal_reminder: one sentence to use only when moment is right ──
+  let goal_reminder: string;
+  if (studyGoal) {
+    goal_reminder = `Dia mulai belajar karena pengen ${studyGoal}. Pakai ini HANYA kalau mereka udah siap bicarain study, jangan buka pake ini.`;
+  } else if (targetBand && targetDate) {
+    goal_reminder = `Target ${targetTest} ${targetBand} di ${targetDate}. Pakai sebagai pengingat lembut HANYA kalau mood sudah stabil.`;
+  } else {
+    goal_reminder = 'belum ada goal spesifik yang tercatat';
+  }
+
+  return {
+    emotional_snapshot,
+    recent_wins,
+    recent_struggles,
+    journey,
+    goal_reminder,
+    adaptive_mode,
+  };
+}
+
+/**
+ * Convert a skill_tag / concept like "present_perfect_vs_past_simple" into
+ * human-readable "present perfect vs past simple".
+ */
+function humanizeConcept(concept: string): string {
+  return concept.replace(/_/g, ' ').trim();
+}
+
 // ─────────────────── Emotional Message Tracking ───────────────────
 
 /**
@@ -59,11 +204,51 @@ KONTEKS SISWA:
 Nama: {name}
 Target tes: {target_test}
 Level: {level}
-Progress: {progress_summary}
+Progress angka: {progress_summary}
 Idle: {idle_days} hari nggak aktif
 Waktu sekarang: {current_time} WIB ({time_period})
 Hari: {day_name}
 Percakapan terakhir: {last_conversation_summary}
+
+MENTAL MODEL & EMOTIONAL STATE (INI YANG BIKIN KAMU BEDA DARI AI BIASA):
+Emotional snapshot: {emotional_snapshot}
+Recent wins (fakta beneran — boleh dirayain): {recent_wins}
+Recent struggles (jangan ungkit duluan — cuma buat kamu tau konteks): {recent_struggles}
+Journey mereka: {journey}
+Goal reminder: {goal_reminder}
+
+CARA PAKAI KONTEKS INI (SUPER PENTING):
+Adaptive mode: {adaptive_mode}
+
+- Kalau mode = "validate" (frustrated / struggling):
+  → FOKUS: validasi perasaan, tanya kabar non-akademik, jangan sama sekali singgung
+    soal studi, recent_struggles, atau goal mereka.
+  → "Capek ya? Wajar banget. Apa yang bikin berat?"
+  → JANGAN: "Yuk semangat!" / "Kamu bisa!" — itu dismissive waktu orang lagi down.
+
+- Kalau mode = "celebrate" (lagi on a roll):
+  → FOKUS: sebut SPESIFIK achievement dari recent_wins di atas sebagai opener/bridge.
+  → "Eh btw aku liat streak kamu keren banget — {recent_wins_contextual}. Lagi feeling bagus?"
+  → Natural celebration, bukan lebay. 1 emoji max.
+
+- Kalau mode = "reconnect" (engagement rendah):
+  → FOKUS: percakapan santai dulu, jangan langsung ke materi. Tanya kehidupan
+    sehari-hari dulu. Baru setelah mereka responsive baru boleh pancing.
+  → "Lama nggak ngobrol ya. Lagi sibuk apa belakangan?"
+
+- Kalau mode = "normal":
+  → Biasa aja. Ikuti mood mereka.
+
+JANGAN PERNAH:
+- Sebut data mental model secara mentah (contoh: "aku liat kamu masih 0.3 di passive voice")
+- Bikin mereka merasa di-surveillance. Gunakan data sebagai BAHAN bicara, bukan LAPORAN.
+- Bahas recent_struggles duluan — tunggu mereka yang buka topik dulu.
+
+PAKAI MENTAL MODEL UNTUK:
+- Tau KONTEKS tanpa pamerin datanya
+- Kalau mereka bilang "aku frustrasi", kamu udah tau SEBELUMNYA memang lagi struggling → respon nyambung
+- Kalau mereka cerita win kecil, kamu bisa nyambungin ke streak atau mastered concept mereka
+- Kalau mereka tanya "gimana progress gue?", baru kamu boleh sebut angka + 1 spesifik win
 
 ATURAN UTAMA:
 1. DENGARKAN DULU. Jangan langsung ajak belajar.
@@ -300,6 +485,14 @@ export async function findIdleStudents(env: Env): Promise<{
  * Generate a Tier 1 gentle nudge — a fun micro-question, not a lecture.
  */
 export async function generateTier1Nudge(env: Env, userId: number, name: string): Promise<string> {
+  // Pull the same rich context the conversation engine uses. If they're
+  // already frustrated or have a low-engagement signal, DON'T open with a
+  // micro-challenge — that'd make them feel pushed. Go straight to warmth.
+  const personal = await buildCompanionContext(env, userId, 'English Test');
+  if (personal.adaptive_mode === 'validate' || personal.adaptive_mode === 'reconnect') {
+    return warmTier1Greeting(name, personal);
+  }
+
   // Grab a question from their weakest skill area. Entire DB section is
   // best-effort — any failure (missing column, no data) falls through to
   // the warm greeting fallback below instead of surfacing as an outreach
@@ -357,8 +550,28 @@ export async function generateTier1Nudge(env: Env, userId: number, name: string)
     console.error('tier1 question query failed:', e);
   }
 
-  // Fallback: warm ping with time awareness
+  // Fallback: warm ping with time awareness + celebration if on a roll
+  return warmTier1Greeting(name, personal);
+}
+
+/**
+ * Warm time-aware greeting for Tier 1 — used when we opt out of the
+ * micro-challenge path (student is frustrated, disengaged, or we couldn't
+ * fetch a question). In "celebrate" mode we lead with the specific
+ * achievement we actually know about (from the mental model + profile).
+ */
+function warmTier1Greeting(name: string, personal: CompanionPersonalContext): string {
   const { period, dayName } = getWIBTime();
+
+  // Celebration opener beats generic greeting — reference a real win.
+  if (personal.adaptive_mode === 'celebrate' && personal.recent_wins && !personal.recent_wins.startsWith('belum')) {
+    const celebrations = [
+      `Hei ${name}! 🎉 Aku liat ${personal.recent_wins} — keren banget! Gimana rasanya?`,
+      `${name}! Btw aku notice ${personal.recent_wins}. Lagi feeling bagus ya? 😊`,
+    ];
+    return celebrations[Math.floor(Math.random() * celebrations.length)];
+  }
+
   const timeGreetings: Record<string, string[]> = {
     'pagi': [
       `Pagi ${name}! ☀️ Udah sarapan belum? Btw, gimana kabarnya?`,
@@ -391,11 +604,42 @@ export async function generateTier1Nudge(env: Env, userId: number, name: string)
 
 /**
  * Generate a Tier 2 check-in — empathetic open-ended conversation starter.
+ * Now async so we can shade the opener by the student's current emotional
+ * state: if frustration is elevated we lead with pure validation; if they
+ * left off on a high we reference it (not the idle duration, which would
+ * feel accusatory when we already know they were doing well).
  */
-export function generateTier2CheckIn(name: string, idleDays: number): string {
+export async function generateTier2CheckIn(
+  env: Env,
+  userId: number,
+  name: string,
+  idleDays: number,
+): Promise<string> {
   const { period, dayName } = getWIBTime();
+  const personal = await buildCompanionContext(env, userId, 'English Test').catch(() => null);
 
-  // Time-aware openers with daily-life touch
+  // If they were struggling when they went quiet, lead with validation —
+  // skip the "udah X hari" framing entirely because it reads as nagging
+  // when someone's already overwhelmed.
+  if (personal?.adaptive_mode === 'validate') {
+    const validateOpeners = [
+      `Hei ${name}, aku kepikiran kamu. Nggak usah dipaksain belajar dulu — gimana kabarnya? Lagi banyak pikiran? 💙`,
+      `${name}, aku di sini ya. Belakangan berat? Cerita aja kalau mau. Nggak perlu tentang belajar 🤗`,
+    ];
+    return validateOpeners[Math.floor(Math.random() * validateOpeners.length)];
+  }
+
+  // If they were on a roll, acknowledge the wins first — that's what makes
+  // the outreach feel like a friend, not a system.
+  if (personal?.adaptive_mode === 'celebrate' && personal.recent_wins && !personal.recent_wins.startsWith('belum')) {
+    const celebrateOpeners = [
+      `Hei ${name}! Waktu terakhir ngobrol kamu lagi on fire — ${personal.recent_wins}. Gimana kabarnya sekarang? 😊`,
+      `${name}! Aku masih inget ${personal.recent_wins} waktu itu. Lagi apa nih? Cerita dong 🤗`,
+    ];
+    return celebrateOpeners[Math.floor(Math.random() * celebrateOpeners.length)];
+  }
+
+  // Default: time-aware opener with daily-life touch (unchanged behavior).
   const openers: string[] = [];
 
   if (period === 'pagi' || period === 'siang') {
@@ -415,7 +659,6 @@ export function generateTier2CheckIn(name: string, idleDays: number): string {
     );
   }
 
-  // Add weekend-specific option
   if (dayName === 'Sabtu' || dayName === 'Minggu') {
     openers.push(`${name}! Weekend nih. Lagi santai atau malah sibuk? Udah ${idleDays} hari nggak ngobrol — aku kangen lho 😊`);
   }
@@ -424,7 +667,10 @@ export function generateTier2CheckIn(name: string, idleDays: number): string {
 }
 
 /**
- * Generate a Tier 3 win-back — personalised with progress data + gentle CTA.
+ * Generate a Tier 3 win-back — the 7+ days idle outreach. Lean heavily on
+ * the student's personal journey: if we know a specific skill they mastered,
+ * a streak they hit, or a goal they set, we reference it so the message
+ * reads like "your friend who remembers" — not "an app with your numbers".
  */
 export async function generateTier3WinBack(env: Env, userId: number, name: string, idleDays: number): Promise<string> {
   // Get progress data for personalisation
@@ -442,20 +688,49 @@ export async function generateTier3WinBack(env: Env, userId: number, name: strin
     ? Math.round((stats.correct / stats.total_answers) * 100)
     : null;
 
-  // Get their target info
-  const user = await env.DB.prepare('SELECT target_test, proficiency_level FROM users WHERE id = ?')
-    .bind(userId).first() as any;
+  // Pull user + personal context. If they were struggling when they left,
+  // we should NOT open with "akurasi 47%" — that reads as rubbing it in.
+  const user = await env.DB.prepare(
+    'SELECT target_test, proficiency_level FROM users WHERE id = ?'
+  ).bind(userId).first() as any;
   const target = user?.target_test?.replace('_', ' ') || 'English test';
+  const personal = await buildCompanionContext(env, userId, target).catch(() => null);
 
-  if (accuracy !== null && stats.total_answers > 10) {
+  // Path A: "validate" mode — they were clearly having a hard time. Pure
+  // empathy, no numbers, no bridge. Door stays open.
+  if (personal?.adaptive_mode === 'validate') {
     const messages = [
-      `Hei ${name}! 💙\n\nUdah ${idleDays} hari nih. Aku liat data kamu — akurasi ${accuracy}% dari ${stats.total_answers} soal. Itu bagus lho!\n\nMau ngobrol dulu? Atau kalau mau langsung coba 5 menit, aku siapin soal ringan aja 😊`,
-      `${name}! Lama nggak ketemu.\n\nBtw, kamu udah jawab ${stats.total_answers} soal dengan akurasi ${accuracy}%. Progress kamu nyata lho.\n\nGimana kabarnya? Mau cerita atau langsung latihan ringan? 🤗`,
+      `Hei ${name}... udah ${idleDays} hari nih. Aku nggak mau maksa, cuma mau bilang kalau kamu lagi berat, itu bukan kegagalan. Kapan-kapan kalau mau cerita, aku di sini. 💙`,
+      `${name}. Aku kangen ngobrol sama kamu. Tapi nggak usah soal belajar dulu — gimana kabarnya? Kamu baik-baik aja? 🤗`,
     ];
     return messages[Math.floor(Math.random() * messages.length)];
   }
 
-  // No progress data — pure empathy
+  // Path B: we know a specific win worth naming. This is the magic moment
+  // where the companion sounds like it actually remembers the student.
+  const hasSpecificWin = personal?.recent_wins && !personal.recent_wins.startsWith('belum');
+  if (hasSpecificWin) {
+    const goalLine = personal!.journey && !personal!.journey.startsWith('target English Test,')
+      ? `Masih ${personal!.journey}, kan? `
+      : '';
+    const messages = [
+      `Hei ${name}! 💙\n\n${idleDays} hari nggak ngobrol, tapi aku masih inget — ${personal!.recent_wins}. Itu real achievement lho.\n\n${goalLine}Gimana kabarnya sekarang? Mau ngobrol dulu atau langsung ngulik ringan?`,
+      `${name}! Lama banget nggak ketemu.\n\nAku masih inget kamu ${personal!.recent_wins} waktu itu — bukan fluke, itu beneran progress. ${goalLine}Cerita dong, gimana belakangan? 🤗`,
+    ];
+    return messages[Math.floor(Math.random() * messages.length)];
+  }
+
+  // Path C: stats but no named win. Softer framing with accuracy as context,
+  // not scoreboard. Still invites conversation first.
+  if (accuracy !== null && stats.total_answers > 10) {
+    const messages = [
+      `Hei ${name}! 💙\n\nUdah ${idleDays} hari nih. Aku buka lagi histori kita — kamu udah jawab ${stats.total_answers} soal dan ${accuracy}% bener. Itu effort beneran.\n\nMau ngobrol dulu? Atau kalau mau langsung coba 5 menit santai, aku siapin soal ringan 😊`,
+      `${name}! Lama nggak ketemu.\n\n${stats.total_answers} soal, akurasi ${accuracy}% — itu bukan angka kecil. Progress-mu ada.\n\nGimana kabarnya? Mau cerita atau langsung latihan ringan? 🤗`,
+    ];
+    return messages[Math.floor(Math.random() * messages.length)];
+  }
+
+  // Path D: no data at all — pure empathy.
   const messages = [
     `Hei ${name}! Udah ${idleDays} hari nih. Aku cuma mau bilang — nggak apa-apa istirahat. Kalau kamu siap balik, aku di sini. Mau ngobrol dulu? 💙`,
     `${name}! Lama nggak ada kabar. Gimana kabarnya? Aku nggak mau nge-push, cuma pengen tau kamu baik-baik aja 🤗`,
@@ -546,6 +821,11 @@ export async function handleCompanionReply(
   const { TEST_NAMES } = await import('./teaching');
   const targetTest = TEST_NAMES[user.target_test || 'TOEFL_IBT'] || 'English Test';
 
+  // Rich personal context (mental model + profile + study plan) — this is
+  // what lifts the companion from generic-warm-chatbot to "this AI actually
+  // remembers me". Falls back to neutral values if any subsystem is empty.
+  const personal = await buildCompanionContext(env, user.id, targetTest);
+
   const systemPrompt = COMPANION_SYSTEM_PROMPT
     .replaceAll('{name}', user.name || 'Teman')
     .replaceAll('{target_test}', targetTest)
@@ -555,7 +835,14 @@ export async function handleCompanionReply(
     .replaceAll('{current_time}', timeStr)
     .replaceAll('{time_period}', period)
     .replaceAll('{day_name}', dayName)
-    .replaceAll('{last_conversation_summary}', lastConvSummary);
+    .replaceAll('{last_conversation_summary}', lastConvSummary)
+    .replaceAll('{emotional_snapshot}', personal.emotional_snapshot)
+    .replaceAll('{recent_wins}', personal.recent_wins)
+    .replaceAll('{recent_wins_contextual}', personal.recent_wins)
+    .replaceAll('{recent_struggles}', personal.recent_struggles)
+    .replaceAll('{journey}', personal.journey)
+    .replaceAll('{goal_reminder}', personal.goal_reminder)
+    .replaceAll('{adaptive_mode}', personal.adaptive_mode);
 
   // Call GPT. Log non-OK responses and API-level errors so silent degradation
   // (invalid key, rate limit, quota exhausted) shows up in logs instead of
@@ -854,7 +1141,7 @@ export async function runCompanionOutreach(env: Env): Promise<{
     // Tier 2 — empathetic check-in (limit 15/day)
     for (const student of idle.tier2.slice(0, 15)) {
       try {
-        const message = generateTier2CheckIn(student.name, student.idle_days);
+        const message = await generateTier2CheckIn(env, student.user_id, student.name, student.idle_days);
         await startCompanionConversation(env, student.user_id, 2, message);
 
         const delivered = await sendCompanionMessage(env, student.telegram_id, {
