@@ -11,14 +11,32 @@ import { ttsRoutes } from './routes/tts';
 import { classRoutes } from './routes/classes';
 import { speakingRoutes } from './routes/speaking';
 import { aiGenRoutes } from './routes/ai-generate';
+import { tutorRoutes } from './routes/tutor';
 import { writingRoutes } from './routes/writing';
+import { gameRoutes } from './routes/games';
+import { certificateRoutes } from './routes/certificates';
 import { analyticsRoutes } from './routes/analytics';
 import { channelAnalyticsRoutes } from './routes/channel-analytics';
 import { premiumRoutes } from './routes/premium';
 import { handbookRoutes } from './routes/handbook';
 import { weaknessRoutes } from './routes/weakness';
 import { adminApiRoutes } from './routes/admin-api';
+import { contentReportsRoutes } from './routes/content-reports';
+import { anomaliesRoutes } from './routes/anomalies';
+import { runAnomalyDetection } from './services/anomaly-detector';
+import { runItemAnalysis } from './services/item-analyzer';
+import { auditRoutes } from './routes/audit';
+import { visualRoutes } from './routes/visual';
+import { runContentAudit } from './services/content-auditor';
+import { runAiQualitySampler } from './services/ai-quality-sampler';
+import { calibrationRoutes } from './routes/calibration';
+import { computeCalibration } from './services/calibration';
+import { runRetestReliability } from './services/retest-reliability';
+import { runWhisperQa } from './services/whisper-qa';
+import { runSloSnapshot } from './services/op-slo';
 import { handleNotionSync, handleNotionWeeklySync } from './services/notion-sync';
+import { resolveWeeklyLeagues } from './services/leagues';
+import { recalibrateItems } from './services/irt-engine';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -33,17 +51,28 @@ app.onError((err, c) => {
   }, 500);
 });
 
-// CORS
+// CORS — restrict browser origins to the known mini app + localhost. External
+// API clients (server-to-server) don't send Origin at all, so they bypass the
+// browser's CORS enforcement anyway; we only need to whitelist origins that
+// browsers will actually send. Previously this fell back to echoing any
+// origin, which defeated the point of the allowlist.
 app.use('/api/*', cors({
   origin: (origin, c) => {
+    if (!origin) return ''; // non-browser / server-to-server — no CORS headers needed
     const allowed = [
       c.env.WEBAPP_URL,
+      'https://edubot-webapp.pages.dev',
       'http://localhost:5173',
       'http://localhost:3000',
-    ];
-    // Allow listed origins, or any origin if using API key auth (external apps)
+    ].filter(Boolean);
     if (allowed.includes(origin)) return origin;
-    return origin || '*'; // Allow external API clients
+    // Trust any *.pages.dev preview for the edubot-webapp project — Cloudflare
+    // generates per-deploy preview URLs that we can't enumerate ahead of time.
+    if (/^https:\/\/[a-z0-9-]+\.edubot-webapp\.pages\.dev$/.test(origin)) return origin;
+    // Admin API clients authenticating via X-API-Key are server-side, so a
+    // CORS reflection isn't strictly required; return '' to block the browser
+    // preflight and rely on the explicit API key check in the route handlers.
+    return '';
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization', 'X-Telegram-User-Id', 'x-admin-secret', 'X-API-Key'],
@@ -335,12 +364,20 @@ app.route('/api/classes', classRoutes);
 app.route('/api/speaking', speakingRoutes);
 app.route('/api/ai-generate', aiGenRoutes);
 app.route('/api/writing', writingRoutes);
+app.route('/api/games', gameRoutes);
+app.route('/api/certificates', certificateRoutes);
 app.route('/api/analytics', analyticsRoutes);
 app.route('/api/channel-analytics', channelAnalyticsRoutes);
 app.route('/api/weakness', weaknessRoutes);
 app.route('/api/premium', premiumRoutes);
 app.route('/api/handbook', handbookRoutes);
+app.route('/api/tutor', tutorRoutes);
 app.route('/api/v1/admin', adminApiRoutes);
+app.route('/api/content-reports', contentReportsRoutes);
+app.route('/api/anomalies', anomaliesRoutes);
+app.route('/api/audit', auditRoutes);
+app.route('/api/visual', visualRoutes);
+app.route('/api/calibration', calibrationRoutes);
 
 // Lightweight content-issue report endpoint — used by the in-test "🚩 Lapor"
 // button. Writes to error_logs (source='client', error_type='content_report')
@@ -645,6 +682,59 @@ async function handleCron(env: Env) {
         }),
       });
     }
+    // Emotional intelligence: exam countdown + monthly milestones
+    try {
+      const { getExamCountdownMessage, checkMonthlyMilestone } = await import('./services/companion');
+
+      // Exam countdown for students with upcoming test dates
+      const studentsWithExams = await env.DB.prepare(`
+        SELECT u.id, u.telegram_id, u.name, sp.target_date
+        FROM users u JOIN study_plans sp ON u.id = sp.user_id
+        WHERE sp.status = 'active' AND sp.target_date IS NOT NULL
+        AND sp.target_date >= date('now')
+        AND sp.target_date <= date('now', '+7 days')
+      `).all();
+
+      for (const s of studentsWithExams.results as any[]) {
+        try {
+          const daysUntil = Math.round((new Date(s.target_date).getTime() - Date.now()) / 86400000);
+          const msg = await getExamCountdownMessage(env, s.id, s.name || 'Teman', daysUntil);
+          if (msg) {
+            const tgId = parseInt(String(s.telegram_id).replace('.0', ''));
+            await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: tgId, text: msg }),
+            });
+          }
+        } catch (e) { console.error('Exam countdown error:', e); }
+      }
+
+      // Monthly milestones — check active users
+      const activeUsers = await env.DB.prepare(`
+        SELECT id, telegram_id, name FROM users
+        WHERE onboarding_complete = 1
+        AND id IN (SELECT DISTINCT user_id FROM conversation_messages WHERE created_at > datetime('now', '-60 days'))
+        LIMIT 100
+      `).all();
+
+      for (const u of activeUsers.results as any[]) {
+        try {
+          const msg = await checkMonthlyMilestone(env, u.id, u.name || 'Teman');
+          if (msg) {
+            const tgId = parseInt(String(u.telegram_id).replace('.0', ''));
+            await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: tgId, text: msg }),
+            });
+          }
+        } catch (e) { console.error('Monthly milestone error:', e); }
+      }
+    } catch (e) {
+      console.error('Emotional cron error:', e);
+    }
+
     // Post daily quiz to class groups
     try {
       const { postDailyQuiz, postDiscussionPrompt } = await import('./services/classroom');
@@ -888,6 +978,217 @@ async function handleTrialExpiryPush(env: Env) {
   }
 }
 
+/**
+ * Daily error digest — runs once per day at morning cron. Summarizes the last
+ * 24h of error_logs, grouped by error_type + source, and pings admins.
+ */
+async function handleErrorDigestCron(env: Env) {
+  try {
+    const summary = await env.DB.prepare(
+      `SELECT source, error_type, COUNT(*) as count,
+              MAX(created_at) as last_seen,
+              MIN(message) as sample_message
+       FROM error_logs
+       WHERE created_at > datetime('now', '-24 hours')
+       GROUP BY source, error_type
+       ORDER BY count DESC
+       LIMIT 15`
+    ).all() as any;
+
+    const total = await env.DB.prepare(
+      `SELECT COUNT(*) as c FROM error_logs WHERE created_at > datetime('now', '-24 hours')`
+    ).first() as any;
+
+    if (!summary.results || summary.results.length === 0) {
+      // All quiet — skip notification to avoid alert fatigue
+      return;
+    }
+
+    let msg = `📋 *Daily Error Digest* (24h)\n\n`;
+    msg += `Total errors: *${total?.c || 0}*\n\n`;
+    msg += `Top error types:\n`;
+    for (const row of summary.results as any[]) {
+      const sample = ((row.sample_message || '').substring(0, 80)).replace(/[_*`]/g, '');
+      msg += `• [${row.source}] ${row.error_type} — ${row.count}x\n  _${sample}_\n`;
+    }
+    msg += `\nLihat detail di admin dashboard.`;
+
+    const admins = await env.DB.prepare(
+      "SELECT telegram_id FROM users WHERE role = 'admin'"
+    ).all();
+    for (const admin of (admins.results || []) as any[]) {
+      const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
+      if (!tgId) continue;
+      try {
+        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: tgId, text: msg, parse_mode: 'Markdown' }),
+        });
+      } catch {}
+    }
+  } catch (e) {
+    console.error('Error digest cron failed:', e);
+  }
+}
+
+/**
+ * Hourly 5xx spike detector — compare current hour's 5xx error count vs the
+ * trailing 7-day average for this hour. Alert admins if count > 3× baseline
+ * (and at least 5 errors so a single noisy hour doesn't page).
+ */
+async function handleErrorSpikeAlert(env: Env) {
+  try {
+    // Idempotency: at most one alert per hour per source/error_type combo
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS error_spike_alerts (
+         window_hour TEXT NOT NULL,
+         source TEXT NOT NULL,
+         alerted_at TEXT NOT NULL,
+         PRIMARY KEY (window_hour, source)
+       )`
+    ).run();
+
+    const windowHour = new Date().toISOString().slice(0, 13); // YYYY-MM-DDTHH
+
+    const recent = await env.DB.prepare(
+      `SELECT source, COUNT(*) as count
+       FROM error_logs
+       WHERE created_at > datetime('now', '-1 hour')
+         AND (error_type LIKE '5%' OR error_type = 'server_error' OR source = 'server')
+       GROUP BY source
+       HAVING count >= 5`
+    ).all() as any;
+
+    for (const row of (recent.results || []) as any[]) {
+      // Baseline: same hour-of-day across last 7 days
+      const baseline = await env.DB.prepare(
+        `SELECT COUNT(*) * 1.0 / 7 as avg
+         FROM error_logs
+         WHERE source = ?
+           AND created_at > datetime('now', '-8 days')
+           AND created_at < datetime('now', '-1 hour')
+           AND strftime('%H', created_at) = strftime('%H', 'now')
+           AND (error_type LIKE '5%' OR error_type = 'server_error' OR source = 'server')`
+      ).bind(row.source).first() as any;
+
+      const avg = Math.max(1, Number(baseline?.avg || 1));
+      if (row.count < 3 * avg) continue;
+
+      // Already alerted this window?
+      const already = await env.DB.prepare(
+        `SELECT 1 FROM error_spike_alerts WHERE window_hour = ? AND source = ?`
+      ).bind(windowHour, row.source).first();
+      if (already) continue;
+
+      const msg = `🚨 *5xx spike detected*\n\n` +
+        `Source: *${row.source}*\n` +
+        `Last hour: *${row.count}* errors\n` +
+        `Baseline (7d avg this hour): ~${avg.toFixed(1)}\n` +
+        `Ratio: ${(row.count / avg).toFixed(1)}×\n\n` +
+        `Check Cloudflare logs + error_logs table.`;
+
+      const admins = await env.DB.prepare(
+        "SELECT telegram_id FROM users WHERE role = 'admin'"
+      ).all();
+      for (const admin of (admins.results || []) as any[]) {
+        const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
+        if (!tgId) continue;
+        try {
+          await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: tgId, text: msg, parse_mode: 'Markdown' }),
+          });
+        } catch {}
+      }
+
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO error_spike_alerts (window_hour, source, alerted_at)
+         VALUES (?, ?, datetime('now'))`
+      ).bind(windowHour, row.source).run();
+    }
+  } catch (e) {
+    console.error('Error spike alert failed:', e);
+  }
+}
+
+/**
+ * Streak-loss warning push — runs hourly, but only fires in the last window of
+ * the WIB day (18:00–22:59 WIB = 11:00–15:59 UTC). If a user has a streak ≥ 2
+ * and hasn't studied today (WIB), nudge them once to come back before midnight.
+ */
+async function handleStreakWarningPush(env: Env) {
+  try {
+    // Only run in the WIB warning window
+    const nowUTC = new Date();
+    const utcHour = nowUTC.getUTCHours();
+    if (utcHour < 11 || utcHour > 15) return;
+
+    // Ensure tracking table exists
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS streak_warning_notifications (
+         user_id INTEGER NOT NULL,
+         wib_date TEXT NOT NULL,
+         notified_at TEXT NOT NULL,
+         PRIMARY KEY (user_id, wib_date)
+       )`
+    ).run();
+
+    // Current WIB date (YYYY-MM-DD)
+    const wibFmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+    const todayWIB = wibFmt.format(nowUTC);
+
+    // Users with streak >= 2 who haven't studied today WIB and haven't been warned today
+    const atRisk = await env.DB.prepare(
+      `SELECT u.id, u.telegram_id, u.name, u.current_streak, u.last_study_date
+       FROM users u
+       LEFT JOIN streak_warning_notifications n
+         ON n.user_id = u.id AND n.wib_date = ?
+       WHERE COALESCE(u.current_streak, 0) >= 2
+         AND COALESCE(u.last_study_date, '') != ?
+         AND n.user_id IS NULL
+         AND u.telegram_id IS NOT NULL
+       LIMIT 500`
+    ).bind(todayWIB, todayWIB).all();
+
+    for (const row of (atRisk.results || []) as any[]) {
+      const tgId = parseInt(String(row.telegram_id || '').replace('.0', ''));
+      if (!tgId) continue;
+
+      const streak = row.current_streak || 0;
+      const fire = streak >= 30 ? '🔥🔥🔥' : streak >= 7 ? '🔥🔥' : '🔥';
+
+      const text = `${fire} Hai ${row.name || 'kamu'}! Streak belajar kamu ${streak} hari lagi terancam putus.\n\n` +
+        `Cukup jawab 1 soal hari ini buat amanin. Tinggal ~${23 - (utcHour + 7)} jam sebelum reset jam 00:00 WIB.\n\n` +
+        `Ketik /review atau /today — 2 menit aja cukup.`;
+
+      try {
+        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: tgId,
+            text,
+          }),
+        });
+
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO streak_warning_notifications (user_id, wib_date, notified_at)
+           VALUES (?, ?, datetime('now'))`
+        ).bind(row.id, todayWIB).run();
+      } catch (e) {
+        console.error('Streak warning push per-user error:', e);
+      }
+    }
+  } catch (e) {
+    console.error('Streak warning push cron error:', e);
+  }
+}
+
 // Generate weekly report for teachers (class overview)
 async function generateTeacherWeeklyReport(env: Env): Promise<string> {
   const today = new Date();
@@ -997,6 +1298,16 @@ async function handleAbandonedAttemptCleanup(env: Env) {
 
     if (result.meta?.changes > 0) {
       console.log(`Marked ${result.meta.changes} test attempts as abandoned`);
+    }
+
+    // Also cleanup stale diagnostic sessions (in_progress older than 1 hour)
+    const diagResult = await env.DB.prepare(
+      `UPDATE diagnostic_sessions SET status = 'abandoned'
+       WHERE status = 'in_progress'
+       AND created_at < datetime('now', '-1 hour')`
+    ).run();
+    if (diagResult.meta?.changes > 0) {
+      console.log(`Marked ${diagResult.meta.changes} diagnostic sessions as abandoned`);
     }
   } catch (e) {
     console.error('Abandoned attempt cleanup error:', e);
@@ -1179,35 +1490,185 @@ async function handleContentHealthCheck(env: Env) {
   }
 }
 
+// Wrap any async task with a try/catch so a single cron handler's failure
+// can't take down siblings or leave errors unlogged. Each handleXxx() already
+// has its own try/catch, but this guards against edge cases (e.g. a promise
+// rejection before the handler's try block, or a future refactor that forgets
+// to add a wrapper inside a new handler).
+function safeTask(label: string, fn: () => Promise<unknown>): Promise<void> {
+  return (async () => {
+    try {
+      await fn();
+    } catch (e: any) {
+      console.error(`[cron:${label}] failed:`, e?.message || e);
+    }
+  })();
+}
+
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     // Check which cron triggered — explicit match for all patterns
     if (event.cron === '3 1 * * *') {
       // Morning cron (8:03 AM WIB) — study reminders + daily quiz + channel posts
-      ctx.waitUntil(handleCron(env));
+      ctx.waitUntil(safeTask('morning', () => handleCron(env)));
       // Also run daily integrity check
-      ctx.waitUntil(handleIntegrityCheck(env));
+      ctx.waitUntil(safeTask('integrity', () => handleIntegrityCheck(env)));
       // Daily content quality check
-      ctx.waitUntil(handleContentHealthCheck(env));
+      ctx.waitUntil(safeTask('content-health', () => handleContentHealthCheck(env)));
+      // Daily anomaly detection — flag content with low accuracy / high skip rate
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const r = await runAnomalyDetection(env, 30);
+            console.log('[anomaly-detector]', JSON.stringify(r));
+          } catch (e) {
+            console.error('[anomaly-detector] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
+      // Daily item analysis — detects mis-keyed MCQs via discrimination stats
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const r = await runItemAnalysis(env);
+            console.log('[item-analysis]', JSON.stringify(r));
+          } catch (e) {
+            console.error('[item-analysis] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
+      // Daily Whisper transcript QA — flag broken speaking transcripts
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const r = await runWhisperQa(env, { lookbackDays: 3, notes: 'daily cron' });
+            console.log('[whisper-qa]', JSON.stringify(r));
+          } catch (e) {
+            console.error('[whisper-qa] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
+      // Daily error digest for admins
+      ctx.waitUntil(safeTask('error-digest', () => handleErrorDigestCron(env)));
       // Notion daily sync — students only (attempts run at evening cron)
-      ctx.waitUntil(handleNotionSync(env, 'students'));
+      ctx.waitUntil(safeTask('notion-students', () => handleNotionSync(env, 'students')));
     } else if (event.cron === '7 1 * * 1') {
       // Monday weekly leaderboard (8:07 AM WIB)
-      ctx.waitUntil(handleWeeklyCron(env));
+      ctx.waitUntil(safeTask('weekly', () => handleWeeklyCron(env)));
       // Notion weekly reports sync
-      ctx.waitUntil(handleNotionWeeklySync(env));
+      ctx.waitUntil(safeTask('notion-weekly', () => handleNotionWeeklySync(env)));
+      // Weekly full content audit — scans every published row via validator
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const r = await runContentAudit(env, { notes: 'weekly cron' });
+            console.log('[content-audit]', JSON.stringify({
+              run_id: r.run_id, scanned: r.scanned, errors: r.errors,
+              warnings: r.warnings, duration_ms: r.duration_ms,
+            }));
+          } catch (e) {
+            console.error('[content-audit] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
+      // Weekly AI quality sampler (50 items, ~$0.003)
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const r = await runAiQualitySampler(env, { sampleSize: 50, notes: 'weekly cron' });
+            console.log('[ai-quality]', JSON.stringify({
+              run_id: r.run_id, scored: r.scored, failed: r.failed,
+              avg_overall: r.avg_overall, fail_count: r.fail_count,
+              cost_usd: r.total_cost_usd, duration_ms: r.duration_ms,
+            }));
+          } catch (e) {
+            console.error('[ai-quality] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
+      // Weekly calibration snapshot — compares bot prediction vs. real test scores
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const snaps = await computeCalibration(env);
+            console.log('[calibration]', JSON.stringify({ snapshots: snaps.length, types: snaps.map((s) => s.test_type) }));
+          } catch (e) {
+            console.error('[calibration] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
+      // Weekly test-retest reliability
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const r = await runRetestReliability(env, 7 * 24);
+            console.log('[retest-reliability]', JSON.stringify(r));
+          } catch (e) {
+            console.error('[retest-reliability] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
+      // Weekly league resolution — promote/demote based on weekly XP
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const r = await resolveWeeklyLeagues(env);
+            console.log('[leagues]', JSON.stringify(r));
+          } catch (e) {
+            console.error('[leagues] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
+      // Weekly IRT item recalibration — update difficulty/discrimination from response data
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const r = await recalibrateItems(env.DB);
+            console.log('[irt-recalibrate]', JSON.stringify(r));
+          } catch (e) {
+            console.error('[irt-recalibrate] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
     } else if (event.cron === '0 11 * * *') {
       // Evening channel post (6 PM WIB = 11 AM UTC)
-      ctx.waitUntil(handleEveningCron(env));
+      ctx.waitUntil(safeTask('evening', () => handleEveningCron(env)));
       // Notion attempts sync (separate from students to stay under subrequest limit)
-      ctx.waitUntil(handleNotionSync(env, 'attempts'));
+      ctx.waitUntil(safeTask('notion-attempts', () => handleNotionSync(env, 'attempts')));
+      // Companion outreach — proactive re-engagement for idle students (6 PM is prime time)
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const { runCompanionOutreach } = await import('./services/companion');
+            const r = await runCompanionOutreach(env);
+            console.log('[companion]', JSON.stringify(r));
+          } catch (e) {
+            console.error('[companion] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
     } else if (event.cron === '30 * * * *') {
       // Hourly — channel content rotation + cancel expired payments + cleanup abandoned attempts + trial expiry nudge
-      ctx.waitUntil(handleHourlyChannelCron(env));
-      ctx.waitUntil(handlePaymentExpiryCron(env));
-      ctx.waitUntil(handleAbandonedAttemptCleanup(env));
-      ctx.waitUntil(handleTrialExpiryPush(env));
+      ctx.waitUntil(safeTask('hourly-channel', () => handleHourlyChannelCron(env)));
+      ctx.waitUntil(safeTask('payment-expiry', () => handlePaymentExpiryCron(env)));
+      ctx.waitUntil(safeTask('abandoned-attempts', () => handleAbandonedAttemptCleanup(env)));
+      ctx.waitUntil(safeTask('trial-expiry', () => handleTrialExpiryPush(env)));
+      ctx.waitUntil(safeTask('streak-warning', () => handleStreakWarningPush(env)));
+      ctx.waitUntil(safeTask('error-spike', () => handleErrorSpikeAlert(env)));
+      // Hourly operational SLO snapshot — fires alerts on error spikes
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const r = await runSloSnapshot(env);
+            if (r.alerts_fired.length || r.alerts_resolved.length) {
+              console.log('[slo]', JSON.stringify(r));
+            }
+          } catch (e) {
+            console.error('[slo] failed:', (e as any)?.message || e);
+          }
+        })(),
+      );
     } else {
       console.warn(`Unknown cron pattern: ${event.cron}`);
     }

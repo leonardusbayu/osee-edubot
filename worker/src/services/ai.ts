@@ -130,16 +130,26 @@ export async function getTutorResponse(
     return 'AI tutoring is not configured. Set OPENAI_API_KEY.';
   }
 
-  // Load recent conversation
+  // Load recent conversation. Cap at 10 messages AND ~3000 tokens (~12k chars)
+  // to prevent unbounded prompt growth from runaway conversations.
   const history = await env.DB.prepare(
     'SELECT role, content FROM conversation_messages WHERE user_id = ? ORDER BY created_at DESC LIMIT 10'
   ).bind(user.id).all();
 
+  const TOKEN_BUDGET_CHARS = 12000; // ~3000 tokens at 4 chars/token
   const messages: { role: string; content: string }[] = [];
   if (history.results) {
-    for (const msg of [...history.results].reverse()) {
-      messages.push({ role: msg.role as string, content: msg.content as string });
+    // Walk newest→oldest, keep until budget exhausted, then reverse for chronological order
+    let budgetUsed = message.length;
+    const kept: { role: string; content: string }[] = [];
+    for (const msg of history.results) {
+      const content = (msg.content as string) || '';
+      if (budgetUsed + content.length > TOKEN_BUDGET_CHARS) break;
+      budgetUsed += content.length;
+      kept.push({ role: msg.role as string, content });
     }
+    kept.reverse();
+    messages.push(...kept);
   }
   messages.push({ role: 'user', content: message });
 

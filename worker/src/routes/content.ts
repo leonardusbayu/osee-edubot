@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types';
 import { getAuthUser } from '../services/auth';
+import { validateContent } from '../services/content-validator';
 
 export const contentRoutes = new Hono<{ Bindings: Env }>();
 
@@ -44,6 +45,21 @@ contentRoutes.post('/', async (c) => {
   const user = await getAuthUser(c.req.raw, c.env);
   const body = await c.req.json();
 
+  // Validate before insert — block on errors, return warnings to client
+  const { errors, warnings } = validateContent(
+    {
+      section: body.section,
+      question_type: body.question_type,
+      content: body.content,
+      media_url: body.media_url,
+      title: body.title,
+    },
+    { mode: 'draft' },
+  );
+  if (errors.length > 0) {
+    return c.json({ error: 'Validation failed', errors, warnings }, 400);
+  }
+
   await c.env.DB.prepare(
     `INSERT INTO test_contents (test_type, section, question_type, title, content, media_url, difficulty, topic, source, status, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'curated', 'draft', ?)`
@@ -54,12 +70,26 @@ contentRoutes.post('/', async (c) => {
     user.id,
   ).run();
 
-  return c.json({ status: 'created' }, 201);
+  return c.json({ status: 'created', warnings: warnings.length > 0 ? warnings : undefined }, 201);
 });
 
 contentRoutes.put('/:id', async (c) => {
   const contentId = parseInt(c.req.param('id'));
   const body = await c.req.json();
+
+  const { errors, warnings } = validateContent(
+    {
+      section: body.section,
+      question_type: body.question_type,
+      content: body.content,
+      media_url: body.media_url,
+      title: body.title,
+    },
+    { mode: 'draft' },
+  );
+  if (errors.length > 0) {
+    return c.json({ error: 'Validation failed', errors, warnings }, 400);
+  }
 
   await c.env.DB.prepare(
     `UPDATE test_contents SET test_type = ?, section = ?, question_type = ?, title = ?,
@@ -71,7 +101,7 @@ contentRoutes.put('/:id', async (c) => {
     new Date().toISOString(), contentId,
   ).run();
 
-  return c.json({ status: 'updated' });
+  return c.json({ status: 'updated', warnings: warnings.length > 0 ? warnings : undefined });
 });
 
 // Content health check — scan all published content for issues
@@ -134,7 +164,7 @@ contentRoutes.put('/:id/publish', async (c) => {
 
   if (!row) return c.json({ error: 'Content not found' }, 404);
 
-  // Validation checks
+  // Validation checks — layered: shared validator first, then legacy extras below
   const warnings: string[] = [];
   const errors: string[] = [];
 
@@ -144,6 +174,21 @@ contentRoutes.put('/:id/publish', async (c) => {
     content = JSON.parse(row.content as string || '{}');
   } catch (e) {
     errors.push('Invalid JSON in content field');
+  }
+
+  if (content) {
+    const v = validateContent(
+      {
+        section: row.section as string,
+        question_type: row.question_type as string,
+        content,
+        media_url: row.media_url as string | null,
+        title: row.title as string | null,
+      },
+      { mode: 'publish' },
+    );
+    errors.push(...v.errors);
+    warnings.push(...v.warnings);
   }
 
   if (content) {

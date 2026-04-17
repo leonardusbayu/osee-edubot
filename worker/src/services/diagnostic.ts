@@ -56,28 +56,28 @@ const COMMON_GRAMMAR = [
 const COMMON_VOCAB = [
   {
     id: 9, section: 'vocabulary', topic: 'academic_words',
-    audio_text: 'determine. The scientist wants to determine whether the drug is safe.',
+    audio_text: 'Before approving the medication, researchers must carefully evaluate the trial results to find out whether the drug is safe for human use.',
     question: 'Dengarkan audio, lalu jawab:\n\nThe scientist wants to ___ whether the drug is safe.\n\na) determine\nb) create\nc) ignore\nd) celebrate',
     answer: 'a',
     explanation: '"Determine" = find out / decide. Common academic word.',
   },
   {
     id: 10, section: 'vocabulary', topic: 'academic_words',
-    audio_text: 'implemented. The government implemented new regulations last year.',
+    audio_text: 'Following months of public debate, officials put the new policy into action across every province at the start of the past year.',
     question: 'Dengarkan audio, lalu jawab:\n\nThe government ___ new regulations last year.\n\na) implemented\nb) decorated\nc) entertained\nd) abandoned',
     answer: 'a',
     explanation: '"Implemented" = put into action.',
   },
   {
     id: 11, section: 'vocabulary', topic: 'collocations',
-    audio_text: 'make a decision. Can you make a decision quickly?',
+    audio_text: 'Manager: We have a tight deadline, so I need you to choose between the two options quickly. Can you give me your final answer today?',
     question: 'Dengarkan audio, lalu jawab:\n\nCan you ___ a decision quickly?\n\na) do\nb) make\nc) take\nd) have',
     answer: 'b',
     explanation: '"Make a decision" is the correct collocation.',
   },
   {
     id: 12, section: 'vocabulary', topic: 'collocations',
-    audio_text: 'heavy rain. There was heavy rain last night.',
+    audio_text: 'Weather reporter: The storm brought strong downpours throughout the evening, and the streets were flooded by morning after hours of continuous rainfall.',
     question: 'Dengarkan audio, lalu jawab:\n\nThere was ___ rain last night.\n\na) strong\nb) big\nc) heavy\nd) hard',
     answer: 'c',
     explanation: '"Heavy rain" is the natural English collocation.',
@@ -133,7 +133,7 @@ const COMMON_LISTENING = [
 
 const TOEFL_IBT_EXTRA = [
   {
-    id: 19, section: 'writing', topic: 'email',
+    id: 19, section: 'writing', topic: 'email',  // ID 19 = TOEFL iBT writing
     audio_text: 'Write a short email to your professor. Explain that you will miss class tomorrow because you have a doctor\'s appointment. Ask if you can get the notes from a classmate.',
     question: 'Dengarkan instruksi di atas, lalu tulis email pendek (3-5 kalimat) ke profesor kamu.\n\nTulis dalam bahasa Inggris:',
     answer: '_free_text_',
@@ -149,13 +149,13 @@ const TOEFL_IBT_EXTRA = [
 
 const IELTS_EXTRA = [
   {
-    id: 19, section: 'reading', topic: 'true_false_not_given',
+    id: 21, section: 'reading', topic: 'true_false_not_given',  // Unique IDs per test type
     question: 'Read:\n"Coffee was first discovered in Ethiopia. A shepherd noticed his goats became energetic after eating certain berries. By the 15th century, coffee was being cultivated in Yemen."\n\nStatement: Coffee was first grown in Ethiopia.\n\na) True\nb) False\nc) Not Given',
     answer: 'c',
     explanation: 'The passage says coffee was DISCOVERED in Ethiopia, but CULTIVATED in Yemen. Where it was first grown is not clearly stated.',
   },
   {
-    id: 20, section: 'speaking', topic: 'cue_card',
+    id: 22, section: 'speaking', topic: 'cue_card',
     audio_text: 'Describe a book that you have read recently. You should say: what the book was about, why you chose to read it, what you learned from it, and explain whether you would recommend it to others.',
     question: 'Dengarkan instruksi di atas. Kamu punya 1 menit persiapan, lalu bicara selama 2 menit.\n\nJawab dalam bahasa Inggris (tulis jawabanmu):',
     answer: '_free_text_',
@@ -165,13 +165,13 @@ const IELTS_EXTRA = [
 
 const TOEFL_ITP_EXTRA = [
   {
-    id: 19, section: 'grammar', topic: 'error_identification',
+    id: 23, section: 'grammar', topic: 'error_identification',
     question: 'Find the error:\n\n"The professor, along with his students, (A) are attending (B) the conference (C) which is held (D) annually."\n\na) A\nb) B\nc) C\nd) D',
     answer: 'a',
     explanation: '"Along with" does not change the subject. The subject is "professor" (singular), so it should be "is attending".',
   },
   {
-    id: 20, section: 'grammar', topic: 'sentence_completion',
+    id: 24, section: 'grammar', topic: 'sentence_completion',
     question: '___ the weather is bad, the outdoor event will be postponed.\n\na) Despite\nb) Should\nc) Unless\nd) Although',
     answer: 'b',
     explanation: '"Should the weather be bad" = "If the weather is bad" (formal inversion). Common in TOEFL ITP Structure.',
@@ -180,13 +180,13 @@ const TOEFL_ITP_EXTRA = [
 
 const TOEIC_EXTRA = [
   {
-    id: 19, section: 'vocabulary', topic: 'business_vocabulary',
+    id: 25, section: 'vocabulary', topic: 'business_vocabulary',
     question: 'The quarterly report shows a significant ___ in revenue.\n\na) increase\nb) meeting\nc) schedule\nd) department',
     answer: 'a',
     explanation: '"Increase in revenue" is a common business collocation. TOEIC focuses on workplace vocabulary.',
   },
   {
-    id: 20, section: 'reading', topic: 'business_reading',
+    id: 26, section: 'reading', topic: 'business_reading',
     question: 'Read:\n"All employees must submit their time sheets by Friday at 5 PM. Late submissions will not be processed until the following pay period."\n\nWhat happens if time sheets are submitted late?\n\na) Employees will be fired\nb) Payment will be delayed\nc) Time sheets will be rejected\nd) A fine will be charged',
     answer: 'b',
     explanation: '"Not processed until the following pay period" means payment will be delayed, not rejected.',
@@ -322,6 +322,7 @@ export async function submitAnswer(env: Env, userId: number, answer: string): Pr
   nextAudioText?: string;
   done: boolean;
   results?: any;
+  trialGranted?: boolean;
 }> {
   const session = await env.DB.prepare(
     "SELECT * FROM diagnostic_sessions WHERE user_id = ? AND status = 'in_progress'"
@@ -357,14 +358,29 @@ export async function submitAnswer(env: Env, userId: number, answer: string): Pr
     "UPDATE diagnostic_sessions SET current_question = ?, answers = ? WHERE id = ?"
   ).bind(nextIndex, JSON.stringify(sessionData), session.id).run();
 
-  // Build feedback
+  // Build feedback. For wrong answers, try personalized AI feedback that
+  // references this student's history (weak concepts, repeated mistakes,
+  // streak). Falls back to canned text on any failure.
   let feedback = '';
   if (isWriting) {
     feedback = 'Writing disimpan. Nanti aku review.';
   } else if (isCorrect) {
     feedback = `Bener! ${q.explanation}`;
   } else {
-    feedback = `Belum tepat. Jawaban: ${q.answer.toUpperCase()}\n${q.explanation}`;
+    try {
+      const { generatePersonalizedWrongAnswerFeedback } = await import('./student-context');
+      feedback = await generatePersonalizedWrongAnswerFeedback(env, userId, {
+        question: q.question,
+        student_answer: answer.trim(),
+        correct_answer: q.answer,
+        canned_explanation: q.explanation || '',
+        section: q.section || 'unknown',
+        topic: q.topic,
+      });
+    } catch (e) {
+      console.error('diagnostic: personalized feedback failed:', e);
+      feedback = `Belum tepat. Jawaban: ${q.answer.toUpperCase()}\n${q.explanation}`;
+    }
   }
 
   // Check if done
@@ -395,7 +411,42 @@ export async function submitAnswer(env: Env, userId: number, answer: string): Pr
       "UPDATE diagnostic_sessions SET status = 'completed' WHERE id = ?"
     ).bind(session.id).run();
 
-    return { feedback, nextQuestion: null, done: true, results };
+    // Grant 3-day premium trial on first diagnostic completion (one-time).
+    // This lets the user experience unlimited questions + AI tutor + speaking
+    // evaluation during the first 72h after their placement test, which is
+    // when motivation is highest.
+    let trialGranted = false;
+    try {
+      const existing = await env.DB.prepare(
+        'SELECT is_premium, premium_until FROM users WHERE id = ?'
+      ).bind(userId).first() as any;
+
+      // Only grant if user has never been premium AND hasn't already used the trial
+      if (existing && !existing.is_premium && !existing.premium_until) {
+        const alreadyTrialed = await env.DB.prepare(
+          `SELECT 1 FROM star_transactions WHERE user_id = ? AND payment_id = 'DIAGNOSTIC_TRIAL' LIMIT 1`
+        ).bind(userId).first();
+
+        if (!alreadyTrialed) {
+          const trialUntil = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+          await env.DB.prepare(
+            `UPDATE users SET is_premium = 1, premium_until = ? WHERE id = ?`
+          ).bind(trialUntil, userId).run();
+
+          // Record the trial in star_transactions so we can tell a trial from a paid grant
+          await env.DB.prepare(
+            `INSERT INTO star_transactions (user_id, amount, type, description, status, payment_id, created_at)
+             VALUES (?, 0, 'trial_3d', 'DIAGNOSTIC_TRIAL', 'completed', 'DIAGNOSTIC_TRIAL', datetime('now'))`
+          ).bind(userId).run();
+
+          trialGranted = true;
+        }
+      }
+    } catch (e) {
+      console.error('Diagnostic trial grant error:', e);
+    }
+
+    return { feedback, nextQuestion: null, done: true, results, trialGranted };
   }
 
   const next = questions[nextIndex] as any;
@@ -449,9 +500,13 @@ function calculateResults(answers: any[], testType: string = 'TOEFL_IBT') {
   // Estimate writing band
   const wordCount = writingAnswer.split(/\s+/).filter(Boolean).length;
   let writingBand = 1;
-  if (wordCount >= 30) writingBand = 2;
-  if (wordCount >= 50) writingBand = 3;
-  if (wordCount >= 80) writingBand = 3.5;
+  if (wordCount >= 20) writingBand = 2;
+  if (wordCount >= 40) writingBand = 3;
+  if (wordCount >= 60) writingBand = 3.5;
+  if (wordCount >= 80) writingBand = 4;
+  if (wordCount >= 120) writingBand = 5;
+  if (wordCount >= 160) writingBand = 5.5;
+  if (wordCount >= 200) writingBand = 6;
 
   // Calculate estimated score based on test type
   const sectionBands = Object.values(sections).map(s =>

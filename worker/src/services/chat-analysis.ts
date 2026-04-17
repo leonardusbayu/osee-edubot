@@ -87,7 +87,7 @@ const TOPIC_KEYWORDS: Record<ChatTopic, string[]> = {
     'idiom', 'idioms', 'phrase', 'ungkapan', 'peribahasa',
   ],
   [CHAT_TOPICS.VOCAB_COLLOCATIONS]: [
-    'collocation', 'kata yang sering muncul bareng', 'pasangan kata',
+    'collocation', 'kombinasi kata', 'pasangan kata', 'kata yang sering',
   ],
   [CHAT_TOPICS.VOCAB_SYNONYMS]: [
     'synonym', 'antonym', 'similar', 'meaning', 'sinonim', 'artinya',

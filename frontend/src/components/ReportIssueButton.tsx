@@ -1,129 +1,179 @@
 import { useState } from 'react';
-import { authedFetch } from '../api/authedFetch';
+import { authedFetch, getTelegramUserId } from '../api/authedFetch';
 
-interface ReportIssueButtonProps {
-  contentId?: number | string | null;
+interface Props {
+  // Accepts unknown shapes (string fallback IDs, null, undefined, numbers)
+  // and internally coerces. The server insists on a positive integer, so
+  // anything else causes the button to render nothing rather than open a
+  // modal that will 400 on submit.
+  contentId: number | string | null | undefined;
+  subIndex?: number | null;
   attemptId?: number | null;
+  // Optional compact style (icon-only) for in-question placement
   compact?: boolean;
 }
 
-const REASONS = [
-  { value: 'wrong_answer', label: 'Kunci jawaban salah' },
-  { value: 'unclear', label: 'Soal tidak jelas' },
-  { value: 'audio', label: 'Audio bermasalah' },
-  { value: 'translation', label: 'Terjemahan salah' },
-  { value: 'other', label: 'Lainnya' },
+const REASONS: { code: string; label: string }[] = [
+  { code: 'wrong_answer', label: 'Jawaban yang ditandai benar sepertinya salah' },
+  { code: 'broken_audio', label: 'Audio tidak bisa diputar atau terpotong' },
+  { code: 'broken_options', label: 'Pilihan jawaban kosong, rusak, atau tidak masuk akal' },
+  { code: 'confusing_question', label: 'Pertanyaan tidak jelas atau tidak cocok dengan bacaan' },
+  { code: 'typo', label: 'Ada typo atau salah tulis' },
+  { code: 'other', label: 'Lainnya' },
 ];
 
-export default function ReportIssueButton({ contentId, attemptId, compact }: ReportIssueButtonProps) {
+/**
+ * One-tap "Report issue" button that opens a lightweight modal.
+ * Renders nothing if contentId is missing.
+ */
+export default function ReportIssueButton({ contentId, subIndex, attemptId, compact }: Props) {
   const [open, setOpen] = useState(false);
-  const [reason, setReason] = useState(REASONS[0].value);
+  const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
-  const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Coerce + validate: the backend requires a positive integer content_id.
+  // String-shaped IDs (e.g. legacy 'fallback-1') → NaN → render nothing.
+  const numericContentId =
+    typeof contentId === 'number'
+      ? contentId
+      : typeof contentId === 'string' && /^\d+$/.test(contentId)
+        ? Number(contentId)
+        : NaN;
+  if (!Number.isFinite(numericContentId) || numericContentId <= 0) return null;
 
   async function submit() {
-    if (!contentId) return;
-    setStatus('sending');
+    if (!reason) return;
+    setSubmitting(true);
+    setError(null);
     try {
-      const res = await authedFetch('/api/content/report', {
+      // Belt-and-suspenders auth: if the JWT is expired and initData refresh
+      // is failing, still let the server identify the user via tg_id query
+      // param. Uses the shared cached lookup so route navigations (which
+      // strip ?tg_id= from the URL) don't leave us without an identity.
+      const tgId = getTelegramUserId();
+      const qs = tgId ? `?tg_id=${encodeURIComponent(tgId)}` : '';
+
+      const res = await authedFetch(`/api/content-reports${qs}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          content_id: contentId,
+          content_id: numericContentId,
+          sub_index: subIndex ?? null,
           attempt_id: attemptId ?? null,
-          reason,
-          note: note.trim() || null,
+          reason_code: reason,
+          free_text: note.trim() || null,
+          tg_id: tgId, // also in body as a last-resort fallback
         }),
       });
-      setStatus(res.ok ? 'sent' : 'error');
-      if (res.ok) {
-        setTimeout(() => {
-          setOpen(false);
-          setStatus('idle');
-          setNote('');
-          setReason(REASONS[0].value);
-        }, 1200);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Gagal mengirim laporan' }));
+        // Combine top-level error with detail so the user sees WHY it failed
+        // (e.g. "Gagal menyimpan laporan — no such table: content_reports")
+        const msg = err.detail
+          ? `${err.error || 'Gagal'} — ${err.detail}`
+          : (err.error || `Gagal mengirim laporan (${res.status})`);
+        throw new Error(msg);
       }
-    } catch {
-      setStatus('error');
+      setDone(true);
+      setTimeout(() => { setOpen(false); setDone(false); setReason(''); setNote(''); }, 1500);
+    } catch (e: any) {
+      setError(e.message || 'Gagal mengirim laporan');
+    } finally {
+      setSubmitting(false);
     }
   }
-
-  if (!contentId) return null;
 
   return (
     <>
       <button
         type="button"
-        aria-label="Laporkan masalah pada soal ini"
         onClick={() => setOpen(true)}
         className={
           compact
-            ? 'text-xs text-tg-hint hover:text-tg-text underline-offset-2 hover:underline'
-            : 'text-sm text-tg-hint hover:text-tg-text px-2 py-1 rounded'
+            ? 'text-xs text-tg-hint hover:text-tg-button underline'
+            : 'text-xs text-tg-hint hover:text-tg-button flex items-center gap-1 py-1 px-2 rounded'
         }
+        aria-label="Laporkan masalah pada soal ini"
       >
-        🚩 Lapor
+        ⚠ Laporkan masalah
       </button>
 
       {open && (
         <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Laporkan masalah"
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-3"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setOpen(false);
-          }}
+          className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={() => !submitting && setOpen(false)}
         >
-          <div className="bg-tg-bg w-full max-w-md rounded-2xl p-4 shadow-xl">
-            <h2 className="text-base font-semibold text-tg-text mb-3">Laporkan soal</h2>
-
-            <label className="block text-sm text-tg-text mb-1">Alasan</label>
-            <select
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full mb-3 px-3 py-2 rounded-lg bg-tg-secondary text-tg-text"
-            >
-              {REASONS.map((r) => (
-                <option key={r.value} value={r.value}>{r.label}</option>
-              ))}
-            </select>
-
-            <label className="block text-sm text-tg-text mb-1">Catatan (opsional)</label>
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              rows={3}
-              maxLength={500}
-              placeholder="Jelaskan masalahnya…"
-              className="w-full mb-3 px-3 py-2 rounded-lg bg-tg-secondary text-tg-text"
-            />
-
-            {status === 'sent' && (
-              <p className="text-sm text-green-500 mb-2">Terima kasih! Laporan terkirim.</p>
-            )}
-            {status === 'error' && (
-              <p className="text-sm text-red-500 mb-2">Gagal mengirim. Coba lagi.</p>
-            )}
-
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="px-3 py-2 text-sm text-tg-hint"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={submit}
-                disabled={status === 'sending' || status === 'sent'}
-                className="px-4 py-2 text-sm rounded-lg bg-tg-button text-tg-button-text disabled:opacity-50"
-              >
-                {status === 'sending' ? 'Mengirim…' : 'Kirim'}
-              </button>
+          <div
+            className="bg-tg-bg w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl p-5 max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-base font-semibold">Laporkan masalah</h3>
+              {!submitting && (
+                <button onClick={() => setOpen(false)} className="text-tg-hint text-xl leading-none">✕</button>
+              )}
             </div>
+
+            {done ? (
+              <p className="text-sm text-green-500 py-4 text-center">✓ Terima kasih — laporan terkirim.</p>
+            ) : (
+              <>
+                <p className="text-xs text-tg-hint mb-3">Soal #{numericContentId}{subIndex != null ? `.${subIndex + 1}` : ''}</p>
+
+                <div className="space-y-2 mb-4">
+                  {REASONS.map((r) => (
+                    <label
+                      key={r.code}
+                      className={`flex items-start gap-2 p-2.5 rounded-lg cursor-pointer border text-sm ${
+                        reason === r.code ? 'border-tg-button bg-tg-button/10' : 'border-tg-secondary'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="report-reason"
+                        value={r.code}
+                        checked={reason === r.code}
+                        onChange={() => setReason(r.code)}
+                        className="mt-0.5"
+                      />
+                      <span className="flex-1">{r.label}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value.slice(0, 1000))}
+                  placeholder="Detail tambahan (opsional)"
+                  className="w-full bg-tg-secondary rounded-lg p-2 text-sm mb-3"
+                  rows={3}
+                />
+
+                {error && <p className="text-xs text-red-500 mb-2">{error}</p>}
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOpen(false)}
+                    disabled={submitting}
+                    className="flex-1 py-2 rounded-lg border border-tg-secondary text-sm"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submit}
+                    disabled={!reason || submitting}
+                    className="flex-1 py-2 rounded-lg bg-tg-button text-tg-button-text text-sm font-medium disabled:opacity-50"
+                  >
+                    {submitting ? 'Mengirim...' : 'Kirim laporan'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

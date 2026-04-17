@@ -2,10 +2,12 @@ export interface Env {
   DB: D1Database;
   MEDIA?: R2Bucket;
   AUDIO_BUCKET?: R2Bucket;
+  VISUAL_BUCKET?: R2Bucket;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_BOT_SECRET: string;
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY: string;
+  FAL_API_KEY?: string;
   TEACHER_CODE?: string;
   JWT_SECRET: string;
   WEBAPP_URL: string;
@@ -35,6 +37,9 @@ export interface User {
   referral_count: number;
   is_founding_student: number;
   created_at: string;
+  current_streak?: number | null;
+  longest_streak?: number | null;
+  last_study_date?: string | null;
 }
 
 export interface TelegramUser {

@@ -95,6 +95,63 @@ export default function TestSelection() {
     }
   }, [searchParams]);
 
+  // ── Drill mode: deep-link from the bot's /warmup suggestion ──
+  // URL shape: /?drill=1&concept=inference&count=3
+  // On mount, if the drill flag is present we skip the menu entirely and
+  // call /start with drill params — backend infers the section from the
+  // concept and /questions filters by skill_tag. This is one-shot (we
+  // gate on auth being ready via tests loaded) and we strip the flag by
+  // navigating to the runner on success.
+  useEffect(() => {
+    const drillFlag = searchParams.get('drill');
+    const concept = searchParams.get('concept');
+    if (drillFlag !== '1' || !concept) return;
+    if (loading) return; // wait until auth + initial load finishes
+    const count = Math.max(1, Math.min(10, parseInt(searchParams.get('count') || '3', 10) || 3));
+    // Fire-and-forget — handleStartDrill sets its own errors
+    handleStartDrill(concept, count);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, searchParams]);
+
+  async function handleStartDrill(concept: string, count: number) {
+    setStarting('drill');
+    setError(null);
+    try {
+      const response = await authedFetch('/api/tests/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          test_type: testType,
+          drill_concept: concept,
+          drill_count: count,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        if (data.code === 'LIMIT_REACHED') {
+          setError('Batas harian tercapai! Upgrade ke premium untuk akses unlimited.');
+          setQuota(data.quota);
+        } else {
+          setError(data.error || 'Gagal memulai drill');
+        }
+        return;
+      }
+      startTest(
+        data.attempt_id,
+        data.test_type,
+        data.sections,
+        data.current_section,
+        undefined,
+        { concept, count },
+      );
+      navigate(`/test/${data.attempt_id}`);
+    } catch {
+      setError('Kesalahan jaringan');
+    } finally {
+      setStarting(null);
+    }
+  }
+
   async function checkResume() {
     try {
       const res = await authedFetch('/api/tests/attempt/resume');
@@ -128,7 +185,9 @@ export default function TestSelection() {
       if (countsRes.ok) {
         setCounts(await countsRes.json());
       }
-    } catch {}
+    } catch (err) {
+      console.error('Failed to load test data:', err);
+    }
     setLoading(false);
   }
 
@@ -178,7 +237,7 @@ export default function TestSelection() {
       startTest(data.attempt_id, data.test_type, data.sections, data.current_section);
       navigate(`/test/${data.attempt_id}`);
     } catch {
-      setError('Network error');
+      setError('Kesalahan jaringan');
     } finally {
       setStarting(null);
     }
@@ -213,7 +272,7 @@ export default function TestSelection() {
       startTest(data.attempt_id, data.test_type, data.sections, data.current_section, data.question_type);
       navigate(`/test/${data.attempt_id}`);
     } catch {
-      setError('Network error');
+      setError('Kesalahan jaringan');
     } finally {
       setStarting(null);
     }
@@ -484,7 +543,7 @@ export default function TestSelection() {
 
       {quota?.is_premium && (
         <div className="bg-gradient-to-r from-yellow-400/20 to-orange-500/20 border border-yellow-500/30 rounded-xl p-3 mb-4 text-sm">
-          👑 <span className="font-semibold">Premium Access</span> — Unlimited soal & fitur
+          👑 <span className="font-semibold">Akses Premium</span> — Soal unlimited & semua fitur
         </div>
       )}
 
@@ -521,11 +580,36 @@ export default function TestSelection() {
         </button>
       </div>
 
+      {/* Skill Practice Banner */}
+      <div className="bg-gradient-to-r from-green-500/10 to-blue-500/10 border border-green-500/20 rounded-xl p-4 mb-6">
+        <div className="flex items-center gap-3">
+          <span className="text-3xl">🎯</span>
+          <div className="flex-1">
+            <h2 className="font-semibold">Skill Practice</h2>
+            <p className="text-xs text-tg-hint">Latihan fokus per skill dengan IRT tracking — 15-20 menit</p>
+          </div>
+        </div>
+        <button
+          onClick={() => navigate('/skill-practice')}
+          className="w-full mt-3 bg-green-600 text-white py-2.5 rounded-xl font-medium text-sm"
+        >
+          Mulai Skill Practice
+        </button>
+      </div>
+
       <h2 className="font-semibold mb-3">Latihan Per Section</h2>
       <div className="space-y-3">
-        {Object.entries(SECTION_INFO).map(([id, info]) => {
+        {Object.entries(SECTION_INFO)
+          // Structure section only exists in TOEFL_ITP (and structurally in some ITP-like tests).
+          // Hiding it everywhere else prevents showing a permanently "0 / 0 tipe" row
+          // that confuses students picking TOEFL_IBT / IELTS / TOEIC.
+          .filter(([id]) => id !== 'structure' || testType === 'TOEFL_ITP')
+          .map(([id, info]) => {
           const total = getTotalForSection(id);
           const typeCount = getSectionCounts(id).length;
+          // Also hide any non-structure section that has zero questions AND zero types,
+          // so empty sections don't appear as dead buttons.
+          if (total === 0 && typeCount === 0) return null;
           return (
             <button
               key={id}

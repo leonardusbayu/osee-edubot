@@ -28,13 +28,24 @@ export function startOfflineSyncService() {
 
     console.log('[OfflineSync] Syncing', state.pendingAnswers.length, 'pending answers');
 
-    // Batch sync all pending answers
-    const pendingAnswers = [...state.pendingAnswers];
+    // Drop any answers that already exceeded maxRetries — prevents zombie
+    // loops where a dead answer keeps hitting the API every 5s forever.
+    const dropped = useTestStore.getState().dropDeadPendingAnswers();
+    if (dropped > 0) {
+      console.warn('[OfflineSync] Dropped', dropped, 'answers that exceeded maxRetries');
+    }
+
+    // Snapshot AFTER dropping dead entries
+    const pendingAnswers = [...useTestStore.getState().pendingAnswers];
     const attemptId = state.attemptId;
 
-    if (!attemptId) return;
+    if (!attemptId || pendingAnswers.length === 0) return;
 
     for (const answer of pendingAnswers) {
+      // Skip answers that have already reached the cap (defensive — should
+      // have been filtered above, but guards against concurrent pushes).
+      if (answer.retries >= answer.maxRetries) continue;
+
       try {
         const response = await authedFetch(`/api/tests/attempt/${attemptId}/answer`, {
           method: 'POST',
@@ -51,16 +62,12 @@ export function startOfflineSyncService() {
           useTestStore.getState().clearPendingAnswer(answer.section, answer.questionIndex);
         } else {
           console.error('[OfflineSync] Sync failed:', response.status);
-          // Increment retry count but don't remove
-          if (answer.retries < answer.maxRetries) {
-            answer.retries++;
-          }
+          // Persist retry bump so maxRetries actually bounds retries.
+          useTestStore.getState().incrementPendingRetry(answer.section, answer.questionIndex);
         }
       } catch (err) {
         console.error('[OfflineSync] Sync error:', err);
-        if (answer.retries < answer.maxRetries) {
-          answer.retries++;
-        }
+        useTestStore.getState().incrementPendingRetry(answer.section, answer.questionIndex);
       }
     }
   }, SYNC_CHECK_INTERVAL);

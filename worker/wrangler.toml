@@ -16,6 +16,7 @@ NOTION_DASHBOARD_PAGE = "34174d80-7f1a-81e0-ba69-c1304243deac"
 # OPENAI_API_KEY
 # JWT_SECRET
 # NOTION_API_KEY — Notion integration token (internal integration)
+# FAL_API_KEY    — fal.ai key for Gemini Nano Banana image generation
 
 [[d1_databases]]
 binding = "DB"
@@ -33,3 +34,53 @@ crons = ["3 1 * * *", "0 11 * * *", "7 1 * * 1", "30 * * * *"]
 [[r2_buckets]]
 binding = "AUDIO_BUCKET"
 bucket_name = "edubot-audio"
+
+[[r2_buckets]]
+binding = "VISUAL_BUCKET"
+bucket_name = "edubot-visuals"
+
+# ============================================================
+# Staging environment — for QA team
+# Deploy with: `wrangler deploy --env staging`
+# Set staging secrets with: `wrangler secret put <NAME> --env staging`
+# Required staging secrets (isolated from prod):
+#   TELEGRAM_BOT_TOKEN  — separate bot from @BotFather (edubot_staging_bot)
+#   TELEGRAM_BOT_SECRET — different webhook secret
+#   OPENAI_API_KEY      — separate key with budget cap for staging
+#   JWT_SECRET          — different signing key
+#   (ANTHROPIC_API_KEY, NOTION_API_KEY, FAL_API_KEY — can reuse or scope down)
+# ============================================================
+[env.staging]
+name = "edubot-api-staging"
+
+[env.staging.vars]
+WEBAPP_URL = "https://edubot-staging.pages.dev"
+# Notion vars mirror prod for now — QA should NOT trigger Notion sync from staging
+# (commercial.ts / analytics sync endpoints). If juniors need isolated Notion,
+# duplicate the 4 databases and swap these IDs.
+NOTION_STUDENTS_DB = "ef738175275b4d97be1dfdee9d5cd31a"
+NOTION_ATTEMPTS_DB = "34b452063480463c85eea9cde38d139e"
+NOTION_WEEKLY_DB = "a52619212cf149cd988672ebd8f83217"
+NOTION_DASHBOARD_PAGE = "34174d80-7f1a-81e0-ba69-c1304243deac"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "edubot-staging-db"
+database_id = "71b1ecac-52d5-4688-aad6-77d7265450d3"
+
+# R2 buckets shared with prod (TTS/visual cache is content-addressed, low risk).
+# If QA experiments cause pollution, switch to dedicated staging buckets later.
+[[env.staging.r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "edubot-audio"
+
+[[env.staging.r2_buckets]]
+binding = "VISUAL_BUCKET"
+bucket_name = "edubot-visuals"
+
+# Wrangler inherits top-level [triggers] into envs by default, which would
+# (a) push staging over the 5-cron account limit on the free plan, and
+# (b) fire reminder messages to real users from the staging worker.
+# Explicit empty array disables all crons in staging.
+[env.staging.triggers]
+crons = []

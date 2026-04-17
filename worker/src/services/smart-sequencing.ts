@@ -234,28 +234,57 @@ export async function getSmartQuestionOrder(
       }
     }
 
-    // 3. Fill remaining with random questions (not already selected)
+    // 3. Fill remaining with exposure-aware "fresh" questions (prefers items
+    //    the student hasn't seen recently, so the whole bank gets used).
     if (randomCount > 0 && selectedIds.length < limit) {
       const remaining = limit - selectedIds.length;
-      const selectedPlaceholders = selectedIds.map(() => '?').join(',');
-      const randomQuery = selectedIds.length > 0
-        ? `SELECT id FROM test_contents
-           WHERE test_type = ? AND section = ? AND status = 'published'
-           AND id NOT IN (${selectedPlaceholders})
-           ORDER BY RANDOM() LIMIT ?`
-        : `SELECT id FROM test_contents
-           WHERE test_type = ? AND section = ? AND status = 'published'
-           ORDER BY RANDOM() LIMIT ?`;
+      const { selectUnderExposedQuestions } = await import('./question-exposure');
 
-      const randomParams = selectedIds.length > 0
-        ? [testType, section, ...selectedIds, remaining]
-        : [testType, section, remaining];
+      // Build the exclusion clause directly in extraWhere — selectUnderExposedQuestions
+      // passes extraParams through to the underlying bind() in order.
+      const baseWhere = `test_type = ? AND section = ? AND status = 'published'`;
+      const where = selectedIds.length > 0
+        ? `${baseWhere} AND id NOT IN (${selectedIds.map(() => '?').join(',')})`
+        : baseWhere;
+      const params: (string | number)[] = selectedIds.length > 0
+        ? [testType, section, ...selectedIds]
+        : [testType, section];
 
-      const randomResult = await env.DB.prepare(randomQuery).bind(...randomParams).all();
-      for (const row of randomResult.results || []) {
-        const id = (row as any).id;
-        if (id && !selectedIds.includes(id)) {
-          selectedIds.push(id);
+      try {
+        const rows = await selectUnderExposedQuestions<{ id: number }>(env, {
+          userId,
+          limit: remaining,
+          extraWhere: where,
+          extraParams: params,
+          columns: 'id',
+        });
+        for (const row of rows) {
+          const id = Number(row.id);
+          if (id && !selectedIds.includes(id)) {
+            selectedIds.push(id);
+          }
+        }
+      } catch (e) {
+        console.error('smart-sequencing exposure-aware fill failed, falling back to RANDOM():', e);
+        // Fallback to the original random query if exposure helper fails
+        const selectedPlaceholders = selectedIds.map(() => '?').join(',');
+        const randomQuery = selectedIds.length > 0
+          ? `SELECT id FROM test_contents
+             WHERE test_type = ? AND section = ? AND status = 'published'
+             AND id NOT IN (${selectedPlaceholders})
+             ORDER BY RANDOM() LIMIT ?`
+          : `SELECT id FROM test_contents
+             WHERE test_type = ? AND section = ? AND status = 'published'
+             ORDER BY RANDOM() LIMIT ?`;
+        const randomParams = selectedIds.length > 0
+          ? [testType, section, ...selectedIds, remaining]
+          : [testType, section, remaining];
+        const randomResult = await env.DB.prepare(randomQuery).bind(...randomParams).all();
+        for (const row of randomResult.results || []) {
+          const id = (row as any).id;
+          if (id && !selectedIds.includes(id)) {
+            selectedIds.push(id);
+          }
         }
       }
     }

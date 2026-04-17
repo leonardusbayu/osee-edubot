@@ -116,13 +116,49 @@ Respond in JSON only:
         .bind('openai', 'writing-eval', 1000, 0.00015).run();
     } catch {}
 
+    // Relevancy gate — if response is off-topic, flag it
+    const crit = result.criteria || {};
+    const relevancyScore = isIELTS
+      ? Math.min((crit.task_achievement || 5) / maxBand, 1)
+      : Math.min((crit.academic_quality || 3) / maxBand, 1);
+    const isOffTopic = relevancyScore < 0.35;
+
+    // Store per-criterion scores for trend tracking
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO writing_criterion_scores
+           (user_id, test_type, task_achievement, coherence_cohesion, lexical_resource,
+            grammar_range, overall_band, relevancy_score, word_count,
+            task_note, coherence_note, lexical_note, grammar_note, feedback_summary)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        user.id,
+        test_type || 'TOEFL_IBT',
+        crit.task_achievement ?? crit.academic_quality ?? null,
+        crit.coherence_cohesion ?? crit.communication ?? null,
+        crit.lexical_resource ?? null,
+        crit.grammatical_accuracy ?? null,
+        result.overall_band || 1,
+        relevancyScore,
+        wordCount,
+        null, null, null, null, // AI notes — could be enriched later
+        result.feedback || null
+      ).run();
+    } catch (e) {
+      console.error('Writing criterion insert error:', e);
+    }
+
     return c.json({
       word_count: wordCount,
       min_words: minWords,
       word_count_ok: wordCount >= minWords,
       overall_band: result.overall_band || 1,
       criteria: result.criteria || {},
-      feedback: result.feedback || 'Tidak bisa memberikan feedback.',
+      relevancy_score: relevancyScore,
+      off_topic: isOffTopic,
+      feedback: isOffTopic
+        ? 'Jawabanmu tampaknya tidak sesuai dengan prompt. Pastikan kamu menjawab pertanyaan yang diberikan. ' + (result.feedback || '')
+        : (result.feedback || 'Tidak bisa memberikan feedback.'),
       corrections: result.corrections || [],
       strengths: result.strengths || '',
       improvement: result.improvement || '',
@@ -131,4 +167,51 @@ Respond in JSON only:
   } catch (e: any) {
     return c.json({ error: 'Writing evaluation failed' }, 500);
   }
+});
+
+// GET /api/writing/trend — per-criterion writing trends for authenticated user
+writingRoutes.get('/trend', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+  const testType = c.req.query('test_type') || user.target_test || 'TOEFL_IBT';
+  const limit = Math.min(50, parseInt(c.req.query('limit') || '20'));
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT task_achievement, coherence_cohesion, lexical_resource, grammar_range,
+            overall_band, relevancy_score, word_count, created_at
+       FROM writing_criterion_scores
+      WHERE user_id = ? AND test_type = ?
+      ORDER BY created_at DESC LIMIT ?`,
+  ).bind(user.id, testType, limit).all<any>();
+
+  const recent = (results || []).slice(0, 5);
+  const previous = (results || []).slice(5, 10);
+  const avg = (arr: any[], key: string) => {
+    const vals = arr.map(r => Number(r[key])).filter(v => !isNaN(v) && v > 0);
+    return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+  };
+
+  const dims = ['task_achievement', 'coherence_cohesion', 'lexical_resource', 'grammar_range'];
+  const trends: Record<string, { current: number | null; previous: number | null; direction: string }> = {};
+  for (const d of dims) {
+    const cur = avg(recent, d);
+    const prev = avg(previous, d);
+    const dir = cur === null || prev === null ? '—' : cur > prev + 0.25 ? '↑' : cur < prev - 0.25 ? '↓' : '→';
+    trends[d] = { current: cur ? Math.round(cur * 10) / 10 : null, previous: prev ? Math.round(prev * 10) / 10 : null, direction: dir };
+  }
+
+  const weakest = dims.reduce((w, d) => {
+    const val = trends[d].current;
+    if (val === null) return w;
+    return w === null || val < (trends[w].current || 99) ? d : w;
+  }, null as string | null);
+
+  return c.json({
+    test_type: testType,
+    submission_count: (results || []).length,
+    trends,
+    weakest_criterion: weakest,
+    history: (results || []).reverse(),
+  });
 });

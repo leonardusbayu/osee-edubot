@@ -43,11 +43,45 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-          ? 'audio/webm;codecs=opus'
-          : 'audio/webm',
-      });
+
+      // Pick a mimeType the browser actually supports. Safari/iOS rejects
+      // audio/webm entirely — MediaRecorder constructor throws if given an
+      // unsupported type. Try candidates in priority order; fall back to the
+      // browser's default (undefined mimeType).
+      const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4;codecs=mp4a.40.2',
+        'audio/mp4',
+        'audio/ogg;codecs=opus',
+        'audio/ogg',
+      ];
+      let chosenType: string | undefined;
+      for (const t of candidates) {
+        try {
+          if ((MediaRecorder as any).isTypeSupported?.(t)) {
+            chosenType = t;
+            break;
+          }
+        } catch {}
+      }
+
+      let mediaRecorder: MediaRecorder;
+      try {
+        mediaRecorder = chosenType
+          ? new MediaRecorder(stream, { mimeType: chosenType })
+          : new MediaRecorder(stream);
+      } catch (err) {
+        // Last-resort: some browsers throw even when isTypeSupported returned
+        // true. Try again with no options so the browser picks its own default.
+        console.warn('[EduBot] MediaRecorder ctor failed, retrying with default:', err);
+        mediaRecorder = new MediaRecorder(stream);
+      }
+
+      // Whatever mimeType the recorder actually settled on — use that for the
+      // Blob. Hard-coding "audio/webm" on iOS creates blobs Whisper can't decode
+      // (the underlying container is mp4, not webm), causing a silent 400.
+      const actualMime = mediaRecorder.mimeType || chosenType || 'audio/webm';
 
       chunksRef.current = [];
       mediaRecorderRef.current = mediaRecorder;
@@ -57,7 +91,15 @@ export default function AudioRecorder({ onRecordingComplete, maxDuration = 120 }
       };
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        const blob = new Blob(chunksRef.current, { type: actualMime });
+        // Guard: tap-record → tap-stop too quickly yields a 0-byte blob that
+        // Whisper rejects with a cryptic 400. Show an inline error instead of
+        // submitting garbage.
+        if (!blob.size) {
+          setMicError('Rekaman terlalu pendek atau kosong. Tahan tombol rekam minimal 2 detik dan bicara dengan jelas.');
+          streamRef.current?.getTracks().forEach((t) => t.stop());
+          return;
+        }
         const url = URL.createObjectURL(blob);
         audioUrlRef.current = url;
         setAudioUrl(url);

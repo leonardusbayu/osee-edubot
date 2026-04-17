@@ -236,6 +236,61 @@ export async function getReviewStats(env: Env, userId: number) {
 }
 
 /**
+ * Get the earliest upcoming review (not yet due) — used for zero-queue fallback
+ * so we can tell the user "next review in 2h" instead of a dead-end message.
+ */
+export async function getNextUpcomingReview(env: Env, userId: number): Promise<{ due_at: string; minutes_until: number } | null> {
+  const now = new Date();
+  const row = await env.DB.prepare(
+    `SELECT next_review_at FROM spaced_repetition
+     WHERE user_id = ? AND next_review_at > ?
+     ORDER BY next_review_at ASC LIMIT 1`
+  ).bind(userId, now.toISOString()).first() as any;
+  if (!row?.next_review_at) return null;
+  const due = new Date(row.next_review_at);
+  const minutesUntil = Math.max(0, Math.round((due.getTime() - now.getTime()) / 60000));
+  return { due_at: row.next_review_at, minutes_until: minutesUntil };
+}
+
+/**
+ * When the FSRS queue is empty, pick a high-value practice item so the user
+ * doesn't hit a dead-end. Strategy:
+ *   1. Pull the user's top weakness from mental_model (concepts with low understanding).
+ *   2. If none, fall back to the section where their recent accuracy is lowest.
+ *   3. Returns { section, question_type } so the caller can launch a practice drill.
+ */
+export async function getFallbackPractice(env: Env, userId: number): Promise<{ section: string; reason: string } | null> {
+  // 1. Weakest concept from mental model
+  try {
+    const weak = await env.DB.prepare(
+      `SELECT concept FROM student_mental_model
+       WHERE user_id = ? AND understanding_score < 60
+       ORDER BY understanding_score ASC, updated_at DESC LIMIT 1`
+    ).bind(userId).first() as any;
+    if (weak?.concept) {
+      return { section: weak.concept, reason: 'weakest_concept' };
+    }
+  } catch {}
+
+  // 2. Section with lowest recent accuracy (last 20 attempts)
+  try {
+    const section = await env.DB.prepare(
+      `SELECT section, AVG(CASE WHEN is_correct THEN 1.0 ELSE 0.0 END) as acc, COUNT(*) as n
+       FROM test_responses
+       WHERE user_id = ?
+       GROUP BY section
+       HAVING n >= 3
+       ORDER BY acc ASC LIMIT 1`
+    ).bind(userId).first() as any;
+    if (section?.section) {
+      return { section: section.section, reason: 'lowest_accuracy_section' };
+    }
+  } catch {}
+
+  return null;
+}
+
+/**
  * Get predicted review workload for the next N days.
  */
 export async function getReviewForecast(env: Env, userId: number, days: number = 7) {

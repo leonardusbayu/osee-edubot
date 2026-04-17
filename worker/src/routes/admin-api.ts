@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env, User } from '../types';
 import { getAuthUser } from '../services/auth';
 import { buildStudentReport, buildStudentReportForAI } from '../services/student-report';
+import { validateContent } from '../services/content-validator';
 
 export const adminApiRoutes = new Hono<{ Bindings: Env }>();
 
@@ -48,8 +49,11 @@ adminApiRoutes.use('/*', requireAdmin);
 
 // GET /students — List all students with summary stats
 adminApiRoutes.get('/students', async (c) => {
-  const page = parseInt(c.req.query('page') || '1');
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
+  let page = parseInt(c.req.query('page') || '1');
+  if (isNaN(page) || page < 1) page = 1;
+  let limit = parseInt(c.req.query('limit') || '50');
+  if (isNaN(limit) || limit < 1) limit = 50;
+  limit = Math.min(limit, 200);
   const offset = (page - 1) * limit;
   const search = c.req.query('search') || '';
   const role = c.req.query('role') || '';
@@ -130,6 +134,7 @@ adminApiRoutes.get('/students', async (c) => {
 // GET /students/:id — Deep student profile
 adminApiRoutes.get('/students/:id', async (c) => {
   const userId = parseInt(c.req.param('id'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid student ID' }, 400);
 
   const [user, profile, mastery, mentalModel, recentAttempts, studyLogs, srStats, lessonPlans] = await Promise.all([
     c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first(),
@@ -232,6 +237,7 @@ adminApiRoutes.get('/students/:id', async (c) => {
 // GET /students/:id/report — Full intelligence report (JSON)
 adminApiRoutes.get('/students/:id/report', async (c) => {
   const userId = parseInt(c.req.param('id'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid student ID' }, 400);
   const report = await buildStudentReport(c.env, userId);
   if (!report) return c.json({ error: 'Student not found' }, 404);
   return c.json(report);
@@ -240,6 +246,7 @@ adminApiRoutes.get('/students/:id/report', async (c) => {
 // GET /students/:id/report/ai — AI-optimized context string for lesson planning
 adminApiRoutes.get('/students/:id/report/ai', async (c) => {
   const userId = parseInt(c.req.param('id'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid student ID' }, 400);
   const aiContext = await buildStudentReportForAI(c.env, userId);
   const format = c.req.query('format');
   if (format === 'json') {
@@ -254,6 +261,7 @@ adminApiRoutes.get('/students/:id/report/ai', async (c) => {
 // PUT /students/:id/role — Update student role
 adminApiRoutes.put('/students/:id/role', async (c) => {
   const userId = parseInt(c.req.param('id'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid student ID' }, 400);
   const { role } = await c.req.json();
   if (!['student', 'teacher', 'admin'].includes(role)) {
     return c.json({ error: 'Invalid role. Must be student, teacher, or admin' }, 400);
@@ -265,6 +273,7 @@ adminApiRoutes.put('/students/:id/role', async (c) => {
 // PUT /students/:id/profile — Update student profile fields
 adminApiRoutes.put('/students/:id/profile', async (c) => {
   const userId = parseInt(c.req.param('id'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid student ID' }, 400);
   const body = await c.req.json();
 
   // Allowed user fields
@@ -305,6 +314,7 @@ adminApiRoutes.put('/students/:id/profile', async (c) => {
 // DELETE /students/:id — Soft-delete (set role to 'banned')
 adminApiRoutes.delete('/students/:id', async (c) => {
   const userId = parseInt(c.req.param('id'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid student ID' }, 400);
   await c.env.DB.prepare("UPDATE users SET role = 'banned' WHERE id = ?").bind(userId).run();
   return c.json({ status: 'banned', user_id: userId });
 });
@@ -390,7 +400,9 @@ adminApiRoutes.get('/analytics/overview', async (c) => {
 
 // GET /analytics/trends — Daily activity over last N days
 adminApiRoutes.get('/analytics/trends', async (c) => {
-  const days = Math.min(parseInt(c.req.query('days') || '30'), 90);
+  let days = parseInt(c.req.query('days') || '30');
+  if (isNaN(days) || days < 1) days = 30;
+  days = Math.min(days, 90);
 
   // Questions answered trend (from test answers)
   const questionTrends = await c.env.DB.prepare(
@@ -475,6 +487,7 @@ adminApiRoutes.get('/analytics/content-coverage', async (c) => {
 // GET /mental-model/:userId — View a student's full mental model
 adminApiRoutes.get('/mental-model/:userId', async (c) => {
   const userId = parseInt(c.req.param('userId'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid user ID' }, 400);
 
   const model = await c.env.DB.prepare(
     `SELECT * FROM student_mental_model WHERE user_id = ? ORDER BY concept ASC`
@@ -503,6 +516,7 @@ adminApiRoutes.get('/mental-model/:userId', async (c) => {
 // PUT /mental-model/:userId/:concept — Manually adjust a concept
 adminApiRoutes.put('/mental-model/:userId/:concept', async (c) => {
   const userId = parseInt(c.req.param('userId'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid user ID' }, 400);
   const concept = c.req.param('concept');
   const { believed_understanding, confidence, notes } = await c.req.json();
 
@@ -541,14 +555,23 @@ adminApiRoutes.get('/lessons', async (c) => {
   const classId = c.req.query('class_id');
   const status = c.req.query('status');
   const planType = c.req.query('plan_type');
-  const page = parseInt(c.req.query('page') || '1');
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
+  let page = parseInt(c.req.query('page') || '1');
+  if (isNaN(page) || page < 1) page = 1;
+  let limit = parseInt(c.req.query('limit') || '50');
+  if (isNaN(limit) || limit < 1) limit = 50;
+  limit = Math.min(limit, 200);
   const offset = (page - 1) * limit;
 
   let where = '1=1';
   const params: any[] = [];
-  if (userId) { where += ' AND lp.user_id = ?'; params.push(parseInt(userId)); }
-  if (classId) { where += ' AND lp.class_id = ?'; params.push(parseInt(classId)); }
+  if (userId) {
+    const userIdNum = parseInt(userId);
+    if (!isNaN(userIdNum)) { where += ' AND lp.user_id = ?'; params.push(userIdNum); }
+  }
+  if (classId) {
+    const classIdNum = parseInt(classId);
+    if (!isNaN(classIdNum)) { where += ' AND lp.class_id = ?'; params.push(classIdNum); }
+  }
   if (status) { where += ' AND lp.status = ?'; params.push(status); }
   if (planType) { where += ' AND lp.plan_type = ?'; params.push(planType); }
 
@@ -581,6 +604,7 @@ adminApiRoutes.get('/lessons', async (c) => {
 // GET /lessons/:id — Single lesson plan detail
 adminApiRoutes.get('/lessons/:id', async (c) => {
   const planId = parseInt(c.req.param('id'));
+  if (isNaN(planId)) return c.json({ error: 'Invalid lesson plan ID' }, 400);
 
   const plan = await c.env.DB.prepare(
     `SELECT lp.*, u.name as student_name
@@ -605,6 +629,7 @@ adminApiRoutes.get('/lessons/:id', async (c) => {
 // DELETE /lessons/:id — Remove a lesson plan
 adminApiRoutes.delete('/lessons/:id', async (c) => {
   const planId = parseInt(c.req.param('id'));
+  if (isNaN(planId)) return c.json({ error: 'Invalid lesson plan ID' }, 400);
   await c.env.DB.prepare("UPDATE lesson_plans SET status = 'archived' WHERE id = ?").bind(planId).run();
   return c.json({ status: 'archived', plan_id: planId });
 });
@@ -620,8 +645,11 @@ adminApiRoutes.get('/content', async (c) => {
   const difficulty = c.req.query('difficulty');
   const status = c.req.query('status') || 'published';
   const topic = c.req.query('topic');
-  const page = parseInt(c.req.query('page') || '1');
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
+  let page = parseInt(c.req.query('page') || '1');
+  if (isNaN(page) || page < 1) page = 1;
+  let limit = parseInt(c.req.query('limit') || '50');
+  if (isNaN(limit) || limit < 1) limit = 50;
+  limit = Math.min(limit, 200);
   const offset = (page - 1) * limit;
 
   let where = '1=1';
@@ -674,10 +702,35 @@ adminApiRoutes.post('/content/bulk-insert', async (c) => {
 
   const inserted: number[] = [];
   const errors: { index: number; error: string }[] = [];
+  const warnings: { index: number; warnings: string[] }[] = [];
+  const skipOnError = c.req.query('skip_on_error') !== '0'; // default: skip invalid
 
   for (let i = 0; i < questions.length; i++) {
     const q = questions[i];
     try {
+      // Validate before insert. For bulk-insert we use 'publish' mode since
+      // status defaults to 'published' — catches garbage going live.
+      const mode = (q.status || 'published') === 'published' ? 'publish' : 'draft';
+      const parsedContent = typeof q.content === 'string'
+        ? (() => { try { return JSON.parse(q.content); } catch { return { question_text: q.content }; } })()
+        : q.content;
+      const v = validateContent(
+        {
+          section: q.section,
+          question_type: q.question_type,
+          content: parsedContent,
+          media_url: q.media_url ?? null,
+        },
+        { mode },
+      );
+      if (v.errors.length > 0 && skipOnError) {
+        errors.push({ index: i, error: `Validation failed: ${v.errors.join('; ')}` });
+        continue;
+      }
+      if (v.warnings.length > 0) {
+        warnings.push({ index: i, warnings: v.warnings });
+      }
+
       const result = await c.env.DB.prepare(
         `INSERT INTO test_contents (section, question_type, topic, difficulty, content, passage, direction, options, correct_answer, explanation, scoring_rubric, sample_response, skill_tags, status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -695,12 +748,13 @@ adminApiRoutes.post('/content/bulk-insert', async (c) => {
     }
   }
 
-  return c.json({ inserted: inserted.length, errors, ids: inserted });
+  return c.json({ inserted: inserted.length, errors, warnings, ids: inserted });
 });
 
 // POST /content/:id/audio — Upload audio to R2 and update content media_url
 adminApiRoutes.post('/content/:id/audio', async (c) => {
   const contentId = parseInt(c.req.param('id'));
+  if (isNaN(contentId)) return c.json({ error: 'Invalid content ID' }, 400);
   const bucket = c.env.AUDIO_BUCKET;
   if (!bucket) return c.json({ error: 'R2 audio bucket not configured' }, 501);
 
@@ -809,6 +863,126 @@ adminApiRoutes.post('/content/restore-with-tts', async (c) => {
   });
 });
 
+// POST /content/audit-and-publish — Batch-audit drafts against validateContent
+// and promote the ones that pass in 'publish' mode. The safety switch is
+// dry_run=1 (default): returns the decision breakdown without mutating.
+// dry_run=0 actually flips status='published' on the passing rows.
+//
+// Query params:
+//   test_type     (default 'TOEFL_IBT')
+//   section       (optional: 'listening' | 'speaking' | 'reading' | 'writing')
+//   question_type (optional, for a surgical batch)
+//   dry_run       ('1' default, '0' to commit)
+//   limit         (max rows to evaluate; default 5000, capped at 5000)
+//   strict_warnings ('1' to treat warnings as blockers; default '0')
+//
+// Response includes per-row pass/fail with error list so the caller can
+// triage the skipped rows without re-running.
+adminApiRoutes.post('/content/audit-and-publish', async (c) => {
+  const testType = c.req.query('test_type') || 'TOEFL_IBT';
+  const sectionFilter = c.req.query('section');
+  const questionTypeFilter = c.req.query('question_type');
+  const dryRun = c.req.query('dry_run') !== '0';
+  const strictWarnings = c.req.query('strict_warnings') === '1';
+  const limit = Math.min(parseInt(c.req.query('limit') || '5000', 10) || 5000, 5000);
+
+  // Build the select for draft rows matching the filter
+  let where = "status = 'draft' AND test_type = ?";
+  const params: any[] = [testType];
+  if (sectionFilter) { where += ' AND section = ?'; params.push(sectionFilter); }
+  if (questionTypeFilter) { where += ' AND question_type = ?'; params.push(questionTypeFilter); }
+
+  const rowsRes = await c.env.DB.prepare(
+    `SELECT id, test_type, section, question_type, content, media_url, title
+     FROM test_contents WHERE ${where} ORDER BY id LIMIT ?`
+  ).bind(...params, limit).all();
+  const rows = (rowsRes.results || []) as any[];
+
+  type Skip = { id: number; section: string; question_type: string; errors: string[]; warnings?: string[] };
+  const wouldPublish: number[] = [];
+  const wouldSkip: Skip[] = [];
+  const warningsOnly: Skip[] = [];
+
+  for (const row of rows) {
+    let parsed: any = {};
+    try { parsed = JSON.parse(String(row.content || '{}')); }
+    catch { wouldSkip.push({ id: row.id, section: row.section, question_type: row.question_type, errors: ['content is not valid JSON'] }); continue; }
+
+    const v = validateContent(
+      {
+        section: row.section,
+        question_type: row.question_type,
+        content: parsed,
+        media_url: row.media_url,
+        title: row.title,
+      },
+      { mode: 'publish' },
+    );
+
+    const blockers = strictWarnings ? [...v.errors, ...v.warnings] : v.errors;
+    if (blockers.length === 0) {
+      wouldPublish.push(row.id);
+      if (v.warnings.length > 0) {
+        warningsOnly.push({ id: row.id, section: row.section, question_type: row.question_type, errors: [], warnings: v.warnings });
+      }
+    } else {
+      wouldSkip.push({ id: row.id, section: row.section, question_type: row.question_type, errors: blockers, warnings: v.warnings });
+    }
+  }
+
+  // Aggregate by (section, question_type) for the response preview
+  type Agg = { section: string; question_type: string; would_publish: number; would_skip: number };
+  const aggMap = new Map<string, Agg>();
+  for (const id of wouldPublish) {
+    const r = rows.find((x: any) => x.id === id)!;
+    const k = `${r.section}|${r.question_type}`;
+    const a = aggMap.get(k) || { section: r.section, question_type: r.question_type, would_publish: 0, would_skip: 0 };
+    a.would_publish++;
+    aggMap.set(k, a);
+  }
+  for (const s of wouldSkip) {
+    const k = `${s.section}|${s.question_type}`;
+    const a = aggMap.get(k) || { section: s.section, question_type: s.question_type, would_publish: 0, would_skip: 0 };
+    a.would_skip++;
+    aggMap.set(k, a);
+  }
+  const byType = Array.from(aggMap.values()).sort((a, b) =>
+    a.section.localeCompare(b.section) || a.question_type.localeCompare(b.question_type),
+  );
+
+  // Commit promotion if not a dry run
+  let promoted = 0;
+  if (!dryRun && wouldPublish.length > 0) {
+    // D1 has a bind-parameter ceiling; chunk in batches of 100 to stay well under limits
+    const CHUNK = 100;
+    for (let i = 0; i < wouldPublish.length; i += CHUNK) {
+      const slice = wouldPublish.slice(i, i + CHUNK);
+      const placeholders = slice.map(() => '?').join(',');
+      const res = await c.env.DB.prepare(
+        `UPDATE test_contents SET status = 'published', updated_at = datetime('now') WHERE id IN (${placeholders}) AND status = 'draft'`
+      ).bind(...slice).run();
+      promoted += res.meta?.changes || 0;
+    }
+  }
+
+  return c.json({
+    test_type: testType,
+    section: sectionFilter || null,
+    question_type: questionTypeFilter || null,
+    dry_run: dryRun,
+    strict_warnings: strictWarnings,
+    evaluated: rows.length,
+    would_publish: wouldPublish.length,
+    would_skip: wouldSkip.length,
+    promoted,
+    by_type: byType,
+    // Cap detail arrays so the JSON doesn't balloon on large batches
+    skip_sample: wouldSkip.slice(0, 50),
+    warnings_sample: warningsOnly.slice(0, 50),
+    would_publish_ids: wouldPublish,
+  });
+});
+
 // GET /content/draft-stats — Get stats on draft/broken content for admin visibility
 adminApiRoutes.get('/content/draft-stats', async (c) => {
   const stats = await c.env.DB.prepare(`
@@ -844,7 +1018,7 @@ adminApiRoutes.get('/classes', async (c) => {
   const classes = await c.env.DB.prepare(
     `SELECT c.*,
        u.name as teacher_name,
-       (SELECT COUNT(*) FROM class_members cm WHERE cm.class_id = c.id) as member_count
+       (SELECT COUNT(*) FROM class_enrollments cm WHERE cm.class_id = c.id) as member_count
      FROM classes c
      LEFT JOIN users u ON c.teacher_id = u.id
      ORDER BY c.created_at DESC`
@@ -856,6 +1030,7 @@ adminApiRoutes.get('/classes', async (c) => {
 // GET /classes/:id/students — Students in a class with mastery
 adminApiRoutes.get('/classes/:id/students', async (c) => {
   const classId = parseInt(c.req.param('id'));
+  if (isNaN(classId)) return c.json({ error: 'Invalid class ID' }, 400);
 
   const students = await c.env.DB.prepare(
     `SELECT u.id, u.name, u.username, u.proficiency_level, u.target_test,
@@ -871,7 +1046,7 @@ adminApiRoutes.get('/classes/:id/students', async (c) => {
         JOIN test_attempts ta2 ON aa2.attempt_id = ta2.id
         WHERE ta2.user_id = u.id
           AND NOT (aa2.is_correct IS NULL AND aa2.section NOT IN ('speaking','writing'))) as questions_answered
-     FROM class_members cm
+     FROM class_enrollments cm
      JOIN users u ON cm.user_id = u.id
      LEFT JOIN student_profiles sp ON u.id = sp.user_id
      WHERE cm.class_id = ?
@@ -893,8 +1068,7 @@ adminApiRoutes.get('/srs/overview', async (c) => {
        SUM(CASE WHEN next_review_at <= datetime('now') THEN 1 ELSE 0 END) as total_overdue,
        SUM(CASE WHEN review_level >= 4 THEN 1 ELSE 0 END) as total_mastered,
        COUNT(DISTINCT user_id) as users_with_srs,
-       AVG(review_level) as avg_level,
-       AVG(correct_streak) as avg_streak
+       AVG(review_level) as avg_level
      FROM spaced_repetition`
   ).first();
 
@@ -923,7 +1097,7 @@ adminApiRoutes.get('/premium/overview', async (c) => {
       `SELECT COUNT(*) as active FROM users WHERE is_premium = 1 AND premium_until > datetime('now')`
     ).first(),
     c.env.DB.prepare(
-      `SELECT SUM(stars_amount) as total_stars, COUNT(*) as transactions
+      `SELECT SUM(amount) as total_stars, COUNT(*) as transactions
        FROM payment_requests WHERE status = 'completed'`
     ).first(),
     c.env.DB.prepare(
@@ -931,7 +1105,7 @@ adminApiRoutes.get('/premium/overview', async (c) => {
        FROM payment_requests pr
        JOIN users u ON pr.user_id = u.id
        WHERE pr.status = 'completed'
-       ORDER BY pr.completed_at DESC LIMIT 20`
+       ORDER BY pr.confirmed_at DESC LIMIT 20`
     ).all(),
     c.env.DB.prepare(
       `SELECT COUNT(DISTINCT referred_by) as referrers,
@@ -1019,6 +1193,41 @@ adminApiRoutes.get('/system/health', async (c) => {
 });
 
 // POST /system/query — Run arbitrary read-only SQL (dangerous but useful)
+// POST /system/companion-outreach — manually trigger the idle-student re-engagement
+// flow. Normally runs via cron at 0 11 * * * (18:00 WIB). This endpoint exists so
+// admins can test the feature without waiting for the next cron window.
+// Usage:
+//   curl -X POST -H "X-API-Key: $ADMIN_API_KEY" \
+//        https://edubot-api.edubot-leonardus.workers.dev/api/v1/admin/system/companion-outreach
+adminApiRoutes.post('/system/companion-outreach', async (c) => {
+  try {
+    const { runCompanionOutreach, findIdleStudents } = await import('../services/companion');
+
+    // dry_run=1 returns the detection results without sending any messages
+    const dryRun = c.req.query('dry_run') === '1';
+    if (dryRun) {
+      const idle = await findIdleStudents(c.env);
+      return c.json({
+        dry_run: true,
+        tier1_count: idle.tier1.length,
+        tier2_count: idle.tier2.length,
+        tier3_count: idle.tier3.length,
+        sample_tier1: idle.tier1.slice(0, 5),
+        sample_tier2: idle.tier2.slice(0, 5),
+        sample_tier3: idle.tier3.slice(0, 5),
+      });
+    }
+
+    const result = await runCompanionOutreach(c.env);
+    return c.json({ ok: true, result });
+  } catch (e: any) {
+    return c.json({
+      error: e?.message || 'Companion outreach failed',
+      stack: (e?.stack || '').split('\n').slice(0, 6).join('\n'),
+    }, 500);
+  }
+});
+
 adminApiRoutes.post('/system/query', async (c) => {
   const { sql, params: queryParams } = await c.req.json();
   if (!sql) return c.json({ error: 'sql field required' }, 400);
@@ -1232,7 +1441,7 @@ adminApiRoutes.get('/teacher-dashboard/weakness-heatmap', requireAdmin, async (c
 
   const binds: any[] = [];
   if (classId) {
-    sectionTypeQuery += ` JOIN class_members cm ON ta.user_id = cm.user_id AND cm.class_id = ?`;
+    sectionTypeQuery += ` JOIN class_enrollments cm ON ta.user_id = cm.user_id AND cm.class_id = ?`;
     binds.push(classId);
   }
   sectionTypeQuery += ` WHERE NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))`;
@@ -1259,7 +1468,7 @@ adminApiRoutes.get('/teacher-dashboard/weakness-heatmap', requireAdmin, async (c
 
   const missedBinds: any[] = [];
   if (classId) {
-    missedQuery += ` JOIN class_members cm ON ta.user_id = cm.user_id AND cm.class_id = ?`;
+    missedQuery += ` JOIN class_enrollments cm ON ta.user_id = cm.user_id AND cm.class_id = ?`;
     missedBinds.push(classId);
   }
   missedQuery += ` WHERE NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing'))`;
@@ -1280,7 +1489,7 @@ adminApiRoutes.get('/teacher-dashboard/weakness-heatmap', requireAdmin, async (c
 
   const skillBinds: any[] = [];
   if (classId) {
-    skillQuery += ` JOIN class_members cm ON ta.user_id = cm.user_id AND cm.class_id = ?`;
+    skillQuery += ` JOIN class_enrollments cm ON ta.user_id = cm.user_id AND cm.class_id = ?`;
     skillBinds.push(classId);
   }
   skillQuery += ` WHERE tc.skill_tags IS NOT NULL AND tc.skill_tags != '' AND NOT (aa.is_correct IS NULL AND aa.section NOT IN ('speaking','writing')) GROUP BY tc.skill_tags ORDER BY accuracy ASC`;
@@ -1298,7 +1507,9 @@ adminApiRoutes.get('/teacher-dashboard/weakness-heatmap', requireAdmin, async (c
 adminApiRoutes.get('/teacher-dashboard/score-progression', requireAdmin, async (c) => {
   const studentId = c.req.query('student_id');
   const classId = c.req.query('class_id');
-  const days = Math.min(parseInt(c.req.query('days') || '60'), 180);
+  let days = parseInt(c.req.query('days') || '60');
+  if (isNaN(days) || days < 1) days = 60;
+  days = Math.min(days, 180);
   const daysAgo = new Date(Date.now() - days * 86400000).toISOString();
 
   if (studentId) {
@@ -1346,7 +1557,7 @@ adminApiRoutes.get('/teacher-dashboard/score-progression', requireAdmin, async (
   let classFilter = '';
   const binds: any[] = [daysAgo];
   if (classId) {
-    classFilter = 'JOIN class_members cm ON ta.user_id = cm.user_id AND cm.class_id = ?';
+    classFilter = 'JOIN class_enrollments cm ON ta.user_id = cm.user_id AND cm.class_id = ?';
     binds.push(classId);
   }
 
@@ -1465,7 +1676,7 @@ adminApiRoutes.get('/teacher-dashboard/engagement', requireAdmin, async (c) => {
        (SELECT COUNT(*) FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id WHERE aa.submitted_at >= ?) as test_answers,
        (SELECT COUNT(*) FROM daily_question_logs WHERE question_date >= DATE(?)) as study_button_uses,
        (SELECT COUNT(*) FROM lesson_plans WHERE created_at >= ?) as lessons_generated,
-       (SELECT COUNT(*) FROM srs_cards WHERE last_reviewed >= ?) as srs_reviews`
+       (SELECT COUNT(*) FROM spaced_repetition WHERE last_reviewed_at >= ?) as srs_reviews`
   ).bind(daysAgo, daysAgo, daysAgo, daysAgo, daysAgo).first();
 
   // 5. Study time distribution (hour of day, from conversation_messages)

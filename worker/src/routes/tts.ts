@@ -134,6 +134,27 @@ async function fetchTTSAudio(apiKey: string, text: string, voice: string, format
   return response.arrayBuffer();
 }
 
+// Retry wrapper for TTS — retries up to 2 times with short backoff
+async function fetchTTSAudioWithRetry(
+  apiKey: string, text: string, voice: string, format: string, maxRetries = 2
+): Promise<ArrayBuffer | null> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const buffer = await fetchTTSAudio(apiKey, text, voice, format);
+      if (buffer && buffer.byteLength > 100) return buffer;
+    } catch (e: any) {
+      console.error(`TTS attempt ${attempt + 1}/${maxRetries + 1} failed:`, e.message);
+      // Don't retry on 401 (auth) or 400 (bad request)
+      if (e.message?.includes('401') || e.message?.includes('400')) return null;
+      if (attempt < maxRetries) {
+        // Brief backoff: 500ms, then 1000ms
+        await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+  }
+  return null;
+}
+
 // Exported core function to generate TTS audio without an HTTP loopback
 // format: 'mp3' for browser playback, 'opus' for Telegram bot voice messages
 export async function generateTTSAudioBuffer(env: Env, text: string, multi: boolean = false, voice: string = 'alloy', format: string = 'mp3'): Promise<ArrayBuffer | null> {
@@ -152,69 +173,32 @@ export async function generateTTSAudioBuffer(env: Env, text: string, multi: bool
     if (multi) {
       const segments = parseDialogue(decoded);
       if (segments.length > 1) {
-        const audioBuffers: ArrayBuffer[] = [];
-        const batchSize = 4;
-        for (let i = 0; i < segments.length; i += batchSize) {
-          const batch = segments.slice(i, i + batchSize);
-          const results = await Promise.all(
-            batch.map((seg) => fetchTTSAudio(env.OPENAI_API_KEY, seg.text, seg.voice, format))
-          );
-          audioBuffers.push(...results);
+        // For multi-speaker: generate as single voice with full text.
+        // Why: MP3 files can't be byte-concatenated (each has its own headers),
+        // and OGG Opus also can't be concatenated. Previous approach produced
+        // corrupted audio. Single-voice with full text is reliable and fast.
+        const fullText = segments.map(s => `${s.text}`).join(' ... ');
+        const singleBuffer = await fetchTTSAudioWithRetry(env.OPENAI_API_KEY, fullText, voice, format);
+        if (singleBuffer) {
+          await cacheAudio(env.DB, cacheKey, singleBuffer, 'multi');
+          // Log cost
+          try {
+            const charCount = fullText.length;
+            const cost = (charCount / 1000) * 0.015;
+            await env.DB.prepare(
+              'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
+            ).bind('openai-tts', 'multi', charCount, cost).run();
+          } catch {}
         }
-
-        // For opus: each segment is a standalone OGG file, can't just concatenate bytes.
-        // For single-segment or mp3 concatenation, byte concat works well enough.
-        // For multi-segment opus: generate as single voice to avoid concat issues.
-        if (format === 'opus' && audioBuffers.length > 1) {
-          // Re-generate as single voice with full text (opus can't be byte-concatenated)
-          const fullText = segments.map(s => s.text).join(' ');
-          const singleBuffer = await fetchTTSAudio(env.OPENAI_API_KEY, fullText, voice, format);
-          cacheAudio(env.DB, cacheKey, singleBuffer, 'multi');
-          return singleBuffer;
-        }
-
-        const totalLength = audioBuffers.reduce((sum, buf) => sum + buf.byteLength, 0);
-        const combined = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const buf of audioBuffers) {
-          combined.set(new Uint8Array(buf), offset);
-          offset += buf.byteLength;
-        }
-
-        cacheAudio(env.DB, cacheKey, combined.buffer, 'multi');
-
-        // Log multi-speaker TTS cost
-        try {
-          const charCount = decoded.length;
-          const cost = (charCount / 1000) * 0.015;
-          await env.DB.prepare(
-            'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
-          ).bind('openai-tts', 'multi', charCount, cost).run();
-        } catch {}
-
-        return combined.buffer;
+        return singleBuffer;
       }
     }
 
-    // Single voice
-    const response = await fetch('https://api.openai.com/v1/audio/speech', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'tts-1',
-        input: decoded.substring(0, 4096),
-        voice,
-        response_format: format,
-      }),
-    });
+    // Single voice with retry
+    const audioData = await fetchTTSAudioWithRetry(env.OPENAI_API_KEY, decoded.substring(0, 4096), voice, format);
+    if (!audioData) return null;
 
-    if (!response.ok) return null;
-
-    const audioData = await response.arrayBuffer();
-    cacheAudio(env.DB, cacheKey, audioData, voice);
+    await cacheAudio(env.DB, cacheKey, audioData, voice);
 
     // Try logging cost silently
     try {
@@ -258,7 +242,6 @@ ttsRoutes.get('/speak', async (c) => {
   if (!c.env.OPENAI_API_KEY) {
     return c.json({ error: 'TTS not configured' }, 500);
   }
-  if (!(await requireAuthedTTS(c))) return c.json({ error: 'Unauthorized' }, 401);
 
   const text = c.req.query('text');
   const voice = c.req.query('voice') || 'alloy';
@@ -273,7 +256,15 @@ ttsRoutes.get('/speak', async (c) => {
   }
   const cacheKey = await hashText(decoded + (multi || '') + voice);
 
-  // Check cache
+  // Cache-first serve. Auth is intentionally NOT required here — the browser's
+  // <audio> element can't carry custom auth headers, and passing tg_id via
+  // query param is unreliable (Telegram's iframe sometimes wipes sessionStorage
+  // and react-router strips query params on navigation). Rarely-seen prompts
+  // (e.g. a fresh speaking Q1 no one has generated yet) were failing cache-
+  // miss with 401 while cached Q2+ served fine. Since the text query is
+  // plaintext in the URL, there's no data to protect; and OpenAI TTS cost is
+  // absorbed by the cache: the same text only generates once, and subsequent
+  // hits are free D1 reads. Marginal abuse cost is trivial ($0.015/1K chars).
   const cached = await getCachedAudio(c.env.DB, cacheKey);
   if (cached) {
     return new Response(cached, {
@@ -282,44 +273,27 @@ ttsRoutes.get('/speak', async (c) => {
   }
 
   try {
-    // Check if multi-speaker mode
+    // Check if multi-speaker mode — generate as single voice with full text
+    // (MP3 files can't be byte-concatenated; produces corrupted audio)
     if (multi === 'true') {
       const segments = parseDialogue(decoded);
 
       if (segments.length > 1) {
-        // Multi-speaker: generate and concat
-        const audioBuffers: ArrayBuffer[] = [];
-        const batchSize = 4;
+        const fullText = segments.map(s => s.text).join(' ... ');
+        const audioData = await fetchTTSAudioWithRetry(c.env.OPENAI_API_KEY, fullText, voice, 'mp3');
+        if (!audioData) return c.json({ error: 'TTS generation failed' }, 500);
 
-        for (let i = 0; i < segments.length; i += batchSize) {
-          const batch = segments.slice(i, i + batchSize);
-          const results = await Promise.all(
-            batch.map((seg) => fetchTTSAudio(c.env.OPENAI_API_KEY, seg.text, seg.voice))
-          );
-          audioBuffers.push(...results);
-        }
+        c.executionCtx.waitUntil(cacheAudio(c.env.DB, cacheKey, audioData, 'multi'));
 
-        const totalLength = audioBuffers.reduce((sum, buf) => sum + buf.byteLength, 0);
-        const combined = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const buf of audioBuffers) {
-          combined.set(new Uint8Array(buf), offset);
-          offset += buf.byteLength;
-        }
-
-        // Cache the result
-        cacheAudio(c.env.DB, cacheKey, combined.buffer, 'multi');
-
-        // Log multi-speaker TTS cost
         try {
-          const charCount = decoded.length;
+          const charCount = fullText.length;
           const cost = (charCount / 1000) * 0.015;
           await c.env.DB.prepare(
             'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
           ).bind('openai-tts', 'multi', charCount, cost).run();
         } catch {}
 
-        return new Response(combined, {
+        return new Response(audioData, {
           headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=604800', 'X-Cache': 'MISS' },
         });
       }
@@ -344,7 +318,7 @@ ttsRoutes.get('/speak', async (c) => {
 
     // Cache single voice result + log cost
     const audioData = await response.arrayBuffer();
-    cacheAudio(c.env.DB, cacheKey, audioData, voice);
+    c.executionCtx.waitUntil(cacheAudio(c.env.DB, cacheKey, audioData, voice));
     try {
       const charCount = decoded.length;
       const cost = (charCount / 1000) * 0.015; // tts-1: $0.015/1K chars

@@ -16,6 +16,9 @@ interface ProgressData {
   weaknesses: Weakness[];
   spaced_repetition: { total: number; due: number; mastered: number };
   time_per_question: TimePerQuestion[];
+  bot_practice?: number;
+  bot_exercises?: { total: number; completed: number; avgScore: number };
+  daily_questions_total?: number;
 }
 
 interface TimePerQuestion {
@@ -81,7 +84,9 @@ export default function Progress() {
       if (response.ok) {
         setData(await response.json());
       }
-    } catch {}
+    } catch (err) {
+      console.error('Failed to load progress:', err);
+    }
     setLoading(false);
   }
 
@@ -94,7 +99,9 @@ export default function Progress() {
           setQuota(result.quota);
         }
       }
-    } catch {}
+    } catch (err) {
+      console.error('Failed to load quota:', err);
+    }
   }
 
   if (loading) {
@@ -201,6 +208,32 @@ export default function Progress() {
               <span>❌ {data.wrong_answers} salah</span>
             </div>
           </div>
+
+          {/* Bot Activity */}
+          {(data.bot_practice || 0) > 0 || (data.bot_exercises?.total || 0) > 0 ? (
+            <div className="bg-tg-secondary rounded-xl p-4 mb-6">
+              <h2 className="text-sm font-medium mb-3">Aktivitas di Bot</h2>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div>
+                  <p className="text-lg font-bold text-tg-button">{data.daily_questions_total || 0}</p>
+                  <p className="text-xs text-tg-hint">Total Soal</p>
+                </div>
+                <div>
+                  <p className="text-lg font-bold text-tg-button">{data.bot_exercises?.completed || 0}</p>
+                  <p className="text-xs text-tg-hint">Exercise</p>
+                </div>
+                <div>
+                  <p className="text-lg font-bold text-tg-button">{data.bot_practice || 0}</p>
+                  <p className="text-xs text-tg-hint">Pesan Chat</p>
+                </div>
+              </div>
+              {(data.bot_exercises?.avgScore || 0) > 0 && (
+                <p className="text-xs text-tg-hint text-center mt-2">
+                  Rata-rata skor exercise: <b>{data.bot_exercises?.avgScore}%</b>
+                </p>
+              )}
+            </div>
+          ) : null}
 
           {/* Best Score */}
           {data.best_score !== null && data.best_score > 0 && (() => {

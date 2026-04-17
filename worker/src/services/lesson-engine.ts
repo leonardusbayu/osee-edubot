@@ -191,7 +191,7 @@ export async function generateClassroomPlan(
 ): Promise<LessonPlan> {
   // Get all students in the class
   const members = await env.DB.prepare(
-    'SELECT user_id FROM class_members WHERE class_id = ?'
+    'SELECT user_id FROM class_enrollments WHERE class_id = ?'
   ).bind(classId).all();
 
   const studentIds = (members.results || []).map((m: any) => m.user_id);

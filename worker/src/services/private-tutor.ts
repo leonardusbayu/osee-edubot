@@ -25,6 +25,7 @@ import {
 import { TEST_NAMES } from './teaching';
 import { buildMentalModelContext, recordEvidence } from './mental-model';
 import { getActivePlan, formatLessonStepMessage, formatTopicName } from './lesson-engine';
+import { buildAutoVisualHint } from './visual-explanation';
 
 // ═══════════════════════════════════════════════════════
 // PERSONA — Mojok.com-style academic expert
@@ -71,7 +72,21 @@ Kamu BISA mengirim audio pronunciation ke murid. Gunakan tag [AUDIO] diikuti tek
   [AUDIO] Woman: Can I help you? Man: Yes, I'd like to return this book.
 - JANGAN bilang "aku nggak bisa kirim audio" — kamu BISA via tag [AUDIO].
 - Tag [AUDIO] HARUS di baris terpisah, diikuti teks English yang akan di-TTS.
-- Boleh ada teks penjelasan sebelum/sesudah [AUDIO].`;
+- Boleh ada teks penjelasan sebelum/sesudah [AUDIO].
+
+FITUR VISUAL (PENTING):
+Kamu BISA menyisipkan gambar penjelasan (diagram, analogi, side-by-side) untuk konsep sulit. Gunakan tag [VISUAL:concept:type] di baris terpisah.
+- Format ketat: [VISUAL:<concept>:<type>] — contoh: [VISUAL:inference:analogy]
+- <type> harus salah satu dari: analogy | diagram | misconception_contrast | worked_example
+- <concept> HARUS dari daftar berikut (cache sudah pre-warm, jadi langsung tampil; kalau diluar daftar, generate on-demand dan mahal):
+{AUTO_VISUAL_HINT}
+- Gunakan [VISUAL:...] maks 1x per response, dan HANYA saat:
+  (a) murid minta "kasih gambar / diagram / contoh visual", ATAU
+  (b) kamu baru saja teach konsep dari daftar di atas dan explanasi text saja akan ambigu, ATAU
+  (c) murid visual-learner dan lagi struggle dengan konsep yang ada di daftar.
+- JANGAN pakai [VISUAL:...] untuk setiap konsep — cuma saat gambarnya benar-benar membantu.
+- JANGAN bilang "aku nggak bisa kirim gambar" — kamu BISA via tag [VISUAL:...].
+- Boleh combine: penjelasan text → [VISUAL:...] → [CHECK]... — tutor-text dikirim dulu, lalu gambar, lalu comprehension check.`;
 
 // ═══════════════════════════════════════════════════════
 // ADAPTIVE CONTEXT BUILDER — Injected per conversation
@@ -84,7 +99,9 @@ async function buildFullSystemPrompt(
   masteries: TopicMastery[],
   targetTest: string,
 ): Promise<string> {
-  const persona = PERSONA_PROMPT.split('{target_test}').join(targetTest);
+  const persona = PERSONA_PROMPT
+    .split('{target_test}').join(targetTest)
+    .split('{AUTO_VISUAL_HINT}').join(buildAutoVisualHint());
 
   // ── Ranedeer-style learning preferences ──
   const learningStyle = (profile as any).learning_style || 'balanced';
@@ -139,6 +156,23 @@ Progress: ${activePlan.progress_percent}%`;
     }
   } catch {}
 
+  // ── Paused-lesson context ──
+  // If the student hit "tunggu dulu", they want Q&A, not more teaching chunks.
+  // Don't emit [CHECK] blocks while paused — the webhook strips them anyway,
+  // but telling the tutor avoids wasted generation + keeps tone aligned.
+  let pausedCtx = '';
+  try {
+    const { isLessonPaused } = await import('./comprehension-check');
+    if (await isLessonPaused(env, user.id)) {
+      pausedCtx = `
+⏸ LESSON PAUSED (tunggu dulu):
+Murid menekan tombol "tunggu dulu" pada comprehension check terakhir. Mereka belum siap lanjut.
+- Jawab pertanyaan mereka langsung — tidak perlu teach-then-check.
+- JANGAN emit [CHECK] block sama sekali selagi paused.
+- Kalau mereka bilang "lanjut" / "ok lanjut" / "gas", balas santai "Oke, ketuk tombol ▶️ Lanjut lesson di atas ya" — jangan auto-lanjut dari pesan text.`;
+    }
+  } catch {}
+
   // Tutor mode-specific instructions
   let modeInstructions = '';
   if (profile.tutor_mode === 'lesson') {
@@ -146,7 +180,33 @@ Progress: ${activePlan.progress_percent}%`;
 MODE: LESSON — Kamu sedang mengajarkan topik "${profile.current_topic || 'baru'}".
 Step ${profile.current_lesson_step} dari pelajaran ini.
 ALUR: Socratic question → Pattern discovery (kasih contoh) → Micro-exercise → Feedback → Soal berikutnya (makin susah).
-Kalau step 0: mulai dengan pertanyaan Socratic atau contoh pattern. JANGAN langsung jelasin aturan.`;
+Kalau step 0: mulai dengan pertanyaan Socratic atau contoh pattern. JANGAN langsung jelasin aturan.
+
+TEACH-THEN-CHECK (WAJIB):
+Setiap kali kamu menjelaskan konsep baru atau memberi pattern, SELALU akhiri dengan satu comprehension check singkat yang memastikan murid paham sebelum lanjut. Tujuannya: bot mengecek pemahaman sebelum maju, bukan nge-lecture tanpa feedback.
+
+Struktur pesan lesson:
+1. Teach chunk (2-5 baris saja — konsep, pattern, atau contoh).
+2. Langsung diikuti block [CHECK]...[/CHECK] persis dalam format di bawah.
+
+Format CHECK (ketat — harus dikutip verbatim karena diparse):
+[CHECK]
+Q: <1 kalimat pertanyaan yang menguji chunk yang baru diajarkan>
+A) <opsi pendek>
+B) <opsi pendek>
+C) <opsi pendek>
+CORRECT: <A|B|C>
+STRATEGY_IF_WRONG: <analogy|simpler|example|visual>
+[/CHECK]
+
+Aturan CHECK:
+- Harus bisa dijawab dalam ≤ 15 detik.
+- 3 opsi cukup (boleh 2 kalau memang hanya benar/salah).
+- Jangan menulis apapun setelah [/CHECK].
+- STRATEGY_IF_WRONG adalah strategi re-teach yang kamu sarankan kalau murid salah.
+- JANGAN tulis [CHECK] dua kali dalam satu reply.
+
+Kalau kamu baru menjawab pertanyaan murid tanpa teaching konsep baru, kamu BOLEH skip [CHECK]. CHECK hanya wajib setelah teaching chunk.`;
   } else if (profile.tutor_mode === 'exercise') {
     modeInstructions = `
 MODE: EXERCISE — Kamu sedang drill topik "${profile.current_topic}".
@@ -178,6 +238,8 @@ ${mentalModelCtx}
 ${studentReportCtx ? `\n--- FULL STUDENT INTELLIGENCE ---\n${studentReportCtx}\n--- END REPORT ---` : ''}
 
 ${lessonPlanCtx}
+
+${pausedCtx}
 
 ${modeInstructions}
 

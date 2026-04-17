@@ -68,7 +68,7 @@ const OPINION_TOPICS = [
 const ROLEPLAY_SCENARIOS = [
   {
     place: 'Bandara',
-    situation: 'Pesawat Anda tertunda 3 jam. Minta alternatif ke staff.',
+    situation: 'Pesawat kamu tertunda 3 jam. Minta alternatif ke staff.',
     role: 'penumpang'
   },
   {
@@ -123,7 +123,7 @@ function cleanForTelegram(text: string): string {
     .trim();
 }
 
-async function sendMessage(env: Env, chatId: number, text: string, replyMarkup?: any) {
+export async function sendMessage(env: Env, chatId: number, text: string, replyMarkup?: any) {
   const cleaned = cleanForTelegram(text);
   await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
@@ -165,46 +165,152 @@ async function getOrCreateUser(env: Env, tgUser: any): Promise<User> {
   return user;
 }
 
-// Send TTS audio as voice message via Telegram
+/**
+ * Inject an ID3v2.3 TLEN tag into an MP3 so players (including Telegram) can
+ * read the total duration without scanning every frame. OpenAI `tts-1` MP3
+ * output is CBR but has no XING/VBRI/ID3 header, so Telegram's probe reads 0
+ * and displays an unplayable "00:00" widget even when we pass `duration` via
+ * the bot API. Embedding TLEN in the file itself fixes it client-side.
+ *
+ * If the MP3 already carries an ID3v2 tag, strip it first so we don't stack two.
+ */
+function injectMp3Duration(mp3: ArrayBuffer, durationSec: number): ArrayBuffer {
+  const mp3Bytes = new Uint8Array(mp3);
+
+  // Skip an existing ID3v2 tag if present.
+  let offset = 0;
+  if (
+    mp3Bytes.byteLength > 10 &&
+    mp3Bytes[0] === 0x49 && mp3Bytes[1] === 0x44 && mp3Bytes[2] === 0x33
+  ) {
+    // ID3v2 size is syncsafe (7 bits per byte)
+    const tagSize =
+      (mp3Bytes[6] << 21) | (mp3Bytes[7] << 14) | (mp3Bytes[8] << 7) | mp3Bytes[9];
+    offset = 10 + tagSize;
+  }
+
+  // TLEN body: encoding byte (0x00 = ISO-8859-1) + ASCII digits (ms)
+  const durationMs = String(Math.max(1, Math.round(durationSec * 1000)));
+  const textBytes = new TextEncoder().encode(durationMs);
+  const frameBodySize = 1 + textBytes.byteLength;
+
+  // ID3v2.3 frame header: 4-byte ID + 4-byte big-endian size + 2-byte flags
+  const frame = new Uint8Array(10 + frameBodySize);
+  frame[0] = 0x54; // 'T'
+  frame[1] = 0x4c; // 'L'
+  frame[2] = 0x45; // 'E'
+  frame[3] = 0x4e; // 'N'
+  frame[4] = (frameBodySize >>> 24) & 0xff;
+  frame[5] = (frameBodySize >>> 16) & 0xff;
+  frame[6] = (frameBodySize >>> 8) & 0xff;
+  frame[7] = frameBodySize & 0xff;
+  frame[8] = 0x00;
+  frame[9] = 0x00;
+  frame[10] = 0x00; // encoding
+  frame.set(textBytes, 11);
+
+  // ID3v2.3 tag header: "ID3" + version 2.3.0 + flags + syncsafe size
+  const tagBodySize = frame.byteLength;
+  const header = new Uint8Array(10);
+  header[0] = 0x49; // 'I'
+  header[1] = 0x44; // 'D'
+  header[2] = 0x33; // '3'
+  header[3] = 0x03;
+  header[4] = 0x00;
+  header[5] = 0x00;
+  header[6] = (tagBodySize >>> 21) & 0x7f;
+  header[7] = (tagBodySize >>> 14) & 0x7f;
+  header[8] = (tagBodySize >>> 7) & 0x7f;
+  header[9] = tagBodySize & 0x7f;
+
+  const mp3Data = mp3Bytes.subarray(offset);
+  const out = new Uint8Array(header.byteLength + frame.byteLength + mp3Data.byteLength);
+  out.set(header, 0);
+  out.set(frame, header.byteLength);
+  out.set(mp3Data, header.byteLength + frame.byteLength);
+  return out.buffer;
+}
+
+// Send TTS audio via Telegram.
+// We request MP3 from OpenAI and deliver via sendAudio (not sendVoice).
+// Why: OpenAI's `response_format: 'opus'` returns OGG Opus with missing/broken
+// duration headers, which Telegram's sendVoice renders as an unplayable 00:00
+// widget. MP3 via sendAudio is reliable, cached, and shows correct duration —
+// as long as we also embed the duration inside the MP3 itself (see
+// injectMp3Duration above), because Telegram ignores the API-level `duration`
+// param in several clients and reads from the file instead.
 async function sendTTSAudio(env: Env, chatId: number, text: string) {
   try {
     const { generateTTSAudioBuffer } = await import('../routes/tts');
 
     // Detect if text has speaker labels (Man:, Woman:, Professor:, etc.)
     const hasMultiSpeaker = /(?:Woman|Man|Male|Female|Professor|Instructor|Narrator|Student|Speaker)\s*[^:]*:/i.test(text);
-    // Request opus format — Telegram sendVoice natively supports OGG Opus
-    const audioBuffer = await generateTTSAudioBuffer(env, text, hasMultiSpeaker, 'alloy', 'opus');
+    const audioBuffer = await generateTTSAudioBuffer(env, text, hasMultiSpeaker, 'alloy', 'mp3');
 
     if (!audioBuffer || audioBuffer.byteLength < 100) {
       console.error('TTS: generateTTSAudioBuffer returned null/empty for text:', text.substring(0, 80));
-      await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
+      await sendMessage(env, chatId, `🔊 Audio (teks):\n${text}\n\n⚠️ Audio gagal dimuat. Baca teks di atas sebagai pengganti.`);
       return;
     }
 
-    // Send as voice message (OGG Opus — native Telegram format, shows inline player)
+    // Estimate duration for Telegram. OpenAI `tts-1` MP3 is CBR without a
+    // XING/VBRI header, so Telegram's own duration probe reads 0 and renders
+    // a broken "00:00" widget that won't play on some clients. Passing an
+    // explicit `duration` param fixes this entirely.
+    //
+    // Estimate two ways and take the max so we never understate:
+    //   - bytes / ~18 KB/s  (OpenAI tts-1 mp3 is ~128-144 kbps ≈ 16-18 KB/s)
+    //   - word_count * 0.36s  (typical TTS speaks ~165 WPM)
+    const bytesEst = Math.ceil(audioBuffer.byteLength / 18000);
+    const words = (text || '').trim().split(/\s+/).filter(Boolean).length;
+    const wordsEst = Math.ceil(words * 0.36);
+    const durationSec = Math.max(1, bytesEst, wordsEst);
+
+    // Inject an ID3v2 TLEN tag into the MP3 so Telegram's *client-side* player
+    // can read duration (the API-level `duration` param alone is insufficient —
+    // several Telegram clients ignore it and probe the file).
+    const taggedBuffer = injectMp3Duration(audioBuffer, durationSec);
+
+    // Send via sendAudio with MP3 — plays reliably in Telegram with real duration.
     const formData = new FormData();
     formData.append('chat_id', String(chatId));
-    formData.append('voice', new File([audioBuffer], 'audio.ogg', { type: 'audio/ogg' }));
+    formData.append('audio', new File([taggedBuffer], 'audio.mp3', { type: 'audio/mpeg' }));
+    formData.append('title', 'EduBot Audio');
+    formData.append('performer', 'EduBot');
+    formData.append('duration', String(durationSec));
 
-    const resp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendVoice`, {
+    const resp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendAudio`, {
       method: 'POST',
       body: formData,
     });
 
     if (!resp.ok) {
       const err = await resp.text();
-      console.error('TTS: sendVoice failed:', err);
-      // Fallback: try sendAudio (music player style)
-      const fallbackForm = new FormData();
-      fallbackForm.append('chat_id', String(chatId));
-      fallbackForm.append('audio', new File([audioBuffer], 'audio.ogg', { type: 'audio/ogg' }));
-      fallbackForm.append('title', 'EduBot Audio');
-      const resp2 = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendAudio`, {
-        method: 'POST',
-        body: fallbackForm,
-      });
-      if (!resp2.ok) {
-        console.error('TTS: sendAudio fallback also failed:', await resp2.text());
+      console.error('TTS: sendAudio failed:', err);
+      // Last-resort: send as voice. Telegram's sendVoice REQUIRES OGG Opus —
+      // an MP3 there results in a broken widget too. Request a fresh OGG
+      // buffer from OpenAI and ship that instead.
+      try {
+        const { generateTTSAudioBuffer } = await import('../routes/tts');
+        const ogg = await generateTTSAudioBuffer(env, text, hasMultiSpeaker, 'alloy', 'opus');
+        if (ogg) {
+          const voiceForm = new FormData();
+          voiceForm.append('chat_id', String(chatId));
+          voiceForm.append('voice', new File([ogg], 'audio.ogg', { type: 'audio/ogg' }));
+          voiceForm.append('duration', String(durationSec));
+          const resp2 = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendVoice`, {
+            method: 'POST',
+            body: voiceForm,
+          });
+          if (!resp2.ok) {
+            console.error('TTS: sendVoice fallback also failed:', await resp2.text());
+            await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
+          }
+        } else {
+          await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
+        }
+      } catch (fallbackErr) {
+        console.error('TTS: opus fallback threw:', fallbackErr);
         await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
       }
     }
@@ -212,18 +318,95 @@ async function sendTTSAudio(env: Env, chatId: number, text: string) {
     console.error('TTS audio send error:', e);
     try {
       await sendMessage(env, chatId, `🔊 Audio:\n${text}`);
-    } catch {}
+    } catch (fallbackErr) {
+      console.error('TTS fallback message error:', fallbackErr);
+    }
   }
 }
 
-// Save messages to conversation history for context
+// ═══════════════════════════════════════════════════════
+// PHOTO SEND — for tutor-injected [VISUAL:concept:type] tags
+// ═══════════════════════════════════════════════════════
+// Upload bytes via multipart (not photo_url) because the image is served
+// from /api/visual/:id/bytes on this same worker — Telegram can't reach
+// a relative URL, and handing it an internal URL forces an extra round
+// trip. Direct byte upload keeps it to one request.
+async function sendPhoto(env: Env, chatId: number, photoBytes: ArrayBuffer, caption?: string, filename = 'visual.png', mimeType = 'image/png') {
+  try {
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('photo', new File([photoBytes], filename, { type: mimeType }));
+    if (caption) form.append('caption', caption);
+    const resp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      console.error('sendPhoto failed:', errText);
+      // Fallback: at least tell the student there was a visual so they
+      // don't feel like the tutor silently dropped something. Caption
+      // alone often carries the useful context.
+      if (caption) await sendMessage(env, chatId, `🖼 (gambar gagal dimuat) ${caption}`);
+    }
+  } catch (e) {
+    console.error('sendPhoto error:', e);
+  }
+}
+
+// Resolve a [VISUAL:concept:type] tag: hit the cache, pull bytes from
+// R2, send to Telegram as a photo. Swallows errors — a broken visual
+// must never take down the tutor turn.
+async function handleVisualTag(
+  env: Env,
+  chatId: number,
+  userId: number,
+  concept: string,
+  type: string,
+) {
+  try {
+    const svc = await import('../services/visual-explanation');
+    const validTypes = ['analogy', 'diagram', 'misconception_contrast', 'worked_example'];
+    if (!validTypes.includes(type)) {
+      console.warn('[visual] tutor emitted invalid type, skipping:', type);
+      return;
+    }
+    const result = await svc.getOrGenerateVisual(env, {
+      concept,
+      explanation_type: type as any,
+      user_id: userId,
+    });
+    if (!result) return;
+    const loaded = await svc.loadImageBytes(env, result.id);
+    if (!loaded) return;
+    // loaded.body is an R2 body stream; materialize to ArrayBuffer for
+    // the multipart upload. R2 bodies are typically small (<1MB for
+    // Nano Banana PNGs) so this is safe.
+    const buf = await new Response(loaded.body as any).arrayBuffer();
+    const prettyConcept = concept.replace(/_/g, ' ');
+    const prettyType = type.replace(/_/g, ' ');
+    await sendPhoto(env, chatId, buf, `${prettyConcept} — ${prettyType}`, `visual-${result.id}.png`, loaded.mime_type || 'image/png');
+  } catch (e: any) {
+    console.error('[visual] handleVisualTag failed (non-fatal):', e?.message || e);
+  }
+}
+
+// Save messages to conversation history for context.
+// Wrapped in try/catch because D1 write failures here must not cascade into the
+// caller — losing a history row is cosmetic, but throwing would bubble up and
+// kill the bot turn (e.g., the /lesson command would error after the user had
+// already seen the lesson). Log and continue instead.
 async function saveToHistory(env: Env, userId: number, userMsg: string, assistantMsg: string) {
-  await env.DB.prepare(
-    'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
-  ).bind(userId, 'user', userMsg).run();
-  await env.DB.prepare(
-    'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
-  ).bind(userId, 'assistant', assistantMsg).run();
+  try {
+    await env.DB.prepare(
+      'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
+    ).bind(userId, 'user', userMsg).run();
+    await env.DB.prepare(
+      'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
+    ).bind(userId, 'assistant', assistantMsg).run();
+  } catch (e) {
+    console.warn('[webhook] saveToHistory failed (non-fatal):', e);
+  }
 }
 
 // Inline keyboards
@@ -566,6 +749,10 @@ async function handleVoiceMessage(message: any, env: Env) {
 
   const user = await getOrCreateUser(env, tgUser);
   const voice = message.voice || message.audio;
+  if (!voice) {
+    await sendMessage(env, chatId, 'Gagal memproses audio. Voice message tidak terdeteksi.');
+    return;
+  }
   const fileId = voice.file_id;
 
   try {
@@ -579,19 +766,11 @@ async function handleVoiceMessage(message: any, env: Env) {
     const audioResp = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${filePath}`);
     const audioBytes = await audioResp.arrayBuffer();
 
-    // Transcribe with Whisper
-    const formData = new FormData();
-    formData.append('file', new Blob([audioBytes], { type: 'audio/ogg' }), 'voice.ogg');
-    formData.append('model', 'whisper-1');
-    formData.append('response_format', 'text');
-
-    const whisperResp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${env.OPENAI_API_KEY}` },
-      body: formData,
-    });
-
-    const transcription = (await whisperResp.text()).trim();
+    // Transcribe with Whisper (word-level timestamps for prosody analysis)
+    const { transcribeWithTimestamps, analyzeProsody, prosodyContextForScorer } = await import('../services/prosody');
+    const whisperResult = await transcribeWithTimestamps(env.OPENAI_API_KEY, audioBytes);
+    const transcription = whisperResult.text;
+    const prosodyMetrics = analyzeProsody(whisperResult.verbose);
 
     if (!transcription || transcription.length < 2) {
       await sendMessage(env, chatId, 'Tidak terdeteksi suara. Coba kirim ulang.');
@@ -614,11 +793,124 @@ async function handleVoiceMessage(message: any, env: Env) {
       ).bind(user.id, 'active').first() as any;
 
       if (session) {
-        // Score the speaking response using GPT-4o
+        // Handle IELTS 3-part multi-step flow
+        const sessionMeta = session.feedback ? (() => { try { return JSON.parse(session.feedback); } catch { return null; } })() : null;
+        if (sessionMeta?.mode === 'ielts_3part') {
+          try {
+            const part = sessionMeta.current_part || 1;
+            sessionMeta.responses = sessionMeta.responses || [];
+            sessionMeta.responses.push({ part, transcription });
+
+            if (part === 1) {
+              const idx = (sessionMeta.part1_index || 0) + 1;
+              if (idx < sessionMeta.part1_questions.length) {
+                // Next Part 1 question
+                sessionMeta.part1_index = idx;
+                await env.DB.prepare('UPDATE speaking_sessions SET feedback = ? WHERE id = ?')
+                  .bind(JSON.stringify(sessionMeta), session.id).run();
+                await sendMessage(env, chatId,
+                  `✅ Diterima!\n\n❓ *Pertanyaan ${idx + 1}/${sessionMeta.part1_questions.length}:*\n"${sessionMeta.part1_questions[idx]}"\n\n🎙️ Kirim voice message.`);
+                return;
+              } else {
+                // Move to Part 2
+                sessionMeta.current_part = 2;
+                await env.DB.prepare('UPDATE speaking_sessions SET feedback = ? WHERE id = ?')
+                  .bind(JSON.stringify(sessionMeta), session.id).run();
+                await sendMessage(env, chatId,
+                  `✅ Part 1 selesai!\n\n` +
+                  `🎯 *IELTS Speaking Test — Part 2*\n\n` +
+                  `📋 *Cue Card:*\n"${sessionMeta.part2_cue}"\n\n` +
+                  `Kamu harus membahas:\n• ${sessionMeta.part2_bullets.split(', ').join('\n• ')}\n\n` +
+                  `⏱️ *Persiapan 1 menit, lalu bicara 1-2 menit.*\n🎙️ Kirim voice message saat siap.`);
+                return;
+              }
+            } else if (part === 2) {
+              // Move to Part 3 — generate follow-up questions based on Part 2 topic
+              sessionMeta.current_part = 3;
+              sessionMeta.part3_index = 0;
+              const part3Questions = [
+                `Why do you think ${sessionMeta.part2_cue.toLowerCase().includes('person') ? 'people' : 'this topic'} is important in society today?`,
+                `How has this changed compared to the past?`,
+                `What do you think will happen in the future regarding this?`,
+                `Do you think there are any negative aspects? Why or why not?`,
+                `How does this relate to your country or culture specifically?`,
+              ];
+              sessionMeta.part3_questions = part3Questions;
+              await env.DB.prepare('UPDATE speaking_sessions SET feedback = ? WHERE id = ?')
+                .bind(JSON.stringify(sessionMeta), session.id).run();
+              await sendMessage(env, chatId,
+                `✅ Part 2 selesai!\n\n` +
+                `🎯 *IELTS Speaking Test — Part 3*\n\n` +
+                `Examiner akan bertanya pertanyaan abstrak terkait topik Part 2.\n\n` +
+                `❓ *Pertanyaan 1/5:*\n"${part3Questions[0]}"\n\n🎙️ Kirim voice message.`);
+              return;
+            } else if (part === 3) {
+              const idx = (sessionMeta.part3_index || 0) + 1;
+              if (idx < (sessionMeta.part3_questions?.length || 5)) {
+                const question = sessionMeta.part3_questions?.[idx] || `Pertanyaan ${idx + 1}`;
+                sessionMeta.part3_index = idx;
+                await env.DB.prepare('UPDATE speaking_sessions SET feedback = ? WHERE id = ?')
+                  .bind(JSON.stringify(sessionMeta), session.id).run();
+                await sendMessage(env, chatId,
+                  `✅ Diterima!\n\n❓ *Pertanyaan ${idx + 1}/5:*\n"${question}"\n\n🎙️ Kirim voice message.`);
+                return;
+              } else {
+                // All 3 parts complete — do final scoring
+                const allTranscripts = sessionMeta.responses.map((r: any) => r.transcription).join('\n\n');
+                const { scoreInterview } = await import('../routes/speaking');
+                const result = await scoreInterview(env.OPENAI_API_KEY, allTranscripts,
+                  `IELTS 3-Part Speaking Test. Part 2 topic: ${sessionMeta.part2_cue}`, 'IELTS', 9);
+
+                await env.DB.prepare(
+                  'UPDATE speaking_sessions SET transcription = ?, score = ?, feedback = ?, status = ?, completed_at = ? WHERE id = ?'
+                ).bind(allTranscripts, result.score, JSON.stringify({ ...result.criteria, mode: 'ielts_3part', response_count: sessionMeta.responses.length }),
+                  'completed', new Date().toISOString(), session.id).run();
+
+                if (result.dimensions) {
+                  const d = result.dimensions;
+                  try {
+                    await env.DB.prepare(
+                      `INSERT INTO speaking_dimension_scores
+                         (session_id, user_id, test_type, fluency_coherence, lexical_resource,
+                          grammar_range, pronunciation, relevancy_score, word_count, speaking_rate,
+                          fluency_note, lexical_note, grammar_note, pronunciation_note)
+                       VALUES (?, ?, 'IELTS', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                    ).bind(session.id, user.id, d.fluency_coherence, d.lexical_resource,
+                      d.grammar_range, d.pronunciation, d.relevancy_score,
+                      result.word_count || 0, null,
+                      d.fluency_note, d.lexical_note, d.grammar_note, d.pronunciation_note).run();
+                  } catch (e) { console.error('3part dim insert error:', e); }
+                }
+
+                const dim = result.dimensions;
+                await sendMessage(env, chatId,
+                  `🎯 *IELTS Speaking Test — SELESAI!*\n\n` +
+                  `⭐ *Skor Keseluruhan: ${result.score}/9*\n\n` +
+                  `📊 *4 Dimensi:*\n` +
+                  (dim ? `🗣 Fluency & Coherence: *${dim.fluency_coherence}*\n` +
+                    `📚 Lexical Resource: *${dim.lexical_resource}*\n` +
+                    `✏️ Grammar Range: *${dim.grammar_range}*\n` +
+                    `🔊 Pronunciation: *${dim.pronunciation}*\n` : '') +
+                  `\n📝 Respon: ${sessionMeta.responses.length} jawaban (Part 1-3)\n\n` +
+                  `✅ *Kelebihan:* ${result.strengths}\n` +
+                  `🎯 *Untuk diperbaiki:* ${result.improvement}\n\n` +
+                  `💡 ${result.feedback}`);
+                return;
+              }
+            }
+          } catch (e: any) {
+            console.error('3-part speaking error:', e);
+            await sendMessage(env, chatId, 'Gagal memproses IELTS 3-part. Coba lagi.');
+            return;
+          }
+        }
+
+        // Score the speaking response using GPT-4o with 4-dimension rubric + prosody
         try {
           const { scoreInterview } = await import('../routes/speaking');
           const maxBand = session.test_type === 'IELTS' ? 9 : 6;
-          const result = await scoreInterview(env.OPENAI_API_KEY, transcription, session.prompt, session.test_type, maxBand);
+          const prosodyCtx = prosodyContextForScorer(prosodyMetrics);
+          const result = await scoreInterview(env.OPENAI_API_KEY, transcription, session.prompt, session.test_type, maxBand, prosodyCtx);
 
           // Update session with results
           await env.DB.prepare(
@@ -632,22 +924,87 @@ async function handleVoiceMessage(message: any, env: Env) {
             session.id
           ).run();
 
-          // Log speaking evaluation cost (estimate: ~150 tokens)
+          // Store per-dimension scores + prosody for trend tracking
+          if (result.dimensions) {
+            const d = result.dimensions;
+            const wpm = prosodyMetrics.words_per_minute || (voice.duration && voice.duration > 0
+              ? Math.round((result.word_count || 0) / (voice.duration / 60))
+              : null);
+            try {
+              await env.DB.prepare(
+                `INSERT INTO speaking_dimension_scores
+                   (session_id, user_id, test_type, fluency_coherence, lexical_resource,
+                    grammar_range, pronunciation, relevancy_score, word_count, speaking_rate,
+                    fluency_note, lexical_note, grammar_note, pronunciation_note,
+                    prosody_wpm, prosody_pause_ratio, prosody_long_pauses, prosody_fillers,
+                    prosody_repetitions, prosody_fluency_score, prosody_rhythm_score,
+                    prosody_overall, prosody_raw)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              ).bind(
+                session.id, user.id, session.test_type,
+                d.fluency_coherence, d.lexical_resource, d.grammar_range, d.pronunciation,
+                d.relevancy_score, result.word_count || 0, wpm,
+                d.fluency_note, d.lexical_note, d.grammar_note, d.pronunciation_note,
+                prosodyMetrics.words_per_minute, prosodyMetrics.pause_ratio,
+                prosodyMetrics.long_pauses, prosodyMetrics.filler_count,
+                prosodyMetrics.repetition_count, prosodyMetrics.fluency_score,
+                prosodyMetrics.rhythm_score, prosodyMetrics.overall_delivery,
+                prosodyMetrics.raw_json
+              ).run();
+            } catch (e) {
+              console.error('Dimension score insert error:', e);
+            }
+          }
+
+          // Log speaking evaluation cost (estimate: ~200 tokens with dimensions)
           try {
             await env.DB.prepare('INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd, user_id) VALUES (?, ?, ?, ?, ?)')
-              .bind('openai-gpt4o', 'speaking-eval', 150, 0.0015, user.id).run();
+              .bind('openai-gpt4o', 'speaking-eval', 200, 0.002, user.id).run();
           } catch (e) {
             console.error('Speaking eval cost tracking error:', e);
           }
 
-          // Send detailed feedback
+          // Build dimension display
+          const dim = result.dimensions;
+          const dimText = dim
+            ? `🗣 Fluency & Coherence: *${dim.fluency_coherence}*\n` +
+              `📚 Lexical Resource: *${dim.lexical_resource}*\n` +
+              `✏️ Grammar Range: *${dim.grammar_range}*\n` +
+              `🔊 Pronunciation: *${dim.pronunciation}*`
+            : `• Fluency: ${result.criteria.fluency_coherence || '—'}\n` +
+              `• Lexical: ${result.criteria.lexical_resource || '—'}\n` +
+              `• Grammar: ${result.criteria.grammar_range || '—'}\n` +
+              `• Pronunciation: ${result.criteria.pronunciation || '—'}`;
+
+          const dimNotes = dim && (dim.fluency_note || dim.grammar_note)
+            ? `\n\n🔍 *Detail:*\n` +
+              (dim.fluency_note ? `• _${dim.fluency_note}_\n` : '') +
+              (dim.lexical_note ? `• _${dim.lexical_note}_\n` : '') +
+              (dim.grammar_note ? `• _${dim.grammar_note}_\n` : '') +
+              (dim.pronunciation_note ? `• _${dim.pronunciation_note}_` : '')
+            : '';
+
+          // Prosody insights line
+          const prosodyText = prosodyMetrics.words_per_minute > 0
+            ? `\n\n🎵 *Delivery Analysis:*\n` +
+              `• Kecepatan: ${prosodyMetrics.words_per_minute} kata/menit` +
+              (prosodyMetrics.words_per_minute < 100 ? ' _(agak lambat)_' : prosodyMetrics.words_per_minute > 180 ? ' _(terlalu cepat)_' : ' _(bagus!)_') +
+              `\n• Jeda panjang: ${prosodyMetrics.long_pauses}` +
+              (prosodyMetrics.long_pauses > 3 ? ' _(kurangi jeda panjang)_' : '') +
+              `\n• Filler words: ${prosodyMetrics.filler_count}` +
+              (prosodyMetrics.filler_count > 5 ? ' _(terlalu banyak um/uh)_' : '') +
+              `\n• Delivery score: ${prosodyMetrics.overall_delivery}/100`
+            : '';
+
+          // Send detailed feedback with 4 dimensions + prosody
           await sendMessage(env, chatId,
             `🎤 *Speaking Evaluation*\n\n` +
             `📝 *Kamu berkata:* "${transcription}"\n\n` +
-            `⭐ *Skor:* ${result.score}/${maxBand}\n\n` +
-            `📊 *Kriteria:*\n` +
-            (result.criteria ? `• Content: ${result.criteria.content}\n• Fluency: ${result.criteria.fluency}\n• Grammar: ${result.criteria.grammar}\n• Vocabulary: ${result.criteria.vocabulary}\n\n` : '') +
-            `✅ *Kelebihan:* ${result.strengths || 'Bagus!'}\n\n` +
+            `⭐ *Skor Keseluruhan:* ${result.score}/${maxBand}\n\n` +
+            `📊 *4 Dimensi Penilaian:*\n${dimText}` +
+            dimNotes +
+            prosodyText +
+            `\n\n✅ *Kelebihan:* ${result.strengths || 'Bagus!'}\n\n` +
             `🎯 *Untuk diperbaiki:* ${result.improvement || 'Terus praktik!'}\n\n` +
             `💡 *Feedback:* ${result.feedback || 'Tidak bisa memberikan feedback.'}`
           );
@@ -824,6 +1181,42 @@ async function handleMessage(message: any, env: Env) {
           ).bind('click', startParam, user.id).run();
         }
 
+        // "Ask AI why" deep link — frontend stored the question server-side,
+        // we retrieve it here and kick off a tutor response directly.
+        if (startParam === 'ask') {
+          try {
+            const pending = await env.DB.prepare(
+              `SELECT question FROM pending_tutor_questions
+               WHERE user_id = ? AND datetime(created_at) > datetime('now', '-1 hour')`
+            ).bind(user.id).first() as any;
+
+            if (pending?.question) {
+              // Consume immediately so it can't be replayed
+              await env.DB.prepare(
+                'DELETE FROM pending_tutor_questions WHERE user_id = ?'
+              ).bind(user.id).run();
+
+              // Acknowledge, then stream tutor response
+              await sendMessage(env, chatId, '🤖 Oke, aku bantuin jelasin kenapa salah...');
+
+              try {
+                const { getTutorResponse } = await import('../services/ai');
+                const reply = await getTutorResponse(env, user, pending.question);
+                await sendMessage(env, chatId, reply);
+              } catch (e) {
+                console.error('ask-why tutor error:', e);
+                await sendMessage(env, chatId, 'Maaf, AI-nya lagi error. Coba ketik pertanyaanmu langsung ya.');
+              }
+              return;
+            } else {
+              await sendMessage(env, chatId, 'Pertanyaan kamu udah expired (atau gagal disimpan). Ketik pertanyaannya langsung ke sini ya, aku jawab!');
+              return;
+            }
+          } catch (e) {
+            console.error('ask deep-link error:', e);
+          }
+        }
+
         // Referral code handling
         if (startParam && startParam.startsWith('ref_') && !user.referred_by) {
           // Apply referral
@@ -859,8 +1252,19 @@ async function handleMessage(message: any, env: Env) {
           };
           const tt = user.target_test || 'TOEFL_IBT';
           const tEmoji = testEmoji[tt] || '📝';
+
+          // Streak badge
+          const streak = Number(user.current_streak || 0);
+          let streakLine = '';
+          if (streak >= 2) {
+            const fire = streak >= 30 ? '🔥🔥🔥' : streak >= 7 ? '🔥🔥' : '🔥';
+            streakLine = `\n${fire} Streak: *${streak} hari berturut-turut!*`;
+          } else if (streak === 1) {
+            streakLine = `\n✨ Baru mulai streak — jaga terus biar ada api-nya! 🔥`;
+          }
+
           await sendMessage(env, chatId,
-            `Halo lagi, ${user.name}! 👋\n\n${tEmoji} Target: *${tt.replace(/_/g, ' ')}*\n\nMau ngapain hari ini?`,
+            `Halo lagi, ${user.name}! 👋\n\n${tEmoji} Target: *${tt.replace(/_/g, ' ')}*${streakLine}\n\nMau ngapain hari ini?`,
             mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id),
           );
         } else {
@@ -891,6 +1295,7 @@ async function handleMessage(message: any, env: Env) {
           `💡 *Tips:* Kirim voice message untuk tutor 24/7!`;
 
         const progressHelp = `📊 *Progress & Profile*\n\n` +
+          `/progress — Lihat semua statistik kamu\n` +
           `/profile — Profil lengkap + mental model\n` +
           `/plan — Lihat semua lesson plans\n` +
           `/mystyle — Atur gaya belajar & komunikasi\n` +
@@ -1093,6 +1498,54 @@ async function handleMessage(message: any, env: Env) {
         return;
       }
 
+      case '/referral_leaderboard':
+      case '/leaderboard_referral': {
+        // Weekly top-10 referrers (signups in last 7 days)
+        const top = await env.DB.prepare(
+          `SELECT u.id, u.name, COUNT(ref.id) as count
+           FROM users u
+           JOIN users ref ON ref.referred_by = u.id
+           WHERE ref.created_at >= datetime('now', '-7 days')
+           GROUP BY u.id, u.name
+           ORDER BY count DESC
+           LIMIT 10`
+        ).all() as any;
+
+        let msg = `🏆 *Top Referrer Minggu Ini*\n\n`;
+        if (!top.results || top.results.length === 0) {
+          msg += `Belum ada referral minggu ini. Jadi yang pertama! 🚀\n\nKetik /referral buat ambil kode kamu.`;
+        } else {
+          const medals = ['🥇', '🥈', '🥉'];
+          for (let i = 0; i < top.results.length; i++) {
+            const r = top.results[i];
+            const rank = medals[i] || `${i + 1}.`;
+            const name = (r.name || `User ${r.id}`).substring(0, 20);
+            msg += `${rank} ${name} — ${r.count} referral\n`;
+          }
+          // Where am I?
+          const myRank = await env.DB.prepare(
+            `SELECT COUNT(*) as c FROM (
+               SELECT u.id, COUNT(ref.id) as cnt
+               FROM users u
+               JOIN users ref ON ref.referred_by = u.id
+               WHERE ref.created_at >= datetime('now', '-7 days')
+               GROUP BY u.id
+               HAVING cnt > (
+                 SELECT COUNT(*) FROM users ref2 WHERE ref2.referred_by = ? AND ref2.created_at >= datetime('now', '-7 days')
+               )
+             )`
+          ).bind(user.id).first() as any;
+          const myCount = await env.DB.prepare(
+            `SELECT COUNT(*) as c FROM users WHERE referred_by = ? AND created_at >= datetime('now', '-7 days')`
+          ).bind(user.id).first() as any;
+          msg += `\n📍 Posisi kamu: #${(myRank?.c || 0) + 1} (${myCount?.c || 0} referral minggu ini)`;
+        }
+        msg += `\n\n💡 Reward: setiap referral yang upgrade premium = +7 hari premium gratis buat kamu.`;
+
+        await sendMessage(env, chatId, msg);
+        return;
+      }
+
       case '/buy':
       case '/pembelian': {
         await sendMessage(env, chatId,
@@ -1117,6 +1570,89 @@ async function handleMessage(message: any, env: Env) {
             ],
           }
         );
+        return;
+      }
+
+      case '/progress': {
+        // Inline progress stats combining bot + mini app data
+        try {
+          // Total questions from daily logs
+          const dailyTotal = await env.DB.prepare(
+            'SELECT SUM(questions_answered) as total FROM daily_question_logs WHERE user_id = ?'
+          ).bind(user.id).first() as any;
+
+          // Exercise sessions
+          const exercises = await env.DB.prepare(
+            `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+             AVG(CASE WHEN status = 'completed' AND score IS NOT NULL THEN score END) as avg_score
+             FROM exercise_sessions WHERE user_id = ?`
+          ).bind(user.id).first() as any;
+
+          // Test attempts
+          const tests = await env.DB.prepare(
+            `SELECT COUNT(*) as count FROM test_attempts WHERE user_id = ? AND status = 'completed'`
+          ).bind(user.id).first() as any;
+
+          // Mini app accuracy
+          const answers = await env.DB.prepare(
+            `SELECT COUNT(*) as total, SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct
+             FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
+             WHERE ta.user_id = ? AND aa.is_correct IS NOT NULL`
+          ).bind(user.id).first() as any;
+
+          // Streak is on user record directly
+          const freshUser = await env.DB.prepare('SELECT current_streak, longest_streak FROM users WHERE id = ?').bind(user.id).first() as any;
+
+          // Conversation count
+          const convCount = await env.DB.prepare(
+            `SELECT COUNT(*) as c FROM conversation_messages WHERE user_id = ? AND role = 'user'`
+          ).bind(user.id).first() as any;
+
+          // Section accuracy
+          const sections = await env.DB.prepare(
+            `SELECT aa.section,
+              SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct,
+              COUNT(*) as total
+             FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
+             WHERE ta.user_id = ? AND aa.is_correct IS NOT NULL
+             GROUP BY aa.section`
+          ).bind(user.id).all();
+
+          const totalQ = dailyTotal?.total || 0;
+          const testCount = tests?.count || 0;
+          const exerciseCount = exercises?.completed || 0;
+          const avgExScore = exercises?.avg_score ? Math.round(exercises.avg_score) : 0;
+          const accuracy = answers?.total > 0 ? Math.round((answers.correct / answers.total) * 100) : 0;
+          const msgCount = convCount?.c || 0;
+
+          let msg = `📊 *Progress ${user.name}*\n\n`;
+          msg += `🎯 Target: ${user.target_test?.replace(/_/g, ' ') || 'TOEFL iBT'}\n`;
+          msg += `📈 Level: ${user.proficiency_level || 'belum diset'}\n\n`;
+
+          msg += `*📝 Aktivitas*\n`;
+          msg += `Total soal: ${totalQ}\n`;
+          msg += `Tes mini app: ${testCount} selesai\n`;
+          msg += `Exercise bot: ${exerciseCount}${avgExScore > 0 ? ` (rata-rata ${avgExScore}%)` : ''}\n`;
+          msg += `Pesan chat: ${msgCount}\n`;
+          msg += `🔥 Streak: ${freshUser?.current_streak || 0} hari (terpanjang: ${freshUser?.longest_streak || 0})\n\n`;
+
+          if (answers?.total > 0) {
+            msg += `*📊 Akurasi Mini App*\n`;
+            msg += `Overall: ${accuracy}% (${answers.correct}/${answers.total})\n`;
+            for (const s of (sections.results || []) as any[]) {
+              const sAcc = s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0;
+              const icon = s.section === 'reading' ? '📖' : s.section === 'listening' ? '🎧' : s.section === 'speaking' ? '🗣' : '✍️';
+              msg += `${icon} ${s.section}: ${sAcc}% (${s.correct}/${s.total})\n`;
+            }
+          }
+
+          msg += `\n💡 Buka mini app /test untuk detail lengkap!`;
+
+          await sendMessage(env, chatId, msg, mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id));
+        } catch (e) {
+          console.error('Progress command error:', e);
+          await sendMessage(env, chatId, 'Gagal memuat progress. Coba lagi nanti.');
+        }
         return;
       }
 
@@ -1332,11 +1868,28 @@ async function handleMessage(message: any, env: Env) {
         // Cancel any existing review session first
         await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
 
-        const { getDueReviews, getReviewStats } = await import('../services/fsrs-engine');
+        const { getDueReviews, getReviewStats, getNextUpcomingReview, getFallbackPractice } = await import('../services/fsrs-engine');
         const stats = await getReviewStats(env, user.id);
         if (stats.due === 0) {
           const masteredNote = stats.mastered > 0 ? ` Kamu udah kuasai ${stats.mastered} item — keren!` : '';
-          await sendMessage(env, chatId, `Belum ada yang perlu di-review sekarang. Santai dulu aja! 😎${masteredNote}\n\nNanti aku kabarin kalau udah waktunya review.`);
+
+          // Zero-queue fallback: tell user when next review is + suggest alternative practice
+          const upcoming = await getNextUpcomingReview(env, user.id);
+          let nextLine = '';
+          if (upcoming) {
+            const mins = upcoming.minutes_until;
+            if (mins < 60) nextLine = `\n\n⏰ Review berikutnya dalam ~${mins} menit.`;
+            else if (mins < 1440) nextLine = `\n\n⏰ Review berikutnya dalam ~${Math.round(mins / 60)} jam.`;
+            else nextLine = `\n\n⏰ Review berikutnya ${Math.round(mins / 1440)} hari lagi.`;
+          }
+
+          const fallback = await getFallbackPractice(env, user.id);
+          let suggestLine = '\n\nMau tetap produktif? Coba /today (pelajaran hari ini) atau /lesson (pelajaran personal).';
+          if (fallback) {
+            suggestLine = `\n\n💡 Aku saranin latihan ${fallback.section} — itu yang paling perlu kamu perkuat sekarang.\nKetik /study buat mulai.`;
+          }
+
+          await sendMessage(env, chatId, `Belum ada yang perlu di-review sekarang. Santai dulu aja! 😎${masteredNote}${nextLine}${suggestLine}`);
         } else {
           const items = await getDueReviews(env, user.id, 1);
           if (items.length > 0) {
@@ -1366,6 +1919,45 @@ async function handleMessage(message: any, env: Env) {
         }
         // Generic cancel — not in review mode
         await sendMessage(env, chatId, 'Tidak ada sesi yang bisa dibatalkan.');
+        return;
+      }
+
+      case '/warmup': {
+        // Pre-test drill offer — bot picks 1-2 weakest concepts and offers
+        // a quick mini-app drill before the student starts a real test.
+        // Zero weak signals → politely decline; don't fabricate drills.
+        try {
+          // Optional section filter: /warmup reading | /warmup listening
+          const parts = text.trim().split(/\s+/);
+          const rawSection = (parts[1] || '').toLowerCase();
+          const validSections = new Set(['reading', 'listening', 'speaking', 'writing', 'structure']);
+          const sectionFilter = validSections.has(rawSection) ? rawSection : undefined;
+
+          const { suggestDrills } = await import('../services/pre-test-drill');
+          const sugg = await suggestDrills(env, user.id, sectionFilter, 3);
+          if (!sugg) {
+            await sendMessage(env, chatId,
+              sectionFilter
+                ? `Belum ada sinyal kelemahan di *${sectionFilter}* — coba /test langsung aja, atau /diagnostic kalau belum pernah.`
+                : 'Belum ada sinyal kelemahan yang kuat buat drill terarah. Coba /diagnostic dulu kalau kamu belum ambil — hasilnya yang dipakai buat nyusun warm-up.',
+            );
+            return;
+          }
+
+          const primary = sugg.concepts[0];
+          const conceptBtn = primary.concept.slice(0, 40); // fit in 64-byte callback cap
+          const cb = `drill:go:${conceptBtn}:${sugg.count}`;
+
+          await sendMessage(env, chatId, sugg.rationale, {
+            inline_keyboard: [
+              [{ text: `🎯 Mulai drill (${sugg.count} soal)`, callback_data: cb }],
+              [{ text: 'Nggak dulu', callback_data: 'drill:skip' }],
+            ],
+          });
+        } catch (e: any) {
+          console.error('/warmup error:', e);
+          await sendMessage(env, chatId, 'Ada masalah nyiapin warm-up. Coba lagi sebentar ya.');
+        }
         return;
       }
 
@@ -1432,17 +2024,6 @@ async function handleMessage(message: any, env: Env) {
         return;
       }
 
-      case '/progress':
-        await sendMessage(env, chatId,
-          '📊 *Progress Dashboard*\n\nLihat perkembangan belajar kamu di sini.\n\nTermasuk: total soal, akurasi per section, dan estimasi band score.',
-          {
-            inline_keyboard: [
-              [{ text: '📊 Lihat Progress', web_app: { url: `${env.WEBAPP_URL}/progress` } }],
-            ],
-          }
-        );
-        return;
-
       case '/diagnostic': {
         const { startDiagnostic } = await import('../services/diagnostic');
         const intro = await startDiagnostic(env, user);
@@ -1464,6 +2045,9 @@ async function handleMessage(message: any, env: Env) {
               [
                 { text: '💭 Opinion', callback_data: 'speak_topic_opinion' },
                 { text: '📖 Describe', callback_data: 'speak_topic_describe' },
+              ],
+              [
+                { text: '🎯 IELTS 3-Part Test', callback_data: 'speak_topic_ielts3part' },
               ],
             ],
           }
@@ -2277,6 +2861,56 @@ async function handleMessage(message: any, env: Env) {
         return;
       }
 
+      case '/realscore': {
+        // Format: /realscore IELTS 6.5   or   /realscore TOEFL_IBT 95
+        // Helps calibrate the bot's predictions against real test outcomes.
+        const parts = text.trim().split(/\s+/);
+        if (parts.length < 3) {
+          await sendMessage(env, chatId,
+            `📊 *Lapor Skor Tes Asli*\n\n` +
+            `Bantu kita kalibrasi prediksi bot dengan skor real kamu:\n\n` +
+            `\`/realscore IELTS 6.5\`\n` +
+            `\`/realscore TOEFL_IBT 95\`\n` +
+            `\`/realscore TOEIC 850\`\n\n` +
+            `Nama test: IELTS, TOEFL_IBT, TOEIC, TOEFL_ITP\n` +
+            `Kita pakai data ini (anonim) untuk bikin prediksi bot makin akurat 🎯`,
+          );
+          return;
+        }
+        const testType = parts[1].toUpperCase();
+        const realOverall = Number(parts[2]);
+        if (!['IELTS', 'TOEFL_IBT', 'TOEIC', 'TOEFL_ITP'].includes(testType)) {
+          await sendMessage(env, chatId, `❌ Test type tidak valid. Pilih: IELTS, TOEFL_IBT, TOEIC, TOEFL_ITP`);
+          return;
+        }
+        if (!Number.isFinite(realOverall) || realOverall < 0) {
+          await sendMessage(env, chatId, `❌ Skor tidak valid`);
+          return;
+        }
+        if (testType === 'IELTS' && realOverall > 9) {
+          await sendMessage(env, chatId, `❌ IELTS overall 0-9`);
+          return;
+        }
+        const { submitRealScore } = await import('../services/calibration');
+        try {
+          const r = await submitRealScore(env, { userId: user.id, testType, realOverall });
+          let msg = `✅ Skor tercatat: *${realOverall}* (${testType})\n\n`;
+          if (r.predicted.overall !== null) {
+            const delta = realOverall - r.predicted.overall;
+            const deltaStr = delta === 0 ? 'persis sama' :
+                             delta > 0 ? `+${delta.toFixed(1)} (bot under-estimate)` :
+                             `${delta.toFixed(1)} (bot over-estimate)`;
+            msg += `Prediksi bot terakhir: ${r.predicted.overall}\n`;
+            msg += `Selisih: ${deltaStr}\n\n`;
+          }
+          msg += `Makasih! Data kamu bantu nge-tune akurasi bot 🙏`;
+          await sendMessage(env, chatId, msg);
+        } catch (e: any) {
+          await sendMessage(env, chatId, `❌ Gagal: ${e?.message || 'error'}`);
+        }
+        return;
+      }
+
       case '/refer': {
         const code = (text.split(' ')[1] || '').trim();
         if (!code) {
@@ -2498,6 +3132,21 @@ async function handleMessage(message: any, env: Env) {
         '\n\nMau aku buatkan study plan? Ketik kapan target tes kamu (contoh: "2 bulan lagi" atau "1 Juni 2026")',
         ''
       );
+
+      // 3-day premium trial announcement (granted server-side inside submitAnswer)
+      if ((result as any).trialGranted) {
+        await sendMessage(env, chatId,
+          `🎁 *Selamat! Kamu dapat 3 hari Premium GRATIS!*\n\n` +
+          `Karena udah selesaiin diagnostic, aku kasih akses penuh selama 72 jam:\n` +
+          `• ♾️ Unlimited soal\n` +
+          `• 🎤 Speaking evaluation (Whisper AI)\n` +
+          `• 📝 Writing feedback detail\n` +
+          `• 🤖 AI Tutor 24/7\n\n` +
+          `Mulai sekarang. Nggak perlu kartu kredit. Tinggal pakai! 🚀`,
+          { parse_mode: 'Markdown' } as any
+        );
+      }
+
       await sendMessage(env, chatId,
         resultsText + `\n\n🎯 Langkah Selanjutnya?\n\nMau langsung buat study plan personal?`,
         {
@@ -2718,6 +3367,17 @@ async function handleMessage(message: any, env: Env) {
           await recordEvidence(env, user.id, activeExercise.type, evidenceType, `step ${meta.step} score=${score}`, weight);
         } catch (e) { console.error('recordEvidence (text) error:', e); }
 
+        // Study streak: any engagement counts + compassionate streak recovery
+        try {
+          const { updateStreak } = await import('../services/analytics');
+          const streakResult = await updateStreak(env, user.id);
+          if (streakResult?.streakBroken && streakResult.previousStreak >= 3) {
+            const { getStreakRecoveryMessage } = await import('../services/companion');
+            const recoveryMsg = getStreakRecoveryMessage(user.name, streakResult.previousStreak);
+            await sendMessage(env, chatId, recoveryMsg);
+          }
+        } catch (e) { console.error('updateStreak (text) error:', e); }
+
         meta.step += 1;
         const total = getTotalSteps(activeExercise.type);
 
@@ -2750,6 +3410,44 @@ async function handleMessage(message: any, env: Env) {
     }
   }
 
+  // Check if user has an active companion conversation (re-engagement chat)
+  try {
+    const { getActiveCompanionConversation, handleCompanionReply, markBridgeAccepted } = await import('../services/companion');
+    const companionConv = await getActiveCompanionConversation(env, user.id);
+    if (companionConv) {
+      // Student wants to study — bridge accepted!
+      const studyWords = ['latihan', 'belajar', 'study', 'test', 'soal', 'mulai', 'ayo', 'siap', 'mau coba'];
+      if (studyWords.some(w => text.toLowerCase().includes(w))) {
+        await markBridgeAccepted(env, user.id);
+        await sendMessage(env, chatId,
+          `Oke, ayo! 💪 Mau ngapain?\n\nKetik /study buat belajar, /test buat latihan soal, atau /review buat review.`,
+          mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id)
+        );
+        return;
+      }
+
+      const result = await handleCompanionReply(env, user, text);
+      if (result) {
+        await sendMessage(env, chatId, result.text);
+        // If bridge is ready, add gentle CTA buttons
+        if (result.bridgeReady) {
+          await sendMessage(env, chatId, 'Btw, kalau mau, aku bisa siapin latihan ringan buat kamu 😊', {
+            inline_keyboard: [
+              [
+                { text: '📚 Mau coba latihan', callback_data: 'companion_bridge_accept' },
+                { text: '💬 Lanjut ngobrol', callback_data: 'companion_continue' },
+              ],
+            ],
+          });
+        }
+      }
+      return;
+    }
+  } catch (e) {
+    console.error('Companion conversation check error:', e);
+    // Fall through to normal tutor on error
+  }
+
   // Check daily quota for free users before AI tutor response
   try {
     const { checkTestAccess, trackQuestionAnswer } = await import('../services/premium');
@@ -2763,7 +3461,15 @@ async function handleMessage(message: any, env: Env) {
       return;
     }
     // Track this as a question usage
-    await trackQuestionAnswer(env, user.id);
+    const trackResult = await trackQuestionAnswer(env, user.id);
+    if (trackResult.upgradeNudge) {
+      await sendMessage(env, chatId,
+        `⚡ *Heads up!* Udah 7/10 soal hari ini.\n\n` +
+        `3 soal lagi terus quota harian habis. Mau unlimited?\n` +
+        `💎 Cuma Rp 30rb/minggu = Rp 4rb/hari.\n\n` +
+        `Ketik /premium atau /buy buat upgrade.`
+      );
+    }
   } catch (e) {
     console.error('Bot conversation quota check error:', e);
     // Don't block if quota check fails — let the conversation continue
@@ -2771,13 +3477,53 @@ async function handleMessage(message: any, env: Env) {
 
   // Use private tutor for rich tracking (student profiles, topic mastery, tutor interactions)
   let response: string;
+  let tutorProfile: any = null;
   try {
     const result = await getPrivateTutorResponse(env, user, text);
     response = result.text;
-  } catch (e) {
-    console.error('Private tutor error, falling back to generic:', e);
+    tutorProfile = result.profile;
+  } catch (e: any) {
+    // Surface the actual error — "falling back to generic" with no detail
+    // obscured a real persona failure for days. Include message + stack so
+    // `wrangler tail` shows what exactly is breaking.
+    console.error('[private-tutor] FAILED — falling back to generic tutor:',
+      e?.message || e, e?.stack?.split('\n').slice(0, 4).join(' | '));
     response = await getTutorResponse(env, user, text);
     await saveToHistory(env, user.id, text, response);
+  }
+
+  // ── Teach-then-check: extract [CHECK] block if tutor emitted one ──
+  // Done BEFORE [AUDIO] parsing so audio inside teach_text is handled correctly.
+  // Always strip the block from rendered text so markup never leaks to the user,
+  // but only promote it to an active CQ when in lesson mode AND not paused.
+  let pendingCq: import('../services/comprehension-check').ComprehensionCheck | null = null;
+  let lessonIsPaused = false;
+  try {
+    const { parseCheckBlock, isLessonPaused } = await import('../services/comprehension-check');
+    const parsed = parseCheckBlock(response);
+    if (parsed.cq) {
+      response = parsed.teach_text;
+      if (tutorProfile && tutorProfile.tutor_mode === 'lesson') {
+        lessonIsPaused = await isLessonPaused(env, user.id).catch(() => false);
+        if (!lessonIsPaused) pendingCq = parsed.cq;
+      }
+    }
+  } catch (e) {
+    console.error('CQ parse failed (ignored):', e);
+  }
+
+  // ── Extract [VISUAL:concept:type] tags ─────────────────────
+  // Format: [VISUAL:inference:analogy] on its own line (or inline).
+  // Allowed types checked inside handleVisualTag; unknown types are
+  // logged + skipped (never break the tutor turn on a bad tag).
+  // We strip these BEFORE [AUDIO] parsing so both can coexist.
+  const visualPattern = /\[VISUAL:([a-z0-9_]+):([a-z_]+)\]/gi;
+  const visualMatches = [...response.matchAll(visualPattern)].map((m) => ({
+    concept: m[1].toLowerCase(),
+    type: m[2].toLowerCase(),
+  }));
+  if (visualMatches.length > 0) {
+    response = response.replace(visualPattern, '').replace(/\n{3,}/g, '\n\n').trim();
   }
 
   // Check if AI tutor response contains [AUDIO] tag(s)
@@ -2791,6 +3537,11 @@ async function handleMessage(message: any, env: Env) {
     if (textResponse) {
       await sendMessage(env, chatId, textResponse);
     }
+    // Send visuals BEFORE audio — the picture usually accompanies the
+    // text explanation, while audio is a separate listening act.
+    for (const v of visualMatches) {
+      await handleVisualTag(env, chatId, user.id, v.concept, v.type);
+    }
     // Send each audio block as TTS
     for (const match of audioMatches) {
       const audioText = match[1].trim();
@@ -2800,6 +3551,10 @@ async function handleMessage(message: any, env: Env) {
     }
   } else {
     await sendMessage(env, chatId, response);
+    // Visuals get sent after the text even in the no-audio branch.
+    for (const v of visualMatches) {
+      await handleVisualTag(env, chatId, user.id, v.concept, v.type);
+    }
 
     // Auto-detect: if user asked for audio/pronunciation but AI forgot [AUDIO] tag,
     // extract English words from AI response and send TTS as follow-up
@@ -2814,6 +3569,36 @@ async function handleMessage(message: any, env: Env) {
         }
       }
     }
+  }
+
+  // ── Send the comprehension check, if the tutor emitted one ──
+  if (pendingCq) {
+    try {
+      const { saveActiveCq, formatCqMessage, buildCqKeyboard } = await import('../services/comprehension-check');
+      const { getActivePlan } = await import('../services/lesson-engine');
+      const plan = await getActivePlan(env, user.id).catch(() => null);
+      await saveActiveCq(env, user.id, pendingCq, {
+        plan_id: plan?.id ?? null,
+        step_index: plan?.current_step ?? null,
+        concept: tutorProfile?.current_topic ?? null,
+        strategy_used: null, // first attempt
+      });
+      await sendMessage(env, chatId, formatCqMessage(pendingCq), buildCqKeyboard(pendingCq.options));
+    } catch (e) {
+      console.error('send CQ failed (ignored):', e);
+    }
+  }
+
+  // Study break reminder — check if they've been studying for a long stretch
+  try {
+    const { checkStudyBreakNeeded } = await import('../services/companion');
+    const breakMsg = await checkStudyBreakNeeded(env, user.id, user.name);
+    if (breakMsg) {
+      // Small delay so it doesn't feel robotic — send after the tutor reply
+      await sendMessage(env, chatId, breakMsg);
+    }
+  } catch (e) {
+    // Silent fail — break reminders are nice-to-have, not critical
   }
 }
 
@@ -2926,6 +3711,403 @@ async function handleCallbackQuery(query: any, env: Env) {
   const user = await getOrCreateUser(env, tgUser);
 
   // ═══════════════════════════════════════════════════════
+  // COMPREHENSION CHECK (teach-then-check flow)
+  //   cq:a:<letter>  — student picked an answer
+  //   cq:p           — "tunggu dulu" (pause)
+  //   cq:r           — resume from paused state
+  // ═══════════════════════════════════════════════════════
+  if (data === 'cq:p') {
+    try {
+      const { setLessonPaused, buildResumeKeyboard } = await import('../services/comprehension-check');
+      await setLessonPaused(env, user.id, true);
+      await sendMessage(env, chatId,
+        `⏸ Oke, kita berhenti dulu. Tanya apapun yang bikin bingung — aku jawab santai.\n\nKalau udah siap lanjut, tap tombol di bawah.`,
+        buildResumeKeyboard(),
+      );
+    } catch (e) {
+      console.error('cq:pause failed:', e);
+    }
+    return;
+  }
+
+  if (data === 'cq:r') {
+    try {
+      const { setLessonPaused, loadActiveCq, formatCqMessage, buildCqKeyboard } = await import('../services/comprehension-check');
+      await setLessonPaused(env, user.id, false);
+      const active = await loadActiveCq(env, user.id);
+      if (active) {
+        // Re-emit the same pending CQ so the student can answer now
+        await sendMessage(env, chatId,
+          `▶️ Oke, lanjut lesson. Coba jawab ini dulu:\n\n` +
+          formatCqMessage({
+            question: active.question,
+            options: active.options,
+            correct_letter: active.correct_letter,
+          }),
+          buildCqKeyboard(active.options),
+        );
+      } else {
+        await sendMessage(env, chatId, `▶️ Lanjut. Kirim pesan apapun buat lanjutin lesson.`);
+      }
+    } catch (e) {
+      console.error('cq:resume failed:', e);
+    }
+    return;
+  }
+
+  if (data.startsWith('cq:a:')) {
+    const picked = data.slice(5).toUpperCase();
+    try {
+      const cqSvc = await import('../services/comprehension-check');
+      const active = await cqSvc.loadActiveCq(env, user.id);
+      if (!active) {
+        await sendMessage(env, chatId, 'Hmm, ga nemu soal yang aktif. Mungkin udah expired — kirim pesan lagi biar lanjut lesson.');
+        return;
+      }
+      const wasCorrect = picked === active.correct_letter;
+      await cqSvc.bumpAttempts(env, user.id);
+      const attemptNum = (active.attempts || 0) + 1;
+      await cqSvc.logCqAttempt(env, user.id, active, picked, wasCorrect, attemptNum);
+      await cqSvc.updateMentalModelFromCq(env, user.id, active, wasCorrect, attemptNum);
+
+      if (wasCorrect) {
+        await cqSvc.clearActiveCq(env, user.id);
+        const congrats = attemptNum === 1
+          ? `✅ Benar! Langsung paham di percobaan pertama.`
+          : `✅ Nah, gitu! Kali ini tepat.`;
+        await sendMessage(env, chatId, congrats);
+
+        // ── Post-test review bridge ─────────────────────────────────
+        // If this CQ resolved a concept that matches the current post-test
+        // review's active concept, advance the review and offer the student
+        // a choice: continue with the next concept or stop.
+        try {
+          const ptr = await import('../services/post-test-review');
+          const review = await ptr.loadActiveReview(env, user.id);
+          if (review && review.current_index < review.concepts.length) {
+            const expectedConcept = review.concepts[review.current_index];
+            if (active.concept && active.concept === expectedConcept) {
+              await ptr.advanceReview(env, review.id);
+              const isLast = (review.current_index + 1) >= review.concepts.length;
+              if (isLast) {
+                await ptr.markReviewStatus(env, review.id, 'completed');
+                await sendMessage(env, chatId,
+                  '🎉 Mantap! Semua konsep udah dibahas. Soal serupa bakal muncul lagi di /review buat ngetes ingatan kamu.',
+                );
+              } else {
+                const nextConcept = review.concepts[review.current_index + 1]
+                  .split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+                await sendMessage(env, chatId,
+                  `Mau lanjut ke *${nextConcept}* atau cukup dulu?`,
+                  {
+                    inline_keyboard: [[
+                      { text: 'Lanjut', callback_data: `ptr:next:${review.id}` },
+                      { text: 'Cukup dulu', callback_data: `ptr:done:${review.id}` },
+                    ]],
+                  },
+                );
+              }
+              return;
+            }
+          }
+        } catch (e) {
+          console.error('ptr bridge from cq resolve failed (non-fatal):', e);
+        }
+
+        // Default: nudge the lesson forward — student's next message continues naturally
+        await sendMessage(env, chatId, 'Lanjut ya.');
+        return;
+      }
+
+      // Wrong: pick a new strategy and reteach
+      if (attemptNum >= 3) {
+        // Hard limit: after 3 wrongs, stop the loop and go human
+        await cqSvc.clearActiveCq(env, user.id);
+        await sendMessage(env, chatId,
+          `😌 Udah 3x nyoba. Santai aja — konsep ini memang butuh waktu. Jawabannya ${active.correct_letter}: ${active.options[active.correct_letter.charCodeAt(0) - 65]}\n\nTanya bagian mana yang bikin bingung, kita bahas pelan-pelan.`,
+        );
+        await cqSvc.setLessonPaused(env, user.id, true);
+        return;
+      }
+
+      const nextStrat = cqSvc.nextReteachStrategy(active.strategy_used as any);
+      const prevCq: import('../services/comprehension-check').ComprehensionCheck = {
+        question: active.question,
+        options: active.options,
+        correct_letter: active.correct_letter,
+      };
+
+      // Ask the tutor to reteach using the chosen strategy + emit a new CHECK
+      const prompt = cqSvc.buildReteachPrompt(
+        active.concept || 'konsep',
+        nextStrat,
+        user.name || 'kamu',
+        prevCq,
+        picked,
+      );
+
+      // Reuse the generic tutor — no persona drift, just raw strategy-driven reteach
+      const reteachResp = await getTutorResponse(env, user, prompt).catch((e: any) => {
+        console.error('reteach tutor call failed:', e);
+        return null;
+      });
+
+      if (!reteachResp) {
+        await sendMessage(env, chatId,
+          `Belum tepat. Jawaban yang benar ${active.correct_letter}. Coba kita bahas lagi — tanya bagian yang kurang jelas ya.`,
+        );
+        return;
+      }
+
+      const parsed = cqSvc.parseCheckBlock(reteachResp);
+      // Prefix with a gentle acknowledgement so the student knows why we're re-explaining
+      const prefix = `🔄 Belum tepat. Coba pendekatan lain:\n\n`;
+      await sendMessage(env, chatId, prefix + (parsed.teach_text || reteachResp));
+
+      if (parsed.cq) {
+        await cqSvc.saveActiveCq(env, user.id, parsed.cq, {
+          plan_id: active.plan_id,
+          step_index: active.step_index,
+          concept: active.concept,
+          strategy_used: nextStrat,
+        });
+        await sendMessage(env, chatId, cqSvc.formatCqMessage(parsed.cq), cqSvc.buildCqKeyboard(parsed.cq.options));
+      } else {
+        // Tutor didn't emit a fresh CHECK — keep the old one live so attempts count carries
+        await sendMessage(env, chatId,
+          `Coba jawab lagi soal yang tadi:\n\n` + cqSvc.formatCqMessage(prevCq),
+          cqSvc.buildCqKeyboard(prevCq.options),
+        );
+      }
+    } catch (e) {
+      console.error('cq answer handler failed:', e);
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // POST-TEST REVIEW CALLBACKS
+  //   ptr:start:<reviewId>  — student accepted the review offer; teach concept[0]
+  //   ptr:skip:<reviewId>   — student deferred; mark skipped, no follow-up
+  //   ptr:next:<reviewId>   — "lanjut konsep berikutnya" after finishing a block
+  //   ptr:done:<reviewId>   — "cukup dulu" after a block — ends cleanly
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('ptr:')) {
+    try {
+      const parts = data.split(':');
+      const action = parts[1];
+      const reviewId = parseInt(parts[2] || '0', 10);
+      if (!Number.isFinite(reviewId) || reviewId <= 0) {
+        await sendMessage(env, chatId, 'Sesi review tidak valid.');
+        return;
+      }
+      const ptr = await import('../services/post-test-review');
+      const review = await ptr.loadReviewById(env, reviewId);
+      if (!review || review.user_id !== user.id) {
+        await sendMessage(env, chatId, 'Sesi review tidak ditemukan.');
+        return;
+      }
+
+      if (action === 'skip') {
+        await ptr.markReviewStatus(env, reviewId, 'skipped');
+        await sendMessage(env, chatId, 'Oke, nanti aja. Soal-soal yang meleset tetep masuk /review ya — bakal muncul pelan-pelan.');
+        return;
+      }
+
+      if (action === 'done') {
+        await ptr.markReviewStatus(env, reviewId, 'completed');
+        await sendMessage(env, chatId, 'Siap, cukup dulu. Nice work — konsep sisanya masih bisa dilanjut nanti lewat /review. 💪');
+        return;
+      }
+
+      // 'start' and 'next' both kick off teaching the current concept.
+      // 'start' also logs the acceptance; 'next' advances before teaching.
+      if (action === 'next') {
+        await ptr.advanceReview(env, reviewId);
+      }
+
+      // Re-load after the (possible) advance to get the updated index
+      const fresh = await ptr.loadReviewById(env, reviewId);
+      if (!fresh) return;
+
+      if (fresh.current_index >= fresh.concepts.length) {
+        await ptr.markReviewStatus(env, reviewId, 'completed');
+        await sendMessage(env, chatId, '🎉 Selesai! Semua konsep yang kita target udah dibahas. Soal serupa bakal muncul di /review buat ngetes ingatan.');
+        return;
+      }
+
+      const concept = fresh.concepts[fresh.current_index];
+      const isFirst = action === 'start';
+      const prompt = ptr.buildReviewTurnPrompt(concept, isFirst);
+
+      // Drive the tutor with the concept prompt so it emits teach + [CHECK].
+      // This reuses the same engine as normal chat — private-tutor first,
+      // generic tutor as fallback.
+      let response: string;
+      try {
+        const result = await getPrivateTutorResponse(env, user, prompt);
+        response = result.text;
+      } catch (e: any) {
+        console.error('[ptr] private-tutor failed, falling back:', e?.message || e);
+        response = await getTutorResponse(env, user, prompt);
+      }
+
+      // Parse the [CHECK] block and wire up the active CQ. Tag the CQ with
+      // the review context so the CQ resolver knows to advance this review
+      // after a correct answer.
+      try {
+        const cqSvc = await import('../services/comprehension-check');
+        const parsed = cqSvc.parseCheckBlock(response);
+        const teachText = parsed.teach_text || response;
+        await sendMessage(env, chatId, teachText);
+        if (parsed.cq) {
+          // Note: bridge back to this review is via (user_id + concept match)
+          // when the CQ resolves — see post-test-review advance block in cq:a
+          await cqSvc.saveActiveCq(env, user.id, parsed.cq, {
+            plan_id: null,
+            step_index: fresh.current_index,
+            concept,
+            strategy_used: null,
+          });
+          await sendMessage(env, chatId, cqSvc.formatCqMessage(parsed.cq), cqSvc.buildCqKeyboard(parsed.cq.options));
+        } else {
+          // Tutor didn't emit a CHECK block — offer lanjut/cukup anyway
+          await sendMessage(env, chatId, 'Mau lanjut ke konsep berikutnya atau cukup dulu?', {
+            inline_keyboard: [[
+              { text: 'Lanjut', callback_data: `ptr:next:${reviewId}` },
+              { text: 'Cukup dulu', callback_data: `ptr:done:${reviewId}` },
+            ]],
+          });
+        }
+      } catch (e) {
+        console.error('[ptr] CQ parse/save failed:', e);
+        await sendMessage(env, chatId, response);
+      }
+    } catch (e) {
+      console.error('ptr callback error:', e);
+      await sendMessage(env, chatId, 'Ada masalah buka sesi review. Coba lagi sebentar lagi ya.');
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // PRE-TEST DRILL CALLBACKS
+  //   drill:go:<concept>:<count>  — open the mini app drill for this concept
+  //   drill:skip                  — student declined the drill offer
+  // Callback_data cap is 64 bytes — concept names are short skill_tags so
+  // fitting two colons + a count stays under the limit for known tags.
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('drill:')) {
+    try {
+      const parts = data.split(':');
+      const action = parts[1];
+
+      if (action === 'skip') {
+        await sendMessage(env, chatId, 'Oke, nggak perlu warm-up. Siap aja langsung /test kalau mau mulai.');
+        return;
+      }
+
+      if (action === 'go') {
+        const concept = String(parts[2] || '');
+        const count = parseInt(parts[3] || '3', 10) || 3;
+        if (!concept) {
+          await sendMessage(env, chatId, 'Drill tidak valid. Coba /warmup lagi.');
+          return;
+        }
+        const { buildDrillUrl } = await import('../services/pre-test-drill');
+        const url = buildDrillUrl(env, concept, count);
+        // Telegram web_app buttons open inside the Telegram client — best UX for mini app.
+        await sendMessage(env, chatId, `🎯 Buka drill *${concept.replace(/_/g, ' ')}* (${count} soal) di mini app:`, {
+          inline_keyboard: [[
+            { text: `🚀 Mulai drill (${count} soal)`, web_app: { url } },
+          ]],
+        });
+        return;
+      }
+    } catch (e) {
+      console.error('drill callback error:', e);
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // COMPANION RE-ENGAGEMENT CALLBACKS
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('companion_')) {
+    try {
+      const { handleCompanionReply, markBridgeAccepted, getActiveCompanionConversation } = await import('../services/companion');
+
+      if (data === 'companion_bridge_accept') {
+        // Student accepted the redirect to study!
+        await markBridgeAccepted(env, user.id);
+        await sendMessage(env, chatId,
+          `Oke, ayo! 💪 Mau ngapain?\n\nKetik /study buat belajar, /test buat latihan soal, atau /review buat review.`,
+          mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id)
+        );
+        return;
+      }
+
+      if (data === 'companion_later') {
+        // Respect their choice
+        await sendMessage(env, chatId, 'Oke, nggak apa-apa! Aku di sini kapan aja kamu mau ngobrol atau belajar. Take care! 💙');
+        // End the companion conversation gracefully
+        await env.DB.prepare(
+          `UPDATE companion_conversations SET status = 'ended', ended_at = datetime('now')
+           WHERE user_id = ? AND status = 'active'`
+        ).bind(user.id).run();
+        return;
+      }
+
+      if (data === 'companion_continue') {
+        await sendMessage(env, chatId, 'Oke, lanjut ngobrol aja! Cerita apa aja, aku dengerin 😊');
+        return;
+      }
+
+      // Mood-based responses for Tier 2 check-in buttons
+      // Map button data to natural language so GPT can respond contextually
+      const moodToText: Record<string, string> = {
+        'companion_mood_ok': 'Aku baik-baik aja kok',
+        'companion_mood_low': 'Lagi agak down sih',
+        'companion_mood_hard': 'Soalnya susah banget',
+        'companion_mood_talk': 'Mau ngobrol aja',
+      };
+
+      if (moodToText[data]) {
+        const moodText = moodToText[data];
+        // Route through GPT conversation for a natural, contextual response
+        const result = await handleCompanionReply(env, user, moodText);
+        if (result) {
+          await sendMessage(env, chatId, result.text);
+          if (result.bridgeReady) {
+            await sendMessage(env, chatId, 'Btw, kalau mau, aku bisa siapin latihan ringan buat kamu 😊', {
+              inline_keyboard: [
+                [
+                  { text: '📚 Mau coba latihan', callback_data: 'companion_bridge_accept' },
+                  { text: '💬 Lanjut ngobrol', callback_data: 'companion_continue' },
+                ],
+              ],
+            });
+          }
+        } else {
+          // Fallback if GPT fails
+          const fallback: Record<string, string> = {
+            'companion_mood_ok': 'Syukurlah! 😊 Lagi ngapain aja belakangan? Cerita dong',
+            'companion_mood_low': 'Aku dengerin. Mau cerita? Nggak usah sungkan, apapun boleh 💙',
+            'companion_mood_hard': 'Hmm, bagian mana yang paling bikin pusing? Mungkin aku bisa bantu jelasin pelan-pelan',
+            'companion_mood_talk': 'Oke, aku di sini! Cerita apa aja, aku dengerin 💬',
+          };
+          await sendMessage(env, chatId, fallback[data] || 'Aku di sini! Cerita aja 😊');
+        }
+        return;
+      }
+    } catch (e) {
+      console.error('Companion callback error:', e);
+      await sendMessage(env, chatId, 'Ada masalah. Coba lagi ya!');
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
   // SPEAKING PRACTICE CALLBACKS
   // ═══════════════════════════════════════════════════════
   if (data.startsWith('speak_topic_')) {
@@ -2935,6 +4117,59 @@ async function handleCallbackQuery(query: any, env: Env) {
 
     let selectedPrompt = '';
     let selectedType = topicType;
+
+    // IELTS 3-Part Speaking Test — full simulation
+    if (topicType === 'ielts3part') {
+      const part1Questions = [
+        'What is your full name?',
+        'Where are you from?',
+        'Do you work or study?',
+        'What do you enjoy doing in your free time?',
+        'How often do you use the internet?',
+      ];
+      const part2Topics = [
+        { cue: 'Describe a book you have recently read.', bullets: 'what the book was about, why you read it, what you learned from it, how it made you feel' },
+        { cue: 'Describe a place you visited that you found interesting.', bullets: 'where it was, when you went, what you did there, why it was interesting' },
+        { cue: 'Describe a person who has influenced you.', bullets: 'who this person is, how you know them, what they did, why they influenced you' },
+        { cue: 'Describe a skill you would like to learn.', bullets: 'what skill it is, why you want to learn it, how you would learn it, how it would benefit you' },
+        { cue: 'Describe an important decision you made.', bullets: 'what the decision was, when you made it, how you made it, what the result was' },
+      ];
+      const topic = part2Topics[Math.floor(Math.random() * part2Topics.length)];
+
+      // Store as multi-part session with metadata
+      const metadata = JSON.stringify({
+        mode: 'ielts_3part',
+        current_part: 1,
+        part1_questions: part1Questions,
+        part1_index: 0,
+        part2_cue: topic.cue,
+        part2_bullets: topic.bullets,
+        responses: [],
+      });
+
+      try {
+        const session = await env.DB.prepare(
+          `INSERT INTO speaking_sessions (user_id, prompt, test_type, topic_type, status)
+           VALUES (?, ?, 'IELTS', 'ielts_3part', 'active') RETURNING id`,
+        ).bind(user.id, JSON.stringify({ part1: part1Questions, part2: topic })).first() as any;
+
+        // Store metadata in feedback column temporarily
+        await env.DB.prepare(
+          `UPDATE speaking_sessions SET feedback = ? WHERE id = ?`,
+        ).bind(metadata, session.id).run();
+
+        await editMessage(env, chatId, messageId,
+          `🎯 *IELTS Speaking Test — Part 1*\n\n` +
+          `Examiner akan bertanya tentang topik familiar. Kirim voice message untuk menjawab.\n\n` +
+          `❓ *Pertanyaan 1/5:*\n"${part1Questions[0]}"\n\n` +
+          `🎙️ Kirim voice message untuk menjawab.`,
+        );
+      } catch (e: any) {
+        console.error('3-part speaking error:', e);
+        await sendMessage(env, chatId, 'Gagal membuat sesi IELTS 3-part. Coba lagi.');
+      }
+      return;
+    }
 
     if (topicType === 'random') {
       selectedPrompt = prompts[Math.floor(Math.random() * prompts.length)];
@@ -3046,8 +4281,14 @@ async function handleCallbackQuery(query: any, env: Env) {
   // ═══════════════════════════════════════════════════════
   if (data.startsWith('style_learn_')) {
     const style = data.replace('style_learn_', '');
+    // Ensure a profile row exists — UPDATE on a missing row is a silent no-op
+    // and the user's choice would never persist. This is the bug that made
+    // /mystyle feel like it did nothing for brand-new users.
     await env.DB.prepare(
-      'UPDATE student_profiles SET learning_style = ? WHERE user_id = ?'
+      'INSERT OR IGNORE INTO student_profiles (user_id) VALUES (?)'
+    ).bind(user.id).run();
+    await env.DB.prepare(
+      'UPDATE student_profiles SET learning_style = ?, updated_at = datetime(\'now\') WHERE user_id = ?'
     ).bind(style, user.id).run();
 
     // Now ask for communication style
@@ -3075,7 +4316,10 @@ async function handleCallbackQuery(query: any, env: Env) {
   if (data.startsWith('style_comm_')) {
     const commStyle = data.replace('style_comm_', '');
     await env.DB.prepare(
-      'UPDATE student_profiles SET communication_style = ? WHERE user_id = ?'
+      'INSERT OR IGNORE INTO student_profiles (user_id) VALUES (?)'
+    ).bind(user.id).run();
+    await env.DB.prepare(
+      'UPDATE student_profiles SET communication_style = ?, updated_at = datetime(\'now\') WHERE user_id = ?'
     ).bind(commStyle, user.id).run();
 
     // Ask for depth level
@@ -3103,7 +4347,10 @@ async function handleCallbackQuery(query: any, env: Env) {
   if (data.startsWith('style_depth_')) {
     const depth = data.replace('style_depth_', '');
     await env.DB.prepare(
-      'UPDATE student_profiles SET depth_level = ? WHERE user_id = ?'
+      'INSERT OR IGNORE INTO student_profiles (user_id) VALUES (?)'
+    ).bind(user.id).run();
+    await env.DB.prepare(
+      'UPDATE student_profiles SET depth_level = ?, updated_at = datetime(\'now\') WHERE user_id = ?'
     ).bind(depth, user.id).run();
 
     await editMessage(env, chatId, messageId,
@@ -3620,7 +4867,11 @@ async function handleCallbackQuery(query: any, env: Env) {
             `Reset besok jam 00:00 WIB.\nKetik /premium untuk unlimited akses.`);
           return;
         }
-        await trackQuestionAnswer(env, freshUser.id);
+        const trackResult = await trackQuestionAnswer(env, freshUser.id);
+        if (trackResult.upgradeNudge) {
+          await sendMessage(env, chatId,
+            `⚡ Udah 7/10 soal hari ini — 3 soal lagi habis. Mau unlimited?\n💎 /premium (Rp 30rb/7 hari)`);
+        }
       } catch (e) {
         console.error('Quota tracking error in study_lesson:', e);
       }
@@ -3644,7 +4895,9 @@ async function handleCallbackQuery(query: any, env: Env) {
           return;
         }
         await trackQuestionAnswer(env, freshUser.id);
-      } catch {}
+      } catch (trackErr) {
+        console.error('trackQuestionAnswer error:', trackErr);
+      }
       await editMessage(env, chatId, messageId, '⏳ Membuat mini test...');
       const prompt = `Buat 1 soal TOEFL iBT (pilih acak: grammar/vocabulary/reading comprehension). Format: konteks singkat + 1 soal MCQ (A/B/C/D). Maks 8 baris. Plain text. Akhiri dengan "Jawab?"`;
       const response = await getTutorResponse(env, freshUser, prompt);
@@ -3728,7 +4981,9 @@ async function handleCallbackQuery(query: any, env: Env) {
           return;
         }
         await trackQuestionAnswer(env, freshUser.id);
-      } catch {}
+      } catch (trackErr) {
+        console.error('trackQuestionAnswer error:', trackErr);
+      }
       await editMessage(env, chatId, messageId, '⏳ Sedang berpikir...');
       const response = await getTutorResponse(env, freshUser, 'Aku mau belajar bahasa Inggris untuk TOEFL iBT. Kasih 1 soal. Maks 8 baris. Plain text.');
       await sendMessage(env, chatId, response);
@@ -3803,6 +5058,8 @@ async function handleCallbackQuery(query: any, env: Env) {
       }
 
       const meta: LessonMeta = JSON.parse(session.metadata || '{}');
+      meta.scores = meta.scores || [];
+      meta.hints = meta.hints || 0;
       const exerciseType = session.type;
       const total = getTotalSteps(exerciseType);
 
@@ -3878,8 +5135,29 @@ async function handleCallbackQuery(query: any, env: Env) {
 
       // ── MCQ ANSWER ──
       if (action === 'a' && mcqOption) {
-        const { score, feedback } = scoreMCQ(exerciseType, meta.lesson, meta.step, mcqOption);
+        const mcqResult = scoreMCQ(exerciseType, meta.lesson, meta.step, mcqOption);
+        let { score, feedback } = mcqResult;
         meta.scores.push(score);
+
+        // Personalize wrong-answer feedback: wrap with AI call that references
+        // student context (weak concepts, streak, recent mistakes). Best-effort —
+        // falls back to the canned `feedback` above on any failure.
+        if (score < 60 && mcqResult.question_text && mcqResult.correct_letter) {
+          try {
+            const { generatePersonalizedWrongAnswerFeedback } = await import('../services/student-context');
+            const personalized = await generatePersonalizedWrongAnswerFeedback(env, user.id, {
+              question: mcqResult.question_text,
+              student_answer: mcqResult.student_letter || mcqOption,
+              correct_answer: mcqResult.correct_letter,
+              options: mcqResult.options,
+              canned_explanation: mcqResult.explanation_text || '',
+              section: mcqResult.section || exerciseType,
+            });
+            if (personalized && personalized.trim().length > 0) feedback = personalized;
+          } catch (e) {
+            console.error('mcq: personalized feedback failed, using canned:', e);
+          }
+        }
 
         // Theory-of-Mind: record evidence
         try {
@@ -3888,6 +5166,12 @@ async function handleCallbackQuery(query: any, env: Env) {
           const weight = score >= 80 ? 0.6 : 0.5; // MCQ evidence is slightly weaker than free-text
           await recordEvidence(env, user.id, exerciseType, evidenceType, `MCQ step ${meta.step} picked=${mcqOption}`, weight);
         } catch (e) { console.error('recordEvidence (mcq) error:', e); }
+
+        // Study streak
+        try {
+          const { updateStreak } = await import('../services/analytics');
+          await updateStreak(env, user.id);
+        } catch (e) { console.error('updateStreak (mcq) error:', e); }
 
         meta.step += 1;
 

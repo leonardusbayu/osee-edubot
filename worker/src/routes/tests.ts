@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import type { Env } from '../types';
 import { getAuthUser } from '../services/auth';
+import { updateStudentAbility, getStudentIRTProfile, type IRTResponse } from '../services/irt-engine';
+import { recordLearningPoint, fitAndSaveLearningCurve, updateForgettingCurve } from '../services/learning-curve';
+import { selectUnderExposedQuestions, recordExposures } from '../services/question-exposure';
 
 // Test configs — both TOEFL iBT and IELTS
 const TEST_CONFIGS: Record<string, any> = {
@@ -94,9 +97,26 @@ testRoutes.post('/start', async (c) => {
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
     const userId = user.id;
 
-    const { test_type, section_only, question_type } = await c.req.json();
+    const { test_type, section_only, question_type, mock_mode, drill_concept, drill_count } = await c.req.json();
     const config = TEST_CONFIGS[test_type];
     if (!config) return c.json({ error: 'Unknown test type' }, 404);
+
+    // Drill mode: if a drill_concept was provided but no section_only was
+    // specified, infer the section from the concept's first matching question.
+    // Keeps the bot's `/warmup` → mini-app flow frictionless: we don't make
+    // the bot pick a section, we just resolve it here.
+    let resolvedSectionOnly: string | null = section_only || null;
+    if (drill_concept && !resolvedSectionOnly) {
+      try {
+        const like = `%"${String(drill_concept).replace(/"/g, '')}"%`;
+        const row = await c.env.DB.prepare(
+          `SELECT section FROM test_contents
+           WHERE test_type = ? AND status = 'published' AND skill_tags LIKE ?
+           LIMIT 1`
+        ).bind(test_type, like).first() as any;
+        if (row?.section) resolvedSectionOnly = row.section as string;
+      } catch { /* best-effort — fall through to full test if lookup fails */ }
+    }
 
     // Check quota for non-premium users
     {
@@ -129,17 +149,34 @@ testRoutes.post('/start', async (c) => {
 
     // Determine sections to include
     let sections = config.sections;
-    if (section_only) {
-      const sectionConfig = config.sections.find((s: any) => s.id === section_only);
+    if (resolvedSectionOnly) {
+      const sectionConfig = config.sections.find((s: any) => s.id === resolvedSectionOnly);
       if (!sectionConfig) return c.json({ error: 'Unknown section' }, 404);
       sections = [sectionConfig];
     }
 
     const firstSection = sections[0].id;
-    const now = new Date().toISOString();
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
 
     // Calculate duration
     const totalDuration = sections.reduce((sum: number, s: any) => sum + s.duration_minutes, 0);
+
+    // Mock mode: compute a hard deadline. Give a small grace buffer (30s) to account for network latency.
+    const GRACE_SECONDS = 30;
+    const deadlineAt = mock_mode
+      ? new Date(nowDate.getTime() + (totalDuration * 60 + GRACE_SECONDS) * 1000).toISOString()
+      : null;
+
+    const metadata = {
+      section_only: resolvedSectionOnly || null,
+      question_type: question_type || null,
+      mock_mode: !!mock_mode,
+      deadline_at: deadlineAt,
+      total_duration_minutes: totalDuration,
+      drill_concept: drill_concept || null,
+      drill_count: drill_count ? Math.max(1, Math.min(10, Number(drill_count))) : null,
+    };
 
     const result = await c.env.DB.prepare(
       `INSERT INTO test_attempts (user_id, test_type, status, current_section, current_question_index, section_start_times, started_at, metadata)
@@ -147,7 +184,7 @@ testRoutes.post('/start', async (c) => {
     ).bind(
       userId, test_type, firstSection,
       JSON.stringify({ [firstSection]: now }), now,
-      JSON.stringify({ section_only: section_only || null, question_type: question_type || null }),
+      JSON.stringify(metadata),
     ).run();
 
     const attemptId = result.meta.last_row_id;
@@ -158,8 +195,12 @@ testRoutes.post('/start', async (c) => {
       sections,
       current_section: firstSection,
       total_duration_minutes: totalDuration,
-      section_only: section_only || null,
+      section_only: resolvedSectionOnly || null,
       question_type: question_type || null,
+      mock_mode: !!mock_mode,
+      deadline_at: deadlineAt,
+      drill_concept: drill_concept || null,
+      drill_count: metadata.drill_count,
     });
   } catch (e: any) {
     return c.json({ error: e.message || 'Failed to start test' }, 500);
@@ -216,10 +257,14 @@ testRoutes.get('/attempt/resume', async (c) => {
 });
 
 testRoutes.get('/attempt/:id', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
   const attemptId = parseInt(c.req.param('id'));
+  if (isNaN(attemptId)) return c.json({ error: 'Invalid attempt ID' }, 400);
   const attempt = await c.env.DB.prepare(
-    'SELECT * FROM test_attempts WHERE id = ?'
-  ).bind(attemptId).first();
+    'SELECT * FROM test_attempts WHERE id = ? AND user_id = ?'
+  ).bind(attemptId, user.id).first();
 
   if (!attempt) return c.json({ error: 'Not found' }, 404);
 
@@ -254,14 +299,56 @@ testRoutes.get('/attempt/:id', async (c) => {
 
 testRoutes.post('/attempt/:id/answer', async (c) => {
   try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
     const attemptId = parseInt(c.req.param('id'));
+    if (isNaN(attemptId)) return c.json({ error: 'Invalid attempt ID' }, 400);
     const attempt = await c.env.DB.prepare(
-      'SELECT * FROM test_attempts WHERE id = ?'
-    ).bind(attemptId).first();
+      'SELECT * FROM test_attempts WHERE id = ? AND user_id = ?'
+    ).bind(attemptId, user.id).first();
 
     if (!attempt) return c.json({ error: 'Not found' }, 404);
 
-    const { section, question_index, content_id, answer_data, time_spent_seconds = 0 } = await c.req.json();
+    // Mock-mode deadline enforcement — reject late answers server-side
+    try {
+      const meta = attempt.metadata ? JSON.parse(attempt.metadata as string) : {};
+      if (meta?.mock_mode && meta?.deadline_at) {
+        const deadline = new Date(meta.deadline_at).getTime();
+        if (Number.isFinite(deadline) && Date.now() > deadline) {
+          // Auto-finish the attempt
+          await c.env.DB.prepare(
+            "UPDATE test_attempts SET status = 'time_expired', finished_at = datetime('now') WHERE id = ? AND status = 'in_progress'"
+          ).bind(attemptId).run();
+          return c.json({
+            error: 'Time is up',
+            code: 'TIME_EXPIRED',
+            deadline_at: meta.deadline_at,
+            message: 'Waktu tes habis. Tes otomatis diselesaikan.',
+          }, 403);
+        }
+      }
+    } catch {}
+
+    const body = await c.req.json();
+    const { section, question_index, content_id, answer_data, time_spent_seconds = 0 } = body;
+
+    // Input validation — reject malformed payloads before hitting DB
+    if (typeof section !== 'string' || section.length === 0 || section.length > 50) {
+      return c.json({ error: 'Invalid section' }, 400);
+    }
+    if (typeof question_index !== 'number' || !Number.isFinite(question_index) || question_index < 0 || question_index > 500) {
+      return c.json({ error: 'Invalid question_index' }, 400);
+    }
+    if (answer_data === undefined || answer_data === null || typeof answer_data !== 'object') {
+      return c.json({ error: 'Invalid answer_data' }, 400);
+    }
+    if (typeof time_spent_seconds !== 'number' || !Number.isFinite(time_spent_seconds) || time_spent_seconds < 0 || time_spent_seconds > 36000) {
+      return c.json({ error: 'Invalid time_spent_seconds' }, 400);
+    }
+    if (content_id !== undefined && content_id !== null && (typeof content_id !== 'number' || !Number.isFinite(content_id))) {
+      return c.json({ error: 'Invalid content_id' }, 400);
+    }
 
     // Check if answer exists
     const existing = await c.env.DB.prepare(
@@ -329,12 +416,16 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
         await trackSkillProgress(c.env, userId, skill, attempt.test_type as string, 1, isCorrect === true ? 1 : 0, time_spent_seconds);
       } catch (e) { console.error('Analytics tracking error:', e); }
 
-      // Gamification: award XP
+      // Gamification: award XP (legacy commercial + new gamification engine)
       try {
         const { addXP, incrementDailyUsage } = await import('../services/commercial');
         await addXP(c.env, userId, isCorrect ? 15 : 10, isCorrect ? 'correct_answer' : 'answer');
         await incrementDailyUsage(c.env, userId);
       } catch (e) { console.error('XP tracking error:', e); }
+      try {
+        const { awardXp } = await import('../services/gamification');
+        await awardXp(c.env, userId, isCorrect ? 'question_correct' : 'question_wrong');
+      } catch (e) { console.error('Gamification XP error:', e); }
 
       // Spaced repetition: schedule every scored answer (not just wrong).
       // Correct answers still decay — FSRS picks longer initial interval.
@@ -365,9 +456,44 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
           await updateSkillScore(c.env, userId, sectionSkills[section] || section, isCorrect);
         } catch (e) { console.error('Skill update error:', e); }
       }
+
+      // IRT: update item response statistics (lightweight per-answer)
+      if (isCorrect !== null && content_id) {
+        try {
+          await c.env.DB.prepare(
+            `INSERT INTO irt_item_params (content_id, difficulty, discrimination, guessing, total_responses, total_correct, updated_at)
+             VALUES (?, 0, 1.0, 0.25, 1, ?, datetime('now'))
+             ON CONFLICT(content_id) DO UPDATE SET
+               total_responses = total_responses + 1,
+               total_correct = total_correct + ?,
+               updated_at = datetime('now')`
+          ).bind(content_id, isCorrect ? 1 : 0, isCorrect ? 1 : 0).run();
+        } catch (e) { console.error('IRT item tracking error:', e); }
+      }
     }
 
-    return c.json({ saved: true, is_correct: isCorrect, next_question_index: question_index + 1 });
+    // Emotional intelligence: struggle detection + question milestones
+    let encouragement: string | null = null;
+    try {
+      const { detectStruggle, checkQuestionMilestone } = await import('../services/companion');
+      const userName = (attempt.metadata ? JSON.parse(attempt.metadata as string)?.user_name : null)
+        || (await c.env.DB.prepare('SELECT name FROM users WHERE id = ?').bind(userId).first() as any)?.name
+        || 'Teman';
+
+      if (isCorrect === false) {
+        encouragement = await detectStruggle(c.env, userId, userName, attemptId);
+      }
+      if (!encouragement) {
+        encouragement = await checkQuestionMilestone(c.env, userId, userName);
+      }
+    } catch (e) { /* silent — encouragement is nice-to-have */ }
+
+    return c.json({
+      saved: true,
+      is_correct: isCorrect,
+      next_question_index: question_index + 1,
+      ...(encouragement ? { encouragement } : {}),
+    });
   } catch (e: any) {
     console.error('Answer submission error:', e);
     return c.json({ error: 'Failed to save answer: ' + (e.message || 'unknown error') }, 500);
@@ -379,6 +505,7 @@ testRoutes.post('/attempt/:id/section/:nextSection', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   const attemptId = parseInt(c.req.param('id'));
+  if (isNaN(attemptId)) return c.json({ error: 'Invalid attempt ID' }, 400);
   const nextSection = c.req.param('nextSection');
 
   const attempt = await c.env.DB.prepare(
@@ -399,17 +526,33 @@ testRoutes.post('/attempt/:id/section/:nextSection', async (c) => {
 
 testRoutes.post('/attempt/:id/finish', async (c) => {
   try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
     const attemptId = parseInt(c.req.param('id'));
+    if (isNaN(attemptId)) return c.json({ error: 'Invalid attempt ID' }, 400);
     const attempt = await c.env.DB.prepare(
-      'SELECT * FROM test_attempts WHERE id = ?'
-    ).bind(attemptId).first();
+      'SELECT * FROM test_attempts WHERE id = ? AND user_id = ?'
+    ).bind(attemptId, user.id).first();
 
     if (!attempt) return c.json({ error: 'Not found' }, 404);
 
+    // Mock-mode deadline enforcement — mark as time_expired if past deadline
     const now = new Date().toISOString();
+    let finalStatus = 'completed';
+    try {
+      const meta = attempt.metadata ? JSON.parse(attempt.metadata as string) : {};
+      if (meta?.mock_mode && meta?.deadline_at) {
+        const deadline = new Date(meta.deadline_at).getTime();
+        if (Number.isFinite(deadline) && Date.now() > deadline) {
+          finalStatus = 'time_expired';
+        }
+      }
+    } catch {}
+
     await c.env.DB.prepare(
       'UPDATE test_attempts SET status = ?, finished_at = ? WHERE id = ?'
-    ).bind('completed', now, attemptId).run();
+    ).bind(finalStatus, now, attemptId).run();
 
     const config = TEST_CONFIGS[attempt.test_type as string];
 
@@ -444,15 +587,101 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
        VALUES (?, ?, ?, ?, ?, ?)`
     ).bind(attemptId, attempt.user_id || 0, attempt.test_type, totalScore, JSON.stringify(sectionScores), totalScore).run();
 
+    // ─── IRT + Learning Curve updates (non-blocking) ────────────
+    const userId = attempt.user_id as number;
+    if (userId > 0) {
+      try {
+        // 1. Build IRT responses from answers
+        const irtResponses: IRTResponse[] = (answers.results || [])
+          .filter((a: any) => a.is_correct !== null)
+          .map((a: any) => ({
+            content_id: (a.content_id as number) || 0,
+            section: a.section as string,
+            is_correct: !!(a.is_correct),
+          }));
+
+        // 2. Update IRT student ability
+        if (irtResponses.length > 0) {
+          await updateStudentAbility(c.env.DB, userId, irtResponses);
+        }
+
+        // 3. Record learning curve points per section
+        const sectionGroups = new Map<string, { correct: number; total: number }>();
+        for (const a of (answers.results || []) as any[]) {
+          if (a.is_correct === null) continue;
+          const sec = a.section as string;
+          if (!sectionGroups.has(sec)) sectionGroups.set(sec, { correct: 0, total: 0 });
+          const g = sectionGroups.get(sec)!;
+          g.total++;
+          if (a.is_correct) g.correct++;
+        }
+
+        for (const [skill, stats] of sectionGroups.entries()) {
+          if (stats.total >= 3) { // Only record if meaningful session
+            const acc = stats.correct / stats.total;
+            await recordLearningPoint(c.env.DB, userId, skill, acc, stats.total);
+            await fitAndSaveLearningCurve(c.env.DB, userId, skill);
+            await updateForgettingCurve(c.env.DB, userId, skill, acc >= 0.5);
+          }
+        }
+      } catch (irtErr: any) {
+        console.error('IRT/learning-curve update error (non-fatal):', irtErr.message);
+      }
+    }
+
+    // Get IRT-enhanced score if available
+    let irtProfile = null;
+    try {
+      if (userId > 0) {
+        irtProfile = await getStudentIRTProfile(c.env.DB, userId);
+      }
+    } catch {}
+
+    // Growth recognition — check if student improved since last period
+    let growthMessage: string | null = null;
+    try {
+      if (userId > 0) {
+        const { detectGrowth } = await import('../services/companion');
+        const userName = (await c.env.DB.prepare('SELECT name FROM users WHERE id = ?').bind(userId).first() as any)?.name || 'Teman';
+        growthMessage = await detectGrowth(c.env, userId, userName);
+      }
+    } catch (e) { /* silent */ }
+
+    // ─── Post-test wrap-up: FSRS ingest + tutor review nudge (non-blocking) ───
+    // Feeds wrongs into spaced repetition and (if the attempt has triageable
+    // mistakes) pings the student on Telegram offering a conversational review.
+    // Runs via waitUntil so the HTTP response to the mini app is not delayed.
+    if (userId > 0 && finalStatus === 'completed') {
+      c.executionCtx.waitUntil((async () => {
+        try {
+          const { analyzeAttempt, ingestWrongsToFsrs, sendNudge } = await import('../services/post-test-review');
+          await ingestWrongsToFsrs(c.env, attemptId, userId);
+          const analysis = await analyzeAttempt(c.env, attemptId, userId);
+          if (analysis && analysis.triaged_concepts && analysis.triaged_concepts.length > 0) {
+            await sendNudge(c.env, userId, analysis);
+          }
+        } catch (e: any) {
+          console.error('post-test wrap-up error (non-fatal):', e?.message || e);
+        }
+      })());
+    }
+
     return c.json({
       attempt_id: attemptId,
       test_type: attempt.test_type,
       total_score: totalScore,
       band_score: totalScore,
       section_scores: sectionScores,
+      irt: irtProfile ? {
+        ibt_estimate: irtProfile.ibt_estimate,
+        cefr: irtProfile.cefr,
+        confidence: irtProfile.confidence,
+        abilities: irtProfile.abilities,
+      } : null,
       ai_summary: null,
       detailed_feedback: null,
       completed_at: now,
+      ...(growthMessage ? { growth_message: growthMessage } : {}),
     });
   } catch (e: any) {
     console.error('finish error:', e);
@@ -467,8 +696,12 @@ testRoutes.get('/questions/:section', async (c) => {
     const section = c.req.param('section');
     const testType = c.req.query('test_type') || 'TOEFL_IBT';
     const questionType = c.req.query('question_type');
-    const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50);
-    const offset = parseInt(c.req.query('offset') || '0');
+    const drillConcept = c.req.query('drill_concept');
+    let limit = parseInt(c.req.query('limit') || '20');
+    if (isNaN(limit)) limit = 20;
+    limit = Math.min(limit, 50);
+    let offset = parseInt(c.req.query('offset') || '0');
+    if (isNaN(offset)) offset = 0;
 
     // Try to get authenticated user for smart sequencing
     let userId: number | null = null;
@@ -488,17 +721,47 @@ testRoutes.get('/questions/:section', async (c) => {
       params.push(questionType);
     }
 
+    // Drill mode: filter by skill_tag using JSON-array LIKE matching. The tag
+    // is a flat string inside a JSON array (e.g. '["inference","detail"]'),
+    // so `%"inference"%` is the safest substring match.
+    if (drillConcept) {
+      query += ' AND skill_tags LIKE ?';
+      params.push(`%"${drillConcept.replace(/"/g, '')}"%`);
+    }
+
     // When no question_type filter (random mix), use RANDOM() for variety
     // Otherwise order by difficulty for progressive learning within a type
-    if (questionType) {
+    // Drill mode always randomizes — variety matters more than progression
+    // when we're hammering a single concept across a short 3–5 question set.
+    if (drillConcept) {
+      query += ' ORDER BY RANDOM() LIMIT ? OFFSET ?';
+    } else if (questionType) {
       query += ' ORDER BY difficulty ASC LIMIT ? OFFSET ?';
     } else {
       query += ' ORDER BY RANDOM() LIMIT ? OFFSET ?';
     }
     params.push(limit, offset);
 
-    const stmt = c.env.DB.prepare(query);
-    const result = await stmt.bind(...params).all();
+    // Exposure-aware path: no question_type filter + no offset + logged-in user.
+    // This is the hot path for the web mini-app's section browser, so it's the
+    // one that benefits most from spreading the bank. Otherwise use the
+    // original query (question_type filter or paginated — caller controls order).
+    let result: { results: any[] };
+    // Drill mode bypasses the exposure sampler — the point of a drill is to
+    // concentrate on one concept, not spread exposure across the bank.
+    if (userId && !questionType && !offset && !drillConcept) {
+      const rows = await selectUnderExposedQuestions<any>(c.env, {
+        userId: Number(userId),
+        limit,
+        extraWhere: `test_type = ? AND section = ? AND status = 'published'`,
+        extraParams: [testType, section],
+        columns: 'id, question_type, title, content, media_url, difficulty',
+      });
+      result = { results: rows };
+    } else {
+      const stmt = c.env.DB.prepare(query);
+      result = (await stmt.bind(...params).all()) as { results: any[] };
+    }
 
     // Apply smart sequencing if user is authenticated and no specific question_type filter
     let questions = result.results;
@@ -510,6 +773,14 @@ testRoutes.get('/questions/:section', async (c) => {
       } catch (e) {
         console.error('Smart sequencing error:', e);
         // Fall back to unordered results
+      }
+    }
+
+    // Record exposures for the served batch so next time we spread wider.
+    if (userId && questions && questions.length > 0) {
+      const ids = questions.map((r: any) => Number(r.id)).filter((n: number) => Number.isInteger(n));
+      if (ids.length > 0) {
+        c.executionCtx.waitUntil(recordExposures(c.env, Number(userId), ids, 'test'));
       }
     }
 
@@ -558,6 +829,7 @@ testRoutes.get('/results/:id', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   const attemptId = parseInt(c.req.param('id'));
+  if (isNaN(attemptId)) return c.json({ error: 'Invalid attempt ID' }, 400);
 
   const attempt = await c.env.DB.prepare(
     'SELECT * FROM test_attempts WHERE id = ? AND user_id = ?'
@@ -589,6 +861,7 @@ testRoutes.get('/attempt/:id/review', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   const attemptId = parseInt(c.req.param('id'));
+  if (isNaN(attemptId)) return c.json({ error: 'Invalid attempt ID' }, 400);
 
   const attempt = await c.env.DB.prepare(
     'SELECT * FROM test_attempts WHERE id = ? AND user_id = ?'
@@ -604,6 +877,7 @@ testRoutes.get('/attempt/:id/review', async (c) => {
     let content: any = {};
     try { content = JSON.parse(a.content || '{}'); } catch {}
     return {
+      content_id: a.content_id,
       section: a.section,
       question_index: a.question_index,
       question_type: a.question_type,
@@ -627,6 +901,7 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
   if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   const attemptId = parseInt(c.req.param('id'));
+  if (isNaN(attemptId)) return c.json({ error: 'Invalid attempt ID' }, 400);
 
   const attempt = await c.env.DB.prepare(
     'SELECT * FROM test_attempts WHERE id = ? AND user_id = ?'
@@ -650,16 +925,17 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
 
   const allQuestions: Record<string, any[]> = {};
 
-  // Load questions for each section
+  // Load questions for each section — exposure-aware so the whole bank gets used.
   for (const section of sections) {
-    const result = await c.env.DB.prepare(
-      `SELECT id, question_type, title, content, media_url, difficulty
-       FROM test_contents
-       WHERE test_type = ? AND section = ? AND status = 'published'
-       ORDER BY RANDOM() LIMIT 50`
-    ).bind(attempt.test_type, section.id).all();
+    const rows = await selectUnderExposedQuestions<any>(c.env, {
+      userId: Number(user.id),
+      limit: 50,
+      extraWhere: `test_type = ? AND section = ? AND status = 'published'`,
+      extraParams: [attempt.test_type as string, section.id],
+      columns: 'id, question_type, title, content, media_url, difficulty',
+    });
 
-    allQuestions[section.id] = (result.results || []).map((r: any) => {
+    allQuestions[section.id] = rows.map((r: any) => {
       let content = {};
       try { content = JSON.parse(r.content || '{}'); } catch {}
       const mediaUrl = r.media_url;
@@ -673,6 +949,13 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
         difficulty: r.difficulty,
       };
     });
+
+    // Record exposures for this batch (non-blocking if user.id missing)
+    const servedIds = rows.map((r: any) => Number(r.id)).filter((n) => Number.isInteger(n));
+    if (servedIds.length > 0) {
+      // Fire-and-forget — don't block response on bookkeeping
+      c.executionCtx.waitUntil(recordExposures(c.env, Number(user.id), servedIds, 'test'));
+    }
   }
 
   return c.json({
@@ -686,4 +969,325 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
     })),
     questions_by_section: allQuestions,
   });
+});
+
+// ─── Skill Practice Mode ───────────────────────────────────────────────
+// Focused per-skill practice sessions with IRT-driven recommendations
+
+const SKILL_PRACTICE_CONFIG: Record<string, {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  question_count: number;
+  duration_minutes: number;
+}> = {
+  reading: {
+    id: 'reading', name: 'Reading', icon: '📖',
+    description: 'Latihan passage & comprehension',
+    question_count: 10, duration_minutes: 20,
+  },
+  listening: {
+    id: 'listening', name: 'Listening', icon: '🎧',
+    description: 'Latihan conversation & lecture',
+    question_count: 8, duration_minutes: 15,
+  },
+  speaking: {
+    id: 'speaking', name: 'Speaking', icon: '🗣️',
+    description: 'Latihan recording & AI evaluation',
+    question_count: 4, duration_minutes: 10,
+  },
+  writing: {
+    id: 'writing', name: 'Writing', icon: '✍️',
+    description: 'Latihan essay & integrated writing',
+    question_count: 3, duration_minutes: 20,
+  },
+  structure: {
+    id: 'structure', name: 'Structure', icon: '📝',
+    description: 'Latihan grammar & written expression',
+    question_count: 10, duration_minutes: 15,
+  },
+};
+
+// GET /api/tests/skill-practice/config — skill cards + IRT scores + recommendation
+testRoutes.get('/skill-practice/config', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const testType = c.req.query('test_type') || 'TOEFL_IBT';
+    const config = TEST_CONFIGS[testType];
+    if (!config) return c.json({ error: 'Unknown test type' }, 404);
+
+    // Get available skills for this test type
+    const availableSkills = config.sections.map((s: any) => s.id);
+
+    // Get question counts per skill
+    const countResult = await c.env.DB.prepare(
+      `SELECT section, COUNT(*) as count FROM test_contents
+       WHERE test_type = ? AND status = 'published' AND section IN (${availableSkills.map(() => '?').join(',')})
+       GROUP BY section`
+    ).bind(testType, ...availableSkills).all();
+
+    const questionCounts: Record<string, number> = {};
+    for (const row of countResult.results || []) {
+      questionCounts[(row as any).section] = (row as any).count;
+    }
+
+    // Get IRT profile for this user
+    let irtAbilities: Record<string, { theta: number; se: number; ibt_estimate?: number; cefr?: string }> = {};
+    try {
+      const { getStudentIRTProfile: getIRT, thetaToIBTSection: toIBT, thetaToCEFR: toCEFR } = await import('../services/irt-engine');
+      const profile = await getIRT(c.env.DB, user.id);
+      if (profile?.abilities) {
+        for (const a of profile.abilities) {
+          if (a.skill === 'overall') continue;
+          irtAbilities[a.skill] = {
+            theta: a.theta,
+            se: a.standard_error,
+            ibt_estimate: toIBT(a.theta),
+            cefr: toCEFR(a.theta),
+          };
+        }
+      }
+    } catch {}
+
+    // Get learning curve data for projections
+    let learningData: Record<string, any> = {};
+    try {
+      const { getStudentLearningAnalytics: getLC } = await import('../services/learning-curve');
+      const lc = await getLC(c.env.DB, user.id);
+      if (lc?.learningCurves) {
+        for (const curve of lc.learningCurves) {
+          learningData[curve.skill] = {
+            current_accuracy: curve.a_max,
+            projected_accuracy: curve.predicted_accuracy_2w,
+            sessions_completed: curve.data_points,
+          };
+        }
+      }
+    } catch {}
+
+    // Get recent practice history (last 7 days)
+    const recentHistory = await c.env.DB.prepare(
+      `SELECT aa.section, COUNT(*) as questions_done,
+              SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct,
+              MAX(ta.started_at) as last_practiced
+       FROM attempt_answers aa
+       JOIN test_attempts ta ON ta.id = aa.attempt_id
+       WHERE ta.user_id = ? AND ta.test_type = ?
+       AND ta.started_at > datetime('now', '-7 days')
+       AND aa.is_correct IS NOT NULL
+       GROUP BY aa.section`
+    ).bind(user.id, testType).all();
+
+    const practiceHistory: Record<string, { questions_done: number; correct: number; accuracy: number; last_practiced: string | null }> = {};
+    for (const row of recentHistory.results || []) {
+      const r = row as any;
+      practiceHistory[r.section] = {
+        questions_done: r.questions_done,
+        correct: r.correct,
+        accuracy: r.questions_done > 0 ? Math.round((r.correct / r.questions_done) * 100) : 0,
+        last_practiced: r.last_practiced,
+      };
+    }
+
+    // Determine recommended skill (weakest theta with enough data, or least practiced)
+    let recommended: string | null = null;
+    let recommendReason = '';
+
+    // Priority 1: Skill with lowest IRT theta
+    const irtSkills = Object.entries(irtAbilities)
+      .filter(([skill]) => availableSkills.includes(skill))
+      .sort(([, a], [, b]) => a.theta - b.theta);
+
+    if (irtSkills.length > 0) {
+      recommended = irtSkills[0][0];
+      const theta = irtSkills[0][1].theta;
+      recommendReason = `Skill terlemah berdasarkan IRT (θ = ${theta.toFixed(2)})`;
+    }
+
+    // Priority 2: Least practiced skill (if no IRT data)
+    if (!recommended) {
+      const leastPracticed = availableSkills
+        .map((s: string) => ({ skill: s, done: practiceHistory[s]?.questions_done || 0 }))
+        .sort((a: any, b: any) => a.done - b.done);
+
+      if (leastPracticed.length > 0) {
+        recommended = leastPracticed[0].skill;
+        recommendReason = 'Skill paling jarang dilatih minggu ini';
+      }
+    }
+
+    // Get quota
+    const { checkTestAccess } = await import('../services/premium');
+    const quotaInfo = await checkTestAccess(c.env, user.id);
+
+    // Build skill cards
+    const skills = availableSkills.map((skillId: string) => {
+      const skillConfig = SKILL_PRACTICE_CONFIG[skillId] || {
+        id: skillId, name: skillId, icon: '📋',
+        description: '', question_count: 10, duration_minutes: 15,
+      };
+      const irt = irtAbilities[skillId];
+      const lc = learningData[skillId];
+      const history = practiceHistory[skillId];
+
+      return {
+        ...skillConfig,
+        available_questions: questionCounts[skillId] || 0,
+        irt: irt ? {
+          theta: Math.round(irt.theta * 100) / 100,
+          se: Math.round(irt.se * 100) / 100,
+          ibt_estimate: irt.ibt_estimate,
+          cefr: irt.cefr,
+        } : null,
+        learning_curve: lc ? {
+          current_accuracy: Math.round(lc.current_accuracy * 100),
+          projected_accuracy: Math.round(lc.projected_accuracy * 100),
+          sessions: lc.sessions_completed,
+        } : null,
+        recent: history || null,
+        is_recommended: skillId === recommended,
+      };
+    });
+
+    return c.json({
+      test_type: testType,
+      skills,
+      recommended: recommended ? { skill: recommended, reason: recommendReason } : null,
+      quota: quotaInfo ? {
+        allowed: quotaInfo.allowed,
+        is_premium: quotaInfo.is_premium,
+        remaining: quotaInfo.remaining,
+        daily_limit: quotaInfo.daily_limit,
+        used_today: quotaInfo.used_today,
+      } : null,
+    });
+  } catch (e: any) {
+    console.error('Skill practice config error:', e);
+    return c.json({ error: e.message || 'Failed to load skill practice config' }, 500);
+  }
+});
+
+// POST /api/tests/skill-practice/start — start a focused skill practice session
+testRoutes.post('/skill-practice/start', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const { test_type, skill, question_count } = await c.req.json();
+    const config = TEST_CONFIGS[test_type];
+    if (!config) return c.json({ error: 'Unknown test type' }, 404);
+
+    const sectionConfig = config.sections.find((s: any) => s.id === skill);
+    if (!sectionConfig) return c.json({ error: 'Unknown skill for this test type' }, 404);
+
+    // Check quota
+    const { checkTestAccess } = await import('../services/premium');
+    const access = await checkTestAccess(c.env, user.id);
+    if (!access.allowed) {
+      return c.json({
+        error: 'Batas harian tercapai',
+        code: 'LIMIT_REACHED',
+        quota: {
+          daily_limit: access.daily_limit,
+          used_today: access.used_today,
+          remaining: 0,
+          reset_at: access.reset_at,
+        },
+      }, 403);
+    }
+
+    // Auto-complete stale attempts
+    try {
+      await c.env.DB.prepare(
+        `UPDATE test_attempts SET status = 'abandoned', finished_at = datetime('now')
+         WHERE user_id = ? AND status = 'in_progress'
+         AND started_at < datetime('now', '-2 hours')`
+      ).bind(user.id).run();
+    } catch {}
+
+    const skillPracticeConfig = SKILL_PRACTICE_CONFIG[skill];
+    const qCount = question_count || skillPracticeConfig?.question_count || 10;
+    const duration = skillPracticeConfig?.duration_minutes || sectionConfig.duration_minutes;
+
+    const now = new Date().toISOString();
+    const metadata = {
+      practice_mode: 'skill',
+      skill,
+      target_question_count: qCount,
+      section_only: skill,
+      total_duration_minutes: duration,
+    };
+
+    const result = await c.env.DB.prepare(
+      `INSERT INTO test_attempts (user_id, test_type, status, current_section, current_question_index, section_start_times, started_at, metadata)
+       VALUES (?, ?, 'in_progress', ?, 0, ?, ?, ?)`
+    ).bind(
+      user.id, test_type, skill,
+      JSON.stringify({ [skill]: now }), now,
+      JSON.stringify(metadata),
+    ).run();
+
+    const attemptId = result.meta.last_row_id;
+
+    return c.json({
+      attempt_id: attemptId,
+      test_type,
+      skill,
+      sections: [sectionConfig],
+      current_section: skill,
+      question_count: qCount,
+      duration_minutes: duration,
+      practice_mode: 'skill',
+    });
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Failed to start skill practice' }, 500);
+  }
+});
+
+// GET /api/tests/skill-practice/history — recent skill practice results
+testRoutes.get('/skill-practice/history', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const testType = c.req.query('test_type') || 'TOEFL_IBT';
+    const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50);
+
+    const results = await c.env.DB.prepare(
+      `SELECT ta.id, ta.test_type, ta.current_section as skill, ta.started_at, ta.finished_at, ta.metadata,
+              COUNT(aa.id) as total_questions,
+              SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct,
+              SUM(CASE WHEN aa.is_correct = 0 THEN 1 ELSE 0 END) as wrong,
+              AVG(aa.time_spent_seconds) as avg_time
+       FROM test_attempts ta
+       LEFT JOIN attempt_answers aa ON aa.attempt_id = ta.id AND aa.is_correct IS NOT NULL
+       WHERE ta.user_id = ? AND ta.test_type = ? AND ta.status = 'completed'
+       AND ta.metadata LIKE '%"practice_mode":"skill"%'
+       GROUP BY ta.id
+       ORDER BY ta.started_at DESC
+       LIMIT ?`
+    ).bind(user.id, testType, limit).all();
+
+    return c.json({
+      sessions: (results.results || []).map((r: any) => {
+        const meta = r.metadata ? JSON.parse(r.metadata) : {};
+        return {
+          attempt_id: r.id,
+          skill: meta.skill || r.skill,
+          started_at: r.started_at,
+          finished_at: r.finished_at,
+          total_questions: r.total_questions,
+          correct: r.correct,
+          wrong: r.wrong,
+          accuracy: r.total_questions > 0 ? Math.round((r.correct / r.total_questions) * 100) : 0,
+          avg_time_seconds: r.avg_time ? Math.round(r.avg_time) : null,
+        };
+      }),
+    });
+  } catch (e: any) {
+    return c.json({ error: e.message || 'Failed to load history' }, 500);
+  }
 });

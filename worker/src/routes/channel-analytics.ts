@@ -18,7 +18,8 @@ channelAnalyticsRoutes.use('/*', requireAdmin);
 
 // Summary stats
 channelAnalyticsRoutes.get('/summary', async (c) => {
-  const days = parseInt(c.req.query('days') || '7');
+  // Sanitize days to prevent SQL injection — must be a positive integer 1-180
+  const days = Math.max(1, Math.min(180, parseInt(c.req.query('days') || '7') || 7));
 
   const postsByType = await c.env.DB.prepare(`
     SELECT post_type as content_type,
@@ -26,36 +27,36 @@ channelAnalyticsRoutes.get('/summary', async (c) => {
            SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) as sent,
            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
     FROM channel_posts
-    WHERE posted_at >= datetime('now', '-${days} days')
+    WHERE posted_at >= datetime('now', '-' || ? || ' days')
     GROUP BY post_type
     ORDER BY total DESC
-  `).all();
+  `).bind(days).all();
 
   const totalPosts = await c.env.DB.prepare(`
     SELECT COUNT(*) as count FROM channel_posts
-    WHERE posted_at >= datetime('now', '-${days} days')
-  `).first();
+    WHERE posted_at >= datetime('now', '-' || ? || ' days')
+  `).bind(days).first();
 
   const totalFailed = await c.env.DB.prepare(`
     SELECT COUNT(*) as count FROM channel_posts
-    WHERE posted_at >= datetime('now', '-${days} days') AND status = 'failed'
-  `).first();
+    WHERE posted_at >= datetime('now', '-' || ? || ' days') AND status = 'failed'
+  `).bind(days).first();
 
   const referralsBySource = await c.env.DB.prepare(`
     SELECT source_channel, COUNT(*) as count
     FROM channel_referrals
-    WHERE referred_at >= datetime('now', '-${days} days')
+    WHERE referred_at >= datetime('now', '-' || ? || ' days')
     GROUP BY source_channel
     ORDER BY count DESC
-  `).all();
+  `).bind(days).all();
 
   const hourlyStats = await c.env.DB.prepare(`
     SELECT hour_bucket, content_type, posts_sent, posts_failed
     FROM channel_hourly_stats
-    WHERE hour_bucket >= datetime('now', '-${days} days')
+    WHERE hour_bucket >= datetime('now', '-' || ? || ' days')
     ORDER BY hour_bucket DESC
     LIMIT 200
-  `).all();
+  `).bind(days).all();
 
   const totalPostsCount = (totalPosts?.count as number) || 0;
   const totalFailedCount = (totalFailed?.count as number) || 0;

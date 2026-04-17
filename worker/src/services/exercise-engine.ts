@@ -738,8 +738,21 @@ export function getStepHint(type: string, lesson: any, step: number): string {
 
 // ── Scoring ────────────────────────────────────────────
 
-/** Score an MCQ answer (instant, no GPT) */
-export function scoreMCQ(type: string, lesson: any, step: number, answer: string): { score: number; feedback: string; correct: string } {
+/** Score an MCQ answer (instant, no GPT).
+ *  Returns raw fields too so callers can optionally replace `feedback` with
+ *  a personalized AI-generated message (see student-context.ts). */
+export function scoreMCQ(type: string, lesson: any, step: number, answer: string): {
+  score: number;
+  feedback: string;
+  correct: string;
+  /** Raw inputs exposed so personalization layer can use them without recomputing */
+  question_text?: string;
+  correct_letter?: string;
+  student_letter?: string;
+  options?: string[];
+  explanation_text?: string;
+  section?: string;
+} {
   const item = getStepItem(type, lesson, step);
   if (!item) return { score: 0, feedback: 'Error: no item found.', correct: '?' };
 
@@ -766,10 +779,19 @@ export function scoreMCQ(type: string, lesson: any, step: number, answer: string
   const correctIndex = labels.indexOf(correctAnswer);
   const correct = `${correctAnswer}) ${(item.options || [])[correctIndex] || ''}`;
 
+  const rawFields = {
+    question_text: String(item.question || item.sentence || item.target_word || '').substring(0, 500),
+    correct_letter: correctAnswer,
+    student_letter: studentAnswer,
+    options: Array.isArray(item.options) ? item.options : undefined,
+    explanation_text: explanation.trim(),
+    section: type,
+  };
+
   if (isCorrect) {
-    return { score: 100, feedback: `✅ *Benar!* ${explanation}`, correct };
+    return { score: 100, feedback: `✅ *Benar!* ${explanation}`, correct, ...rawFields };
   } else {
-    return { score: 0, feedback: `❌ *Salah.* Jawaban: ${correct}${explanation}`, correct };
+    return { score: 0, feedback: `❌ *Salah.* Jawaban: ${correct}${explanation}`, correct, ...rawFields };
   }
 }
 

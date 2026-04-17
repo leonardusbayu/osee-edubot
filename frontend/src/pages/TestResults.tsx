@@ -4,8 +4,10 @@ import { api } from '../api/client';
 import { authedFetch } from '../api/authedFetch';
 import { useTestStore } from '../stores/test';
 import type { TestResult } from '../types';
+import ReportIssueButton from '../components/ReportIssueButton';
 
 interface ReviewItem {
+  content_id: number | null;
   section: string;
   question_index: number;
   question_type: string;
@@ -27,24 +29,39 @@ export default function TestResults() {
   const [loading, setLoading] = useState(true);
   const [review, setReview] = useState<ReviewItem[]>([]);
   const [showReview, setShowReview] = useState(false);
+  const [growthMessage, setGrowthMessage] = useState<string | null>(null);
 
   useEffect(() => {
     loadResults();
+    // Check for growth message stored by TestRunner
+    try {
+      const msg = sessionStorage.getItem('edubot_growth_msg');
+      if (msg) {
+        setGrowthMessage(msg);
+        sessionStorage.removeItem('edubot_growth_msg');
+      }
+    } catch {}
   }, []);
 
   async function loadResults() {
     try {
       const data = await api.getResults(Number(attemptId));
       setResult(data);
-      // Load review data
+      // Load review data — swallow errors but log so a broken /review endpoint
+      // is diagnosable via console instead of producing a silent empty list.
       try {
         const reviewRes = await authedFetch(`/api/tests/attempt/${attemptId}/review`);
         if (reviewRes.ok) {
           const reviewData = await reviewRes.json();
           setReview(reviewData.review || []);
+        } else {
+          console.warn('[TestResults] /review returned', reviewRes.status);
         }
-      } catch {}
-    } catch {
+      } catch (e) {
+        console.warn('[TestResults] /review fetch failed:', e);
+      }
+    } catch (e) {
+      console.error('[TestResults] getResults failed:', e);
       setResult(null);
     } finally {
       setLoading(false);
@@ -82,23 +99,38 @@ export default function TestResults() {
     }
   }
 
-  function handleAskWhy(item: ReviewItem) {
+  async function handleAskWhy(item: ReviewItem) {
     const qText = (item.question_text || '').substring(0, 300);
     const userAns = item.answer_data?.selected || item.answer_data?.text || '(kosong)';
     const correct = item.correct_answer || '(n/a)';
     const question = `Aku salah di soal ini, tolong jelasin kenapa:\n\nSoal: "${qText}"\nJawaban aku: ${userAns}\nJawaban benar: ${correct}`;
+
+    // Stash the question server-side — start params are limited to 64 chars, so
+    // the bot retrieves it from pending_tutor_questions when /start ask arrives.
+    let stashed = false;
+    try {
+      const res = await authedFetch('/api/tutor/pending-question', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question }),
+      });
+      stashed = res.ok;
+      if (!res.ok) console.warn('[TestResults] pending-question stash failed:', res.status);
+    } catch (e) {
+      console.warn('[TestResults] pending-question request errored:', e);
+    }
+
     try {
       const tg: any = (window as any).Telegram?.WebApp;
-      if (tg?.openTelegramLink) {
-        const encoded = encodeURIComponent(question);
-        tg.openTelegramLink(`https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=ask&text=${encoded}`);
+      if (tg?.openTelegramLink && stashed) {
+        tg.openTelegramLink('https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=ask');
         tg.close?.();
         return;
       }
     } catch {}
     // Fallback: copy to clipboard and show instruction
     try {
-      navigator.clipboard.writeText(question);
+      await navigator.clipboard.writeText(question);
       alert('Pertanyaan disalin. Paste ke bot di Telegram untuk minta penjelasan.');
     } catch {
       alert(question);
@@ -110,7 +142,7 @@ export default function TestResults() {
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-tg-button mx-auto mb-4"></div>
-          <p className="text-tg-hint">Scoring your test...</p>
+          <p className="text-tg-hint">Menghitung skor...</p>
         </div>
       </div>
     );
@@ -119,7 +151,7 @@ export default function TestResults() {
   if (!result) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <p className="text-tg-hint">No results found</p>
+        <p className="text-tg-hint">Tidak ada hasil ditemukan</p>
       </div>
     );
   }
@@ -142,24 +174,31 @@ export default function TestResults() {
     <div className="p-4 max-w-lg mx-auto pb-24">
       {/* Header */}
       <div className="text-center mb-6">
-        <h1 className="text-2xl font-bold mb-1">Test Results</h1>
+        <h1 className="text-2xl font-bold mb-1">Hasil Tes</h1>
         <p className="text-tg-hint text-sm">
-          {result.test_type.replace('_', ' ')} Practice Test
+          {result.test_type.replace('_', ' ')} Latihan
         </p>
       </div>
 
+      {/* Growth celebration */}
+      {growthMessage && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-4 text-sm text-blue-800">
+          {growthMessage}
+        </div>
+      )}
+
       {/* Overall Score */}
       <div className="bg-tg-secondary rounded-2xl p-6 text-center mb-6">
-        <p className="text-tg-hint text-sm mb-1">Overall Band Score</p>
+        <p className="text-tg-hint text-sm mb-1">Skor Band Keseluruhan</p>
         <p className="text-5xl font-bold text-tg-button mb-2">
           {result.band_score || result.total_score}
         </p>
-        <p className="text-tg-hint text-xs">out of 6.0</p>
+        <p className="text-tg-hint text-xs">dari 6.0</p>
       </div>
 
       {/* Section Scores */}
       <div className="mb-6">
-        <h2 className="font-semibold mb-3">Section Breakdown</h2>
+        <h2 className="font-semibold mb-3">Hasil Per Bagian</h2>
         <div className="space-y-3">
           {Object.entries(result.section_scores || {}).map(([section, score]) => (
             <div key={section} className="bg-tg-secondary rounded-xl p-4">
@@ -181,7 +220,7 @@ export default function TestResults() {
       {/* AI Feedback */}
       {result.ai_summary && (
         <div className="mb-6">
-          <h2 className="font-semibold mb-3">AI Feedback</h2>
+          <h2 className="font-semibold mb-3">Masukan AI</h2>
           <div className="bg-tg-secondary rounded-xl p-4">
             <p className="text-sm leading-relaxed">{result.ai_summary}</p>
           </div>
@@ -203,17 +242,24 @@ export default function TestResults() {
             <div className="space-y-4">
               {review.map((item, idx) => (
                 <div key={idx} className="bg-tg-secondary rounded-xl p-4">
-                  <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-start justify-between mb-2 gap-2">
                     <span className="text-xs text-tg-hint capitalize">{item.section} · Q{item.question_index + 1}</span>
-                    {item.is_correct === true && (
-                      <span className="text-xs font-bold text-green-500">✅ Benar</span>
-                    )}
-                    {item.is_correct === false && (
-                      <span className="text-xs font-bold text-red-500">❌ Salah</span>
-                    )}
-                    {item.is_correct === null && (
-                      <span className="text-xs font-bold text-yellow-500">📋 Ditinjau</span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {item.is_correct === true && (
+                        <span className="text-xs font-bold text-green-500">✅ Benar</span>
+                      )}
+                      {item.is_correct === false && (
+                        <span className="text-xs font-bold text-red-500">❌ Salah</span>
+                      )}
+                      {item.is_correct === null && (
+                        <span className="text-xs font-bold text-yellow-500">📋 Ditinjau</span>
+                      )}
+                      <ReportIssueButton
+                        contentId={item.content_id}
+                        attemptId={attemptId ? Number(attemptId) : null}
+                        compact
+                      />
+                    </div>
                   </div>
 
                   {item.question_text && (
@@ -226,9 +272,9 @@ export default function TestResults() {
 
                   {(item.options || []).length > 0 && (
                     <div className="space-y-1 mb-2">
-                      {item.options.map((opt: any, i: number) => {
-                        const letter = typeof opt === 'string' ? opt.charAt(0) : opt.key;
-                        const text = typeof opt === 'string' ? opt : opt.text;
+                      {(item.options || []).map((opt: any, i: number) => {
+                        const letter = typeof opt === 'string' ? opt.charAt(0) : (opt?.key || String.fromCharCode(65 + i));
+                        const text = typeof opt === 'string' ? opt : (opt?.text || '');
                         const isSelected = item.answer_data?.selected === letter;
                         const isCorrectOpt = item.correct_answer?.toUpperCase() === letter;
                         return (
@@ -296,13 +342,13 @@ export default function TestResults() {
             onClick={handleClose}
             className="flex-1 bg-tg-secondary text-tg-text py-3 rounded-xl font-medium"
           >
-            Back to Tests
+            Kembali ke Tes
           </button>
           <button
             onClick={() => navigate('/progress')}
             className="flex-1 bg-tg-button text-tg-button-text py-3 rounded-xl font-medium"
           >
-            View Progress
+            Lihat Progres
           </button>
         </div>
       </div>

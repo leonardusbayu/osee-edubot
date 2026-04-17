@@ -77,7 +77,9 @@ authRoutes.post('/refresh', async (c) => {
   const payload = await verifyJWT(refresh_token, c.env.JWT_SECRET);
   if (!payload || payload.type !== 'refresh') return c.json({ error: 'Invalid token' }, 401);
 
-  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(parseInt(payload.sub)).first();
+  const userId = parseInt(payload.sub);
+  if (isNaN(userId)) return c.json({ error: 'Invalid user ID in token' }, 401);
+  const user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   if (!user) return c.json({ error: 'User not found' }, 404);
 
   const accessToken = await createJWT(

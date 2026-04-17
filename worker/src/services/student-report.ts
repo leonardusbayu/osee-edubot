@@ -165,21 +165,25 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
   const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first() as any;
   if (!user) return null;
 
-  // ── Parallel fetch everything ──
+  // ── Parallel fetch everything (with per-query error handling) ──
+  const safe = <T>(p: Promise<T>, fallback: T): Promise<T> => p.catch((e) => { console.error('Report query failed:', e); return fallback; });
+  const safeAll = (p: Promise<any>) => safe(p, { results: [] });
+  const safeFirst = (p: Promise<any>) => safe(p, null);
+
   const [
     profile, masteries, weakTopics, mentalModel, misconceptions, gaps,
     sectionStats, recentAttempts, dailyLogs, srStats, srItems,
     lessonPlans, activePlan, diagnosticResult, learningPrefs,
     convStats, convTopics,
   ] = await Promise.all([
-    getStudentProfile(env, userId),
-    getAllTopicMasteries(env, userId),
-    getWeakestTopics(env, userId, 10),
-    getStudentMentalModel(env, userId),
-    getMisconceptions(env, userId),
-    getKnowledgeGaps(env, userId),
+    safe(getStudentProfile(env, userId), null),
+    safe(getAllTopicMasteries(env, userId), []),
+    safe(getWeakestTopics(env, userId, 10), []),
+    safe(getStudentMentalModel(env, userId), []),
+    safe(getMisconceptions(env, userId), []),
+    safe(getKnowledgeGaps(env, userId), []),
     // Section-level performance — include speaking/writing (score-based)
-    env.DB.prepare(
+    safeAll(env.DB.prepare(
       `SELECT aa.section,
               COUNT(*) as total,
               SUM(CASE
@@ -195,9 +199,9 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
        LEFT JOIN test_contents tc ON aa.content_id = tc.id
        WHERE ta.user_id = ?
        GROUP BY aa.section`
-    ).bind(userId).all(),
-    // Recent completed tests (test_attempts has no score/section columns — compute from answers)
-    env.DB.prepare(
+    ).bind(userId).all()),
+    // Recent completed tests
+    safeAll(env.DB.prepare(
       `SELECT ta.id, ta.current_section as section, ta.started_at as created_at,
               ta.current_question_index as total_questions,
               (SELECT SUM(CASE WHEN aa.is_correct = 1 THEN 1
@@ -207,9 +211,9 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
                FROM attempt_answers aa WHERE aa.attempt_id = ta.id) as score
        FROM test_attempts ta WHERE ta.user_id = ? AND ta.status = 'completed'
        ORDER BY ta.started_at DESC LIMIT 20`
-    ).bind(userId).all(),
+    ).bind(userId).all()),
     // Daily activity logs (last 30 days) — combines attempt_answers + conversation_messages
-    env.DB.prepare(
+    safeAll(env.DB.prepare(
       `SELECT date,
               SUM(questions) as questions,
               SUM(correct) as correct,
@@ -237,55 +241,54 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
          WHERE user_id = ? AND created_at >= datetime('now', '-30 days')
          GROUP BY DATE(created_at)
        ) GROUP BY date ORDER BY date ASC`
-    ).bind(userId, userId).all(),
+    ).bind(userId, userId).all()),
     // SRS overview
-    env.DB.prepare(
+    safeFirst(env.DB.prepare(
       `SELECT COUNT(*) as total,
               SUM(CASE WHEN next_review_at <= datetime('now') THEN 1 ELSE 0 END) as overdue,
               SUM(CASE WHEN review_level >= 4 THEN 1 ELSE 0 END) as mastered,
-              AVG(review_level) as avg_level,
-              AVG(correct_streak) as avg_streak
+              AVG(review_level) as avg_level
        FROM spaced_repetition WHERE user_id = ?`
-    ).bind(userId).first(),
+    ).bind(userId).first()),
     // SRS items by review level
-    env.DB.prepare(
+    safeAll(env.DB.prepare(
       `SELECT review_level, COUNT(*) as count FROM spaced_repetition WHERE user_id = ? GROUP BY review_level ORDER BY review_level`
-    ).bind(userId).all(),
+    ).bind(userId).all()),
     // Lesson plans
-    env.DB.prepare(
+    safeAll(env.DB.prepare(
       `SELECT id, title, plan_type, status, target_skills, progress_percent, current_step, total_steps, created_at, completed_at
        FROM lesson_plans WHERE user_id = ? ORDER BY created_at DESC LIMIT 20`
-    ).bind(userId).all(),
+    ).bind(userId).all()),
     // Active lesson plan
-    env.DB.prepare(
+    safeFirst(env.DB.prepare(
       `SELECT id, title, progress_percent, current_step, total_steps
        FROM lesson_plans WHERE user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1`
-    ).bind(userId).first(),
+    ).bind(userId).first()),
     // Diagnostic result
-    env.DB.prepare(
+    safeFirst(env.DB.prepare(
       `SELECT * FROM diagnostic_results WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`
-    ).bind(userId).first(),
+    ).bind(userId).first()),
     // Learning preferences
-    env.DB.prepare(
+    safeFirst(env.DB.prepare(
       `SELECT learning_style, communication_style, depth_level, preferred_language,
               daily_study_target_min, personality_notes
        FROM student_profiles WHERE user_id = ?`
-    ).bind(userId).first(),
+    ).bind(userId).first()),
     // Conversation stats
-    env.DB.prepare(
+    safeFirst(env.DB.prepare(
       `SELECT COUNT(*) as total,
               SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) as user_msgs,
               MIN(created_at) as first_msg,
               MAX(created_at) as last_msg
        FROM conversation_messages WHERE user_id = ?`
-    ).bind(userId).first(),
+    ).bind(userId).first()),
     // Conversation topics
-    env.DB.prepare(
+    safeAll(env.DB.prepare(
       `SELECT COALESCE(topic, 'other') as topic, COUNT(*) as count
        FROM conversation_messages
        WHERE user_id = ? AND role = 'user'
        GROUP BY topic ORDER BY count DESC LIMIT 10`
-    ).bind(userId).all(),
+    ).bind(userId).all()),
   ]);
 
   // ── Compute section performance with trends ──
@@ -330,10 +333,10 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
 
   // ── Error patterns ──
   const allErrors = {
-    ...safeJSON(profile.grammar_errors, {}),
-    ...safeJSON(profile.vocab_errors, {}),
-    ...safeJSON(profile.reading_errors, {}),
-    ...safeJSON(profile.listening_errors, {}),
+    ...safeJSON(profile?.grammar_errors, {}),
+    ...safeJSON(profile?.vocab_errors, {}),
+    ...safeJSON(profile?.reading_errors, {}),
+    ...safeJSON(profile?.listening_errors, {}),
   };
   const mostCommonErrors = Object.entries(allErrors)
     .sort((a: any, b: any) => b[1] - a[1])
@@ -351,7 +354,7 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
   const convTopicsData = (convTopics.results || []) as any[];
 
   // ── Last active — use conversation_messages as primary, fallback to profile ──
-  const lastActive = convStatsData?.last_msg || profile.last_interaction_at || null;
+  const lastActive = convStatsData?.last_msg || profile?.last_interaction_at || null;
 
   // Study streak (consecutive days ending today/yesterday)
   let streak = 0;
@@ -377,17 +380,27 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
   const diag = diagnosticResult as any;
   const diagnosticInfo = {
     has_taken: !!diag,
-    score: diag?.score || null,
-    level_placed: diag?.level_placed || user.proficiency_level || null,
+    score: diag?.estimated_band || null,
+    level_placed: user.proficiency_level || null,
     date: diag?.created_at || null,
-    section_scores: diag?.section_scores ? safeJSON(diag.section_scores, {}) : {},
+    section_scores: diag ? {
+      grammar: diag.grammar_score || 0,
+      vocab: diag.vocab_score || 0,
+      reading: diag.reading_score || 0,
+      listening: diag.listening_score || 0,
+      writing: diag.writing_band || 0,
+    } as Record<string, number> : {} as Record<string, number>,
   };
 
   // ── Compute AI recommendations ──
-  const prioritySkills = computePrioritySkills(masteries, mentalModel, profile);
-  const suggestedDifficulty = computeSuggestedDifficulty(profile, masteries);
-  const suggestedLessonType = computeLessonType(profile, masteries, mentalModel, completedPlans);
-  const nextSteps = computeNextSteps(profile, masteries, mentalModel, sectionPerformance, srStats as any, completedPlans);
+  // Default profile if fetch failed
+  const defaultProfile = { learning_pace: 'normal', confidence_score: 0.5, frustration_score: 0, engagement_level: 'medium', avg_response_time_sec: 0, consecutive_correct: 0, consecutive_wrong: 0, longest_correct_streak: 0, total_tutor_sessions: 0, total_tutor_messages: 0, grammar_errors: '{}', vocab_errors: '{}', reading_errors: '{}', listening_errors: '{}', last_interaction_at: null } as any;
+  const safeProfile = profile || defaultProfile;
+
+  const prioritySkills = computePrioritySkills(masteries, mentalModel, safeProfile);
+  const suggestedDifficulty = computeSuggestedDifficulty(safeProfile, masteries);
+  const suggestedLessonType = computeLessonType(safeProfile, masteries, mentalModel, completedPlans);
+  const nextSteps = computeNextSteps(safeProfile, masteries, mentalModel, sectionPerformance, srStats as any, completedPlans);
   const readiness = computeReadiness(masteries, sectionPerformance, user.target_test);
 
   const prefs = learningPrefs as any;
@@ -412,19 +425,19 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
       personality_notes: prefs?.personality_notes || null,
     },
     cognitive: {
-      learning_pace: profile.learning_pace,
-      confidence_score: profile.confidence_score,
-      frustration_score: profile.frustration_score,
-      engagement_level: profile.engagement_level,
-      avg_response_time_sec: profile.avg_response_time_sec,
-      consecutive_correct: profile.consecutive_correct,
-      consecutive_wrong: profile.consecutive_wrong,
-      longest_correct_streak: profile.longest_correct_streak,
-      total_tutor_sessions: profile.total_tutor_sessions,
-      total_tutor_messages: profile.total_tutor_messages,
+      learning_pace: safeProfile.learning_pace,
+      confidence_score: safeProfile.confidence_score,
+      frustration_score: safeProfile.frustration_score,
+      engagement_level: safeProfile.engagement_level,
+      avg_response_time_sec: safeProfile.avg_response_time_sec,
+      consecutive_correct: safeProfile.consecutive_correct,
+      consecutive_wrong: safeProfile.consecutive_wrong,
+      longest_correct_streak: safeProfile.longest_correct_streak,
+      total_tutor_sessions: safeProfile.total_tutor_sessions,
+      total_tutor_messages: safeProfile.total_tutor_messages,
     },
     section_performance: sectionPerformance,
-    topic_mastery: masteries.map(m => ({
+    topic_mastery: (masteries || []).map((m: any) => ({
       topic: m.topic,
       mastery_level: m.mastery_level,
       accuracy_percent: m.accuracy_percent,
@@ -435,10 +448,10 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
     })),
     mental_model: mentalModelSummary,
     error_patterns: {
-      grammar_errors: safeJSON(profile.grammar_errors, {}),
-      vocab_errors: safeJSON(profile.vocab_errors, {}),
-      reading_errors: safeJSON(profile.reading_errors, {}),
-      listening_errors: safeJSON(profile.listening_errors, {}),
+      grammar_errors: safeJSON(safeProfile.grammar_errors, {}),
+      vocab_errors: safeJSON(safeProfile.vocab_errors, {}),
+      reading_errors: safeJSON(safeProfile.reading_errors, {}),
+      listening_errors: safeJSON(safeProfile.listening_errors, {}),
       most_common_errors: mostCommonErrors,
     },
     srs: {

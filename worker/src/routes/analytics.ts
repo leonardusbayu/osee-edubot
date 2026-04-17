@@ -1,6 +1,18 @@
 import { Hono } from 'hono';
 import type { Env } from '../types';
 import { getAuthUser } from '../services/auth';
+import {
+  getStudentIRTProfile,
+  updateStudentAbility,
+  recalibrateItems,
+  thetaToIBTSection,
+  thetaToCEFR,
+} from '../services/irt-engine';
+import {
+  getStudentLearningAnalytics,
+  fitAndSaveLearningCurve,
+  recomputePsychProfile,
+} from '../services/learning-curve';
 
 export function isAdminRequest(c: any): boolean {
   const secret = c.req.header('x-admin-secret');
@@ -500,4 +512,218 @@ analyticsRoutes.post('/backfill-all', async (c) => {
   }
 
   return c.json({ success: true, processed });
+});
+
+// ─── IRT & Learning Analytics Endpoints ──────────────────────────────
+
+// Student self-service: full analytics dashboard
+analyticsRoutes.get('/me/full', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const [irt, learning] = await Promise.all([
+      getStudentIRTProfile(c.env.DB, user.id),
+      getStudentLearningAnalytics(c.env.DB, user.id),
+    ]);
+
+    return c.json({
+      user_id: user.id, name: user.name,
+      irt,
+      learning_curves: learning.learningCurves,
+      forgetting_curves: learning.forgettingCurves,
+      psych_profile: learning.psychProfile,
+      retention_alerts: learning.retentionAlerts,
+    });
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// Student self-service: IRT ability
+analyticsRoutes.get('/me/irt', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+    return c.json(await getStudentIRTProfile(c.env.DB, user.id));
+  } catch (e: any) { return c.json({ error: e.message }, 500); }
+});
+
+// Student self-service: psych profile (compute on demand if missing)
+analyticsRoutes.get('/me/psych', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const analytics = await getStudentLearningAnalytics(c.env.DB, user.id);
+    if (!analytics.psychProfile) {
+      const profile = await recomputePsychProfile(c.env.DB, user.id);
+      return c.json({ profile });
+    }
+    return c.json({ profile: analytics.psychProfile });
+  } catch (e: any) { return c.json({ error: e.message }, 500); }
+});
+
+// Student self-service: score predictions
+analyticsRoutes.get('/me/predictions', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user) return c.json({ error: 'Unauthorized' }, 401);
+
+    const [irt, learning] = await Promise.all([
+      getStudentIRTProfile(c.env.DB, user.id),
+      getStudentLearningAnalytics(c.env.DB, user.id),
+    ]);
+
+    const predictions: Record<string, any> = {};
+    for (const ability of irt.abilities.filter(a => a.skill !== 'overall')) {
+      const curve = learning.learningCurves.find(lc => lc.skill === ability.skill);
+      const forget = learning.forgettingCurves.find(fc => fc.skill === ability.skill);
+      predictions[ability.skill] = {
+        current_theta: ability.theta,
+        current_ibt_section: thetaToIBTSection(ability.theta),
+        standard_error: ability.standard_error,
+        cefr: thetaToCEFR(ability.theta),
+        learning_rate: curve?.rate ?? null,
+        predicted_accuracy_2w: curve?.predicted_accuracy_2w ?? null,
+        predicted_ibt_2w: curve?.predicted_ibt_section ?? null,
+        current_retention: forget?.estimated_retention ?? null,
+        memory_strength_hours: forget?.memory_strength ?? null,
+      };
+    }
+    return c.json({
+      overall: { ibt_estimate: irt.ibt_estimate, ielts_estimate: irt.ielts_estimate, cefr: irt.cefr, confidence: irt.confidence },
+      by_skill: predictions,
+    });
+  } catch (e: any) { return c.json({ error: e.message }, 500); }
+});
+
+// Admin: IRT profile for a specific student
+analyticsRoutes.get('/admin/irt/:userId', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || (user.role !== 'teacher' && user.role !== 'admin'))) return c.json({ error: 'Access denied' }, 403);
+
+  const userId = parseInt(c.req.param('userId'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid user ID' }, 400);
+  return c.json(await getStudentIRTProfile(c.env.DB, userId));
+});
+
+// Admin: learning analytics for a specific student
+analyticsRoutes.get('/admin/learning/:userId', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || (user.role !== 'teacher' && user.role !== 'admin'))) return c.json({ error: 'Access denied' }, 403);
+
+  const userId = parseInt(c.req.param('userId'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid user ID' }, 400);
+  return c.json(await getStudentLearningAnalytics(c.env.DB, userId));
+});
+
+// Admin: psych profile for a specific student
+analyticsRoutes.get('/admin/psych/:userId', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || (user.role !== 'teacher' && user.role !== 'admin'))) return c.json({ error: 'Access denied' }, 403);
+
+  const userId = parseInt(c.req.param('userId'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid user ID' }, 400);
+  return c.json({ profile: await recomputePsychProfile(c.env.DB, userId) });
+});
+
+// Admin: cohort-wide analytics summary
+analyticsRoutes.get('/admin/cohort', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || user.role !== 'admin')) return c.json({ error: 'Admin only' }, 403);
+
+  try {
+    const [abilityStats, curveStats, forgetStats, psychStats, itemStats] = await Promise.all([
+      c.env.DB.prepare(
+        `SELECT skill, COUNT(*) as students, ROUND(AVG(theta),3) as avg_theta,
+                ROUND(MIN(theta),3) as min_theta, ROUND(MAX(theta),3) as max_theta,
+                ROUND(AVG(standard_error),3) as avg_se, SUM(responses_count) as total_responses
+         FROM irt_student_ability GROUP BY skill ORDER BY skill`
+      ).all(),
+      c.env.DB.prepare(
+        `SELECT skill, COUNT(*) as students, ROUND(AVG(a_max),3) as avg_ceiling,
+                ROUND(AVG(rate),3) as avg_learning_rate,
+                ROUND(AVG(predicted_accuracy_2w),3) as avg_predicted_2w
+         FROM learning_curve_models GROUP BY skill ORDER BY skill`
+      ).all(),
+      c.env.DB.prepare(
+        `SELECT skill, COUNT(*) as students, ROUND(AVG(memory_strength),1) as avg_memory_hours,
+                ROUND(AVG(avg_recall_rate),3) as avg_recall
+         FROM forgetting_curve GROUP BY skill ORDER BY skill`
+      ).all(),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) as students, ROUND(AVG(consistency_score),1) as avg_consistency,
+                ROUND(AVG(persistence_score),1) as avg_persistence,
+                ROUND(AVG(stamina_index),3) as avg_stamina
+         FROM psych_profile`
+      ).first(),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) as total_items,
+                SUM(CASE WHEN last_calibrated_at IS NOT NULL THEN 1 ELSE 0 END) as calibrated,
+                ROUND(AVG(difficulty),3) as avg_difficulty, SUM(total_responses) as total_responses
+         FROM irt_item_params`
+      ).first(),
+    ]);
+
+    return c.json({
+      ability: abilityStats.results || [],
+      learning_curves: curveStats.results || [],
+      forgetting: forgetStats.results || [],
+      psych_profile: psychStats || {},
+      item_calibration: itemStats || {},
+    });
+  } catch (e: any) { return c.json({ error: e.message }, 500); }
+});
+
+// Admin: trigger item recalibration
+analyticsRoutes.post('/admin/recalibrate', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || user.role !== 'admin')) return c.json({ error: 'Admin only' }, 403);
+
+  return c.json({ success: true, ...await recalibrateItems(c.env.DB) });
+});
+
+// Admin: full recompute for a student (IRT + curves + psych)
+analyticsRoutes.post('/admin/recompute/:userId', async (c) => {
+  const isSecret = isAdminRequest(c);
+  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
+  if (!isSecret && (!user || user.role !== 'admin')) return c.json({ error: 'Admin only' }, 403);
+
+  const userId = parseInt(c.req.param('userId'));
+  if (isNaN(userId)) return c.json({ error: 'Invalid user ID' }, 400);
+
+  try {
+    // 1. Get all answers → update IRT
+    const answers = await c.env.DB.prepare(
+      `SELECT aa.content_id, aa.section, aa.is_correct
+       FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
+       WHERE ta.user_id = ? AND aa.is_correct IS NOT NULL ORDER BY aa.submitted_at`
+    ).bind(userId).all();
+
+    const responses = (answers.results || []).map((r: any) => ({
+      content_id: (r.content_id as number) || 0,
+      section: r.section as string,
+      is_correct: !!(r.is_correct),
+    }));
+    const irtResult = await updateStudentAbility(c.env.DB, userId, responses);
+
+    // 2. Rebuild learning curves per skill
+    const skills = [...new Set(responses.map(r => r.section))];
+    const lcResults: any[] = [];
+    for (const skill of skills) {
+      const lc = await fitAndSaveLearningCurve(c.env.DB, userId, skill);
+      if (lc) lcResults.push(lc);
+    }
+
+    // 3. Psych profile
+    const psychProfile = await recomputePsychProfile(c.env.DB, userId);
+
+    return c.json({ success: true, irt: irtResult, learning_curves: lcResults, psych_profile: psychProfile });
+  } catch (e: any) { return c.json({ error: e.message }, 500); }
 });

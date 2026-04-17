@@ -113,9 +113,11 @@ progressRoutes.get('/overview', async (c) => {
         };
       });
 
-    // 6b. Conversation activity (Belajar, diagnostic via bot)
+    // 6b. Bot activity: conversations, exercises, daily question logs
     let conversationCount = 0;
     let conversationDays: string[] = [];
+    let botExerciseStats = { total: 0, completed: 0, avgScore: 0 };
+    let dailyQuestionTotal = 0;
     try {
       const convResult = await c.env.DB.prepare(
         `SELECT COUNT(*) as msg_count FROM conversation_messages
@@ -129,6 +131,30 @@ progressRoutes.get('/overview', async (c) => {
          ORDER BY day DESC LIMIT 30`
       ).bind(userId).all();
       conversationDays = (convDays.results || []).map((d: any) => d.day as string);
+    } catch {}
+
+    // Exercise sessions via bot
+    try {
+      const exerciseResult = await c.env.DB.prepare(
+        `SELECT
+           COUNT(*) as total,
+           SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+           AVG(CASE WHEN status = 'completed' AND score IS NOT NULL THEN score END) as avg_score
+         FROM exercise_sessions WHERE user_id = ?`
+      ).bind(userId).first() as any;
+      botExerciseStats = {
+        total: exerciseResult?.total || 0,
+        completed: exerciseResult?.completed || 0,
+        avgScore: Math.round(exerciseResult?.avg_score || 0),
+      };
+    } catch {}
+
+    // Daily question log totals (tracks all bot + mini app questions)
+    try {
+      const dailyResult = await c.env.DB.prepare(
+        `SELECT SUM(questions_answered) as total FROM daily_question_logs WHERE user_id = ?`
+      ).bind(userId).first() as any;
+      dailyQuestionTotal = dailyResult?.total || 0;
     } catch {}
 
     // 7. Study streak (consecutive days with activity — tests + conversations)
@@ -178,8 +204,8 @@ progressRoutes.get('/overview', async (c) => {
        GROUP BY aa.section`
     ).bind(userId).all();
 
-    // Include bot conversation activity in total practice count
-    const totalPracticed = totalAnswers + conversationCount;
+    // Include all activity in total count — daily_question_logs is the most comprehensive tracker
+    const totalPracticed = Math.max(totalAnswers + conversationCount, dailyQuestionTotal);
 
     return c.json({
       target_test: user.target_test || 'TOEFL_IBT',
@@ -189,6 +215,8 @@ progressRoutes.get('/overview', async (c) => {
       wrong_answers: wrongAnswers,
       overall_accuracy: totalAnswers > 0 ? Math.round((correctAnswers / totalAnswers) * 100) : 0,
       bot_practice: conversationCount,
+      bot_exercises: botExerciseStats,
+      daily_questions_total: dailyQuestionTotal,
       best_score: bestScore,
       average_score: avgScore,
       study_streak: streak,

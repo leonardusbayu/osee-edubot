@@ -285,7 +285,7 @@ export async function checkTestAccess(env: Env, userId: number): Promise<TestAcc
 }
 
 // Track a question answered by user
-export async function trackQuestionAnswer(env: Env, userId: number): Promise<{ success: boolean; remaining: number; error?: string }> {
+export async function trackQuestionAnswer(env: Env, userId: number): Promise<{ success: boolean; remaining: number; error?: string; upgradeNudge?: boolean }> {
   const access = await checkTestAccess(env, userId);
 
   if (!access.allowed) {
@@ -339,7 +339,35 @@ export async function trackQuestionAnswer(env: Env, userId: number): Promise<{ s
 
   // Recalculate remaining
   const newAccess = await checkTestAccess(env, userId);
-  return { success: true, remaining: newAccess.remaining };
+
+  // Upgrade nudge: fire once per day when user hits 7/10 daily free questions
+  // (remaining === 3). Track in daily_question_logs with a flag column so we
+  // don't spam — but we stay migration-free by using an ephemeral table.
+  let upgradeNudge = false;
+  if (!newAccess.is_premium && newAccess.used_today === 7 && newAccess.bonus_quota === 0) {
+    try {
+      await env.DB.prepare(
+        `CREATE TABLE IF NOT EXISTS daily_upgrade_nudges (
+           user_id INTEGER NOT NULL,
+           wib_date TEXT NOT NULL,
+           nudged_at TEXT NOT NULL,
+           PRIMARY KEY (user_id, wib_date)
+         )`
+      ).run();
+      const already = await env.DB.prepare(
+        `SELECT 1 FROM daily_upgrade_nudges WHERE user_id = ? AND wib_date = ?`
+      ).bind(userId, todayStr).first();
+      if (!already) {
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO daily_upgrade_nudges (user_id, wib_date, nudged_at)
+           VALUES (?, ?, datetime('now'))`
+        ).bind(userId, todayStr).run();
+        upgradeNudge = true;
+      }
+    } catch {}
+  }
+
+  return { success: true, remaining: newAccess.remaining, upgradeNudge };
 }
 
 // Grant bonus questions to a user from referral signups

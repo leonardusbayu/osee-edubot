@@ -29,8 +29,16 @@ classRoutes.post('/', async (c) => {
 // List teacher's classes
 classRoutes.get('/', async (c) => {
   const isSecret = isAdminRequest(c);
-  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
-  if (!isSecret && !user) return c.json({ error: 'Unauthorized' }, 401);
+  if (isSecret) {
+    // Admin secret: return all classes system-wide
+    const classes = await c.env.DB.prepare(
+      'SELECT c.*, u.name as teacher_name, (SELECT COUNT(*) FROM class_enrollments WHERE class_id = c.id AND status = ?) as student_count FROM classes c LEFT JOIN users u ON c.teacher_id = u.id ORDER BY c.created_at DESC'
+    ).bind('active').all();
+    return c.json(classes.results);
+  }
+
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   let classes;
   if (user.role === 'teacher' || user.role === 'admin') {
@@ -77,10 +85,12 @@ classRoutes.post('/join', async (c) => {
 // Get ALL students system-wide (admin/teacher)
 classRoutes.get('/all/students', async (c) => {
   const isSecret = isAdminRequest(c);
-  const user = isSecret ? { id: 0, role: 'admin' } : await getAuthUser(c.req.raw, c.env);
 
-  if (!isSecret && (!user || user.role === 'student')) {
-    return c.json({ error: 'Teacher/Admin access required' }, 403);
+  if (!isSecret) {
+    const user = await getAuthUser(c.req.raw, c.env);
+    if (!user || user.role === 'student') {
+      return c.json({ error: 'Teacher/Admin access required' }, 403);
+    }
   }
 
   try {
@@ -350,13 +360,14 @@ classRoutes.get('/export', async (c) => {
   try {
     const testType = c.req.query('test_type');
     
-    // Get all users (optionally filtered by test_type)
-    let userQuery = `SELECT id, name, username, role, proficiency_level, target_test, created_at FROM users`;
-    if (testType) {
-      userQuery += ` WHERE target_test = '${testType}'`;
-    }
-    userQuery += ` ORDER BY name`;
-    const usersResult = await c.env.DB.prepare(userQuery).all();
+    // Get all users (optionally filtered by test_type) — parameterized to prevent SQL injection
+    const usersResult = testType
+      ? await c.env.DB.prepare(
+          `SELECT id, name, username, role, proficiency_level, target_test, created_at FROM users WHERE target_test = ? ORDER BY name`
+        ).bind(testType).all()
+      : await c.env.DB.prepare(
+          `SELECT id, name, username, role, proficiency_level, target_test, created_at FROM users ORDER BY name`
+        ).all();
 
     // Build CSV
     const headers = [
@@ -518,6 +529,7 @@ classRoutes.get('/:id/students', async (c) => {
   }
 
   const classId = parseInt(c.req.param('id'));
+  if (isNaN(classId)) return c.json({ error: 'Invalid class ID' }, 400);
 
   const students = await c.env.DB.prepare(
     `SELECT u.id, u.name, u.username, u.proficiency_level, u.target_test,
@@ -546,6 +558,7 @@ classRoutes.post('/:id/broadcast', async (c) => {
   }
 
   const classId = parseInt(c.req.param('id'));
+  if (isNaN(classId)) return c.json({ error: 'Invalid class ID' }, 400);
   const { message } = await c.req.json();
 
   const students = await c.env.DB.prepare(

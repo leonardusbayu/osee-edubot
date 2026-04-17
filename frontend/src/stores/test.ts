@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useAuthStore } from './auth';
 import type { SectionInfo } from '../types';
 
 interface PendingAnswer {
@@ -19,8 +20,8 @@ interface TestState {
   answers: Record<string, Record<number, unknown>>;
   isFinished: boolean;
   questionType: string | null; // Filter for section-specific practice
-  drillConcept: string | null; // Targeted skill_tag for concept drills (e.g. "subject_verb_agreement")
-  drillCount: number | null; // Optional question count override for drill mode (1–10)
+  drillConcept: string | null; // When set, /questions is filtered by skill_tag
+  drillCount: number | null;   // Target question count for drill mode
 
   // Offline-first mode
   prefetchedQuestions: Record<string, any[]>; // questions_by_section cache
@@ -28,7 +29,7 @@ interface TestState {
   pendingAnswers: PendingAnswer[]; // Queued answers awaiting sync
   networkAvailable: boolean;
 
-  startTest: (attemptId: number, testType: string, sections: SectionInfo[], currentSection: string, questionType?: string | null) => void;
+  startTest: (attemptId: number, testType: string, sections: SectionInfo[], currentSection: string, questionType?: string | null, drill?: { concept: string; count: number } | null) => void;
   setCurrentSection: (section: string) => void;
   setQuestionIndex: (index: number) => void;
   setTimeRemaining: (seconds: number) => void;
@@ -44,6 +45,8 @@ interface TestState {
   setNetworkAvailable: (available: boolean) => void;
   getPendingAnswers: () => PendingAnswer[];
   clearPendingAnswer: (section: string, questionIndex: number) => void;
+  incrementPendingRetry: (section: string, questionIndex: number) => void;
+  dropDeadPendingAnswers: () => number;
 }
 
 export const useTestStore = create<TestState>((set, get) => ({
@@ -65,7 +68,7 @@ export const useTestStore = create<TestState>((set, get) => ({
   pendingAnswers: [],
   networkAvailable: typeof navigator !== 'undefined' ? navigator.onLine : true,
 
-  startTest: (attemptId, testType, sections, currentSection, questionType) =>
+  startTest: (attemptId, testType, sections, currentSection, questionType, drill) =>
     set({
       attemptId,
       testType,
@@ -76,6 +79,8 @@ export const useTestStore = create<TestState>((set, get) => ({
       answers: {},
       isFinished: false,
       questionType: questionType || null,
+      drillConcept: drill?.concept || null,
+      drillCount: drill?.count || null,
       prefetchedQuestions: {},
       pendingAnswers: [],
       networkAvailable: typeof navigator !== 'undefined' ? navigator.onLine : true,
@@ -109,6 +114,8 @@ export const useTestStore = create<TestState>((set, get) => ({
       answers: {},
       isFinished: false,
       questionType: null,
+      drillConcept: null,
+      drillCount: null,
       prefetchedQuestions: {},
       isPrefetchingQuestions: false,
       pendingAnswers: [],
@@ -125,7 +132,7 @@ export const useTestStore = create<TestState>((set, get) => ({
       const response = await fetch(`/api/tests/attempt/${attemptId}/questions-batch`, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${(window as any).__AUTH_TOKEN__ || ''}`,
+          'Authorization': `Bearer ${useAuthStore.getState().accessToken || ''}`,
           'Content-Type': 'application/json',
         },
       });
@@ -184,5 +191,28 @@ export const useTestStore = create<TestState>((set, get) => ({
         (a) => !(a.section === section && a.questionIndex === questionIndex)
       ),
     }));
+  },
+
+  // Persist retry count to the store (previously was lost because the sync
+  // loop mutated a local copy from a spread). Without this, maxRetries never
+  // actually bounds the retry loop and failed answers become zombies.
+  incrementPendingRetry: (section: string, questionIndex: number) => {
+    set((state) => ({
+      pendingAnswers: state.pendingAnswers.map((a) =>
+        a.section === section && a.questionIndex === questionIndex
+          ? { ...a, retries: a.retries + 1 }
+          : a
+      ),
+    }));
+  },
+
+  // Remove answers that exhausted maxRetries — returns number dropped so the
+  // caller can warn the user that some offline answers were abandoned.
+  dropDeadPendingAnswers: () => {
+    const before = get().pendingAnswers.length;
+    set((state) => ({
+      pendingAnswers: state.pendingAnswers.filter((a) => a.retries < a.maxRetries),
+    }));
+    return before - get().pendingAnswers.length;
   },
 }));

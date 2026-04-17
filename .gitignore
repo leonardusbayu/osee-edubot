@@ -46,3 +46,6 @@ flagged.txt
 
 # Ad-hoc audit outputs
 scripts/*.out.json
+
+# Windows temp paths accidentally captured as literal dirs
+**/C[!A-Za-z]*Users*/**

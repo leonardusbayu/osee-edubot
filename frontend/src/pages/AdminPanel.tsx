@@ -2,6 +2,20 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { authedFetch } from '../api/authedFetch';
 
+// Wrapper that surfaces HTTP error details instead of silently returning an
+// error body as if it were success. Without this, a 403/500 response would
+// still parse as JSON and land in setState, showing an empty table with no
+// indication that auth failed or the server errored.
+async function jsonOrThrow(res: Response): Promise<any> {
+  if (res.ok) return res.json();
+  let detail = '';
+  try {
+    const body: any = await res.json();
+    detail = body?.detail || body?.error || body?.message || '';
+  } catch { /* non-JSON body */ }
+  throw new Error(detail ? `${res.status}: ${detail}` : `HTTP ${res.status}`);
+}
+
 // ─── Types ─────────────────────────────────────────────────────
 
 interface Overview {
@@ -52,9 +66,9 @@ export default function AdminPanel() {
 
   useEffect(() => {
     authedFetch('/api/v1/admin/analytics/overview')
-      .then(r => r.ok ? r.json() : Promise.reject('Access denied'))
+      .then(jsonOrThrow)
       .then(setOverview)
-      .catch(e => setError(String(e)))
+      .catch(e => setError(e?.message === 'HTTP 403' ? 'Access denied' : String(e?.message || e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -101,7 +115,9 @@ function OverviewTab({ data }: { data: Overview }) {
 
   useEffect(() => {
     authedFetch('/api/v1/admin/analytics/trends?days=14')
-      .then(r => r.ok ? r.json() : null).then(setTrends).catch(() => {});
+      .then(jsonOrThrow)
+      .then(setTrends)
+      .catch((e) => { console.warn('[AdminPanel] trends fetch failed:', e); });
   }, []);
 
   return (
@@ -207,12 +223,12 @@ function StudentsTab() {
   const fetchStudents = (p: number, q: string) => {
     setLoading(true);
     authedFetch(`/api/v1/admin/students?page=${p}&limit=20&search=${encodeURIComponent(q)}&sort=created_at&order=desc`)
-      .then(r => r.json())
+      .then(jsonOrThrow)
       .then(data => {
         setStudents(data.students || []);
         setTotal(data.pagination?.total || 0);
       })
-      .catch(() => {})
+      .catch((e) => { console.warn('[AdminPanel] students fetch failed:', e); })
       .finally(() => setLoading(false));
   };
 
@@ -221,9 +237,9 @@ function StudentsTab() {
   const openStudent = (id: number) => {
     setDetailLoading(true);
     authedFetch(`/api/v1/admin/students/${id}`)
-      .then(r => r.json())
+      .then(jsonOrThrow)
       .then(setSelectedStudent)
-      .catch(() => {})
+      .catch((e) => { console.warn('[AdminPanel] student detail fetch failed:', e); })
       .finally(() => setDetailLoading(false));
   };
 
@@ -414,7 +430,10 @@ function ContentTab() {
 
   useEffect(() => {
     authedFetch('/api/v1/admin/analytics/content-coverage')
-      .then(r => r.json()).then(setCoverage).catch(() => {}).finally(() => setLoading(false));
+      .then(jsonOrThrow)
+      .then(setCoverage)
+      .catch((e) => { console.warn('[AdminPanel] content coverage fetch failed:', e); })
+      .finally(() => setLoading(false));
   }, []);
 
   if (loading) return <Loader />;
@@ -483,12 +502,13 @@ function SystemTab() {
 
   useEffect(() => {
     Promise.all([
-      authedFetch('/api/v1/admin/system/tables').then(r => r.json()),
-      authedFetch('/api/v1/admin/system/health').then(r => r.json()),
+      authedFetch('/api/v1/admin/system/tables').then(jsonOrThrow),
+      authedFetch('/api/v1/admin/system/health').then(jsonOrThrow),
     ]).then(([t, h]) => {
-      setTables(t.tables || []);
+      setTables(t?.tables || []);
       setHealth(h);
-    }).catch(() => {}).finally(() => setLoading(false));
+    }).catch((e) => { console.warn('[AdminPanel] system fetch failed:', e); })
+      .finally(() => setLoading(false));
   }, []);
 
   const runQuery = () => {
@@ -498,7 +518,8 @@ function SystemTab() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sql }),
-    }).then(r => r.json()).then(setQueryResult).catch(e => setQueryResult({ error: String(e) }))
+    }).then(jsonOrThrow).then(setQueryResult)
+      .catch(e => setQueryResult({ error: e?.message || String(e) }))
       .finally(() => setQueryLoading(false));
   };
 

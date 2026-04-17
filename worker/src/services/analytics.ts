@@ -110,25 +110,37 @@ export async function trackSkillProgress(
 
 // ─── Streak Update ─────────────────────────────────────────────────
 
-export async function updateStreak(env: Env, userId: number) {
-  const today = new Date().toISOString().split('T')[0];
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+export async function updateStreak(env: Env, userId: number): Promise<{
+  newStreak: number;
+  streakBroken: boolean;
+  previousStreak: number;
+} | undefined> {
+  // Use WIB (Asia/Jakarta) so the streak day boundary matches the rest of the app
+  const wibFmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const today = wibFmt.format(new Date());
+  const yesterday = wibFmt.format(new Date(Date.now() - 86400000));
 
   try {
     const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first() as any;
     if (!user) return;
 
     const lastDate = user.last_study_date;
-    let newStreak = user.current_streak || 0;
+    const previousStreak = user.current_streak || 0;
+    let newStreak = previousStreak;
+    let streakBroken = false;
 
     if (lastDate === today) {
       // Already studied today, nothing to update
-      return;
+      return { newStreak: previousStreak, streakBroken: false, previousStreak };
     } else if (lastDate === yesterday) {
       // Consecutive day — increment streak
-      newStreak = newStreak + 1;
+      newStreak = previousStreak + 1;
     } else {
       // Streak broken — reset
+      streakBroken = previousStreak > 1; // Only count as "broken" if they had a real streak
       newStreak = 1;
     }
 
@@ -137,6 +149,8 @@ export async function updateStreak(env: Env, userId: number) {
     await env.DB.prepare(
       'UPDATE users SET current_streak = ?, longest_streak = ?, last_study_date = ? WHERE id = ?'
     ).bind(newStreak, longestStreak, today, userId).run();
+
+    return { newStreak, streakBroken, previousStreak };
   } catch (e) { console.error('updateStreak error:', e); }
 }
 
