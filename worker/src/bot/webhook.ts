@@ -1404,6 +1404,92 @@ async function handleMessage(message: any, env: Env) {
         return;
       }
 
+      case '/leaderboard':
+      case '/league': {
+        // Previously the league data (user_leagues, league_history) was
+        // populated but never surfaced to users — data dead-ended in the
+        // DB. This exposes the weekly leaderboard + the user's own rank.
+        // Tracks P2 BUGS.md #9.
+        try {
+          const { getLeagueProfile, getLeagueLeaderboard } = await import('../services/leagues');
+          const profile = await getLeagueProfile(env, user.id);
+          const leaderboard = await getLeagueLeaderboard(env, profile.league, 10);
+
+          const leagueEmoji: Record<string, string> = {
+            bronze: '🥉',
+            silver: '🥈',
+            gold: '🥇',
+            diamond: '💎',
+            champion: '👑',
+          };
+          const emoji = leagueEmoji[profile.league] || '🏆';
+          const leagueName = profile.league.charAt(0).toUpperCase() + profile.league.slice(1);
+
+          let msg = `${emoji} *${leagueName} League — Minggu ini*\n\n`;
+          msg += `Kamu: #${profile.rank}/${profile.total_in_league} (${profile.weekly_xp} XP)\n\n`;
+          msg += `*Top 10:*\n`;
+
+          if (leaderboard.length === 0) {
+            msg += `Belum ada yang earn XP minggu ini. Jadi yang pertama! 💪`;
+          } else {
+            const rows = leaderboard as any[];
+            for (let i = 0; i < rows.length; i++) {
+              const r = rows[i];
+              const name = r.full_name || r.username || `User ${r.user_id}`;
+              const marker = r.user_id === user.id ? '👉 ' : '';
+              const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `  ${i + 1}.`;
+              msg += `${marker}${medal} ${name} — ${r.weekly_xp} XP\n`;
+            }
+          }
+
+          msg += `\n━━━━━━━━━━━━━\n`;
+          msg += `Kumpulkan XP sebanyak mungkin sebelum Minggu malam — top 20% naik league, bottom 20% turun. Jawab soal, review, speaking = XP.`;
+
+          await sendMessage(env, chatId, msg);
+        } catch (e: any) {
+          console.error('/leaderboard error:', e);
+          await sendMessage(env, chatId, 'Leaderboard belum bisa dimuat. Coba lagi nanti.');
+        }
+        return;
+      }
+
+      case '/shop':
+      case '/toko': {
+        // Coin shop UI. Table was seeded in migration 041 but never had a
+        // surface — coins accumulated silently. This exposes the 5 items
+        // with inline buttons; purchase is handled by the shop_buy_<id>
+        // callback below. Tracks P2 BUGS.md #8.
+        try {
+          const { getUserBalance } = await import('../services/coins');
+          const balance = await getUserBalance(env, user.id);
+
+          const items = await env.DB.prepare(
+            `SELECT id, name, description, price, icon FROM coin_shop
+               WHERE active = 1 ORDER BY price ASC`
+          ).all();
+
+          let msg = `🪙 *Shop — Balance: ${balance} coins*\n\n`;
+          const keyboard: any[][] = [];
+
+          for (const raw of (items.results || []) as any[]) {
+            msg += `${raw.icon} *${raw.name}* — ${raw.price} coins\n${raw.description}\n\n`;
+            const canAfford = balance >= raw.price;
+            keyboard.push([{
+              text: `${canAfford ? raw.icon : '🔒'} ${raw.name} (${raw.price})`,
+              callback_data: `shop_buy_${raw.id}`,
+            }]);
+          }
+
+          msg += `Coins didapat dari latihan — makin banyak jawab soal, makin banyak coins. Random bonus drops juga (1 in 5).`;
+
+          await sendMessage(env, chatId, msg, { inline_keyboard: keyboard });
+        } catch (e: any) {
+          console.error('/shop error:', e);
+          await sendMessage(env, chatId, 'Shop belum bisa dimuat. Coba lagi nanti.');
+        }
+        return;
+      }
+
       case '/referral': {
         const { checkPremium, getReferralRewardDays } = await import('../services/premium');
 
@@ -4497,6 +4583,86 @@ async function handleCallbackQuery(query: any, env: Env) {
       ).bind(step.skill, step.index, user.id).run();
     } else {
       await editMessage(env, chatId, messageId, '🎉 Lesson plan selesai semua! Ketik /lesson untuk plan baru.');
+    }
+    return;
+  }
+
+  if (data.startsWith('shop_buy_')) {
+    // Purchase flow for coin_shop items. Atomic: spendCoins uses a
+    // conditional UPDATE so double-tapping the button can't overdraw.
+    // Effects that can't be applied cleanly right now ("coming soon")
+    // refund the coins before returning so the user isn't penalized.
+    const itemId = data.replace('shop_buy_', '');
+    try {
+      const item = await env.DB.prepare(
+        `SELECT id, name, price, effect_type, effect_value, icon FROM coin_shop WHERE id = ? AND active = 1`
+      ).bind(itemId).first() as any;
+
+      if (!item) {
+        await editMessage(env, chatId, messageId, '❌ Item tidak ditemukan.');
+        return;
+      }
+
+      const { spendCoins } = await import('../services/coins');
+      const spend = await spendCoins(env, user.id, item.price, 'shop_purchase', item.id);
+      if (!spend.success) {
+        await editMessage(env, chatId, messageId,
+          `🪙 Coins kurang. Butuh ${item.price}, kamu punya ${spend.total_coins}. Latihan lagi dulu ya.`
+        );
+        return;
+      }
+
+      // Apply effect. Each branch is best-effort; on failure we refund
+      // the coins so the student isn't left short + empty-handed.
+      let effectMsg = '';
+      let refund = false;
+      try {
+        if (item.effect_type === 'streak_freeze') {
+          const n = parseInt(String(item.effect_value || '1'));
+          await env.DB.prepare(
+            `UPDATE user_xp SET streak_freezes = COALESCE(streak_freezes, 0) + ? WHERE user_id = ?`
+          ).bind(n, user.id).run();
+          effectMsg = `🧊 +${n} Streak Freeze aktif. Streak kamu aman kalau lupa belajar ${n} hari.`;
+        } else if (item.effect_type === 'extra_questions') {
+          const n = parseInt(String(item.effect_value || '5'));
+          // Bump referral_bonus_quota so today's quota check picks it up.
+          await env.DB.prepare(
+            `INSERT INTO referral_bonus_quota (user_id, bonus_questions)
+             VALUES (?, ?)
+             ON CONFLICT(user_id) DO UPDATE SET
+               bonus_questions = referral_bonus_quota.bonus_questions + ?,
+               updated_at = datetime('now')`
+          ).bind(user.id, n, n).run();
+          effectMsg = `📝 +${n} soal bonus ditambahkan. Total quota hari ini naik.`;
+        } else {
+          // Effects we haven't implemented yet (xp_multiplier, premium_hours,
+          // challenge_skip). Refund so the coin drain isn't punitive.
+          refund = true;
+          effectMsg = `🚧 "${item.name}" masih dalam pengembangan. Coins dikembalikan.`;
+        }
+      } catch (effErr: any) {
+        console.error('shop effect error:', effErr);
+        refund = true;
+        effectMsg = `⚠️ Pembelian gagal. Coins dikembalikan. Coba lagi nanti.`;
+      }
+
+      if (refund) {
+        try {
+          await env.DB.prepare(
+            `UPDATE user_xp SET coins = COALESCE(coins, 0) + ? WHERE user_id = ?`
+          ).bind(item.price, user.id).run();
+          await env.DB.prepare(
+            `INSERT INTO coin_log (user_id, amount, source, detail) VALUES (?, ?, 'shop_refund', ?)`
+          ).bind(user.id, item.price, item.id).run();
+        } catch (e) { console.error('refund failed:', e); }
+      }
+
+      await editMessage(env, chatId, messageId,
+        `${item.icon} *${item.name}* — ${refund ? 'refund' : 'aktif'}\n\n${effectMsg}\n\nKetik /shop untuk lihat item lain.`
+      );
+    } catch (e: any) {
+      console.error('shop_buy error:', e);
+      await editMessage(env, chatId, messageId, '⚠️ Pembelian gagal. Coba lagi nanti.');
     }
     return;
   }

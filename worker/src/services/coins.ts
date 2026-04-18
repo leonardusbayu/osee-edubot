@@ -60,6 +60,17 @@ export async function earnCoins(
   return { coins_earned: base, bonus_drop: bonusDrop, total_coins: Number(row?.coins || 0) };
 }
 
+/**
+ * Fetch the user's current coin balance. Returns 0 if the user has no
+ * user_xp row yet (a brand-new account that hasn't earned anything).
+ */
+export async function getUserBalance(env: Env, userId: number): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT coins FROM user_xp WHERE user_id = ?`,
+  ).bind(userId).first<{ coins: number }>();
+  return Number(row?.coins || 0);
+}
+
 export async function spendCoins(
   env: Env,
   userId: number,

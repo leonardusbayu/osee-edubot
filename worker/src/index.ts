@@ -35,7 +35,7 @@ import { runRetestReliability } from './services/retest-reliability';
 import { runWhisperQa } from './services/whisper-qa';
 import { runSloSnapshot } from './services/op-slo';
 import { handleNotionSync, handleNotionWeeklySync } from './services/notion-sync';
-import { resolveWeeklyLeagues } from './services/leagues';
+import { resolveWeeklyLeagues, notifyLeagueChanges } from './services/leagues';
 import { recalibrateItems } from './services/irt-engine';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -1627,6 +1627,15 @@ export default {
           try {
             const r = await resolveWeeklyLeagues(env);
             console.log('[leagues]', JSON.stringify(r));
+            // Notify every user who promoted or demoted. Without this step
+            // the league transitions were invisible to students —
+            // motivational payoff of the whole system was dead.
+            try {
+              const notifyResult = await notifyLeagueChanges(env, env.TELEGRAM_BOT_TOKEN);
+              console.log('[leagues-notify]', JSON.stringify(notifyResult));
+            } catch (notifyErr: any) {
+              console.error('[leagues-notify] failed:', notifyErr?.message || notifyErr);
+            }
           } catch (e) {
             console.error('[leagues] failed:', (e as any)?.message || e);
           }

@@ -145,6 +145,69 @@ export async function resolveWeeklyLeagues(env: Env): Promise<{ promoted: number
   return { promoted, demoted, stayed };
 }
 
+/**
+ * Send Telegram notifications to everyone who promoted or demoted in the
+ * most recent league resolution. Queries league_history for rows written
+ * during the current run (matched by the new week_start the resolver
+ * advanced rows to). Safe to call right after resolveWeeklyLeagues().
+ *
+ * Tracks P2 BUGS.md #10 — previously league transitions were silent,
+ * which killed the motivational payoff of the system.
+ */
+export async function notifyLeagueChanges(env: Env, botToken: string): Promise<{ sent: number; errors: number }> {
+  const stats = { sent: 0, errors: 0 };
+
+  // Most recent week_end = today's WIB date (resolver sets week_end = today).
+  // Grab every row written in the last 10 minutes so we capture this run
+  // without accidentally re-notifying rows from a previous week.
+  const rows = await env.DB.prepare(
+    `SELECT lh.user_id, lh.league, lh.action, u.telegram_id, u.name,
+            ul.league AS new_league
+       FROM league_history lh
+       JOIN users u ON u.id = lh.user_id
+       LEFT JOIN user_leagues ul ON ul.user_id = lh.user_id
+      WHERE lh.action IN ('promoted', 'demoted')
+        AND lh.created_at > datetime('now', '-10 minutes')`
+  ).all();
+
+  const leagueEmoji: Record<string, string> = {
+    bronze: '🥉', silver: '🥈', gold: '🥇', diamond: '💎', champion: '👑',
+  };
+  const pretty = (l: string) => l.charAt(0).toUpperCase() + l.slice(1);
+
+  for (const r of (rows.results || []) as any[]) {
+    try {
+      const tgId = parseInt(String(r.telegram_id).replace('.0', ''));
+      if (!tgId) continue;
+
+      const fromLeague = r.league;
+      const toLeague = r.new_league || r.league;
+      const fromEmoji = leagueEmoji[fromLeague] || '🏆';
+      const toEmoji = leagueEmoji[toLeague] || '🏆';
+
+      let text: string;
+      if (r.action === 'promoted') {
+        text = `🎉 *Naik League!*\n\n${fromEmoji} ${pretty(fromLeague)} → ${toEmoji} ${pretty(toLeague)}\n\nMinggu ini XP kamu cukup buat naik ke league berikutnya. Keep pushing! 💪\n\nKetik /leaderboard buat lihat ranking barumu.`;
+      } else {
+        text = `📉 Turun league minggu ini\n\n${fromEmoji} ${pretty(fromLeague)} → ${toEmoji} ${pretty(toLeague)}\n\nMinggu baru, kesempatan baru. Yuk mulai lagi dengan 5 menit latihan aja — jawab beberapa soal buat warming up.\n\n/leaderboard buat lihat posisimu sekarang.`;
+      }
+
+      const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: tgId, text, parse_mode: 'Markdown' }),
+      });
+      if (res.ok) stats.sent++;
+      else stats.errors++;
+    } catch (e: any) {
+      stats.errors++;
+      console.error('league notify error for user', r.user_id, e?.message || e);
+    }
+  }
+
+  return stats;
+}
+
 export async function getLeagueLeaderboard(env: Env, league: string, limit = 20) {
   const ws = weekStart();
   const { results } = await env.DB.prepare(

@@ -144,6 +144,16 @@ export async function awardXp(
     console.error('League XP error:', e);
   }
 
+  // Advance friend quest progress for the user. Quest types map to
+  // awardXp sources (see friend-quests.ts SOURCE_TO_EVENTS). Best-effort
+  // — failures don't disturb the core XP / level / badge flow.
+  try {
+    const { recordQuestEvent } = await import('./friend-quests');
+    await recordQuestEvent(env, userId, source, xpEarned);
+  } catch (e) {
+    console.error('Friend quest progress error:', e);
+  }
+
   return {
     xp_earned: xpEarned,
     multiplier,
