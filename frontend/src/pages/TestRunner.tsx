@@ -94,6 +94,16 @@ const AudioWithError = ({
       </div>
     );
   }
+  // Some webviews (Telegram on iOS, older WebKit) don't fire `play`
+  // reliably — but `playing`, `timeupdate`, and `ended` always fire once
+  // the user has actually engaged with the audio. Treat any of them as
+  // "played", de-duped via a ref so onPlay only fires once per mount.
+  const firedRef = useRef(false);
+  const firePlayed = () => {
+    if (firedRef.current) return;
+    firedRef.current = true;
+    onPlay?.();
+  };
   return (
     <audio
       // Bust the browser's negative-cache on retry by bumping a query param —
@@ -104,7 +114,14 @@ const AudioWithError = ({
       src={attempt > 0 ? `${src}${src.includes('?') ? '&' : '?'}_r=${attempt}` : src}
       className={className}
       onError={() => setErr(true)}
-      onPlay={onPlay}
+      onPlay={firePlayed}
+      onPlaying={firePlayed}
+      onEnded={firePlayed}
+      onTimeUpdate={(e) => {
+        // Fires every ~250ms during playback. Any current time > 0.3s means
+        // the audio actually produced sound, even if onPlay was swallowed.
+        if ((e.currentTarget.currentTime ?? 0) > 0.3) firePlayed();
+      }}
     />
   );
 };
