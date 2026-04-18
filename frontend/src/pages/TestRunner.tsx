@@ -2272,9 +2272,9 @@ export default function TestRunner() {
       {!['listen_and_repeat', 'take_interview'].includes(currentQuestion.type) && (
         <div className="sticky bottom-0 bg-tg-bg border-t border-tg-secondary p-4">
           {submitError && (
-            <div className="bg-red-50 border border-red-300 rounded-xl p-3 mb-3 text-sm">
-              <p className="font-medium text-red-700">⚠️ {submitError}</p>
-              <p className="text-red-600 mt-1 text-xs">Tekan tombol di bawah untuk coba lagi.</p>
+            <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 mb-3 text-sm">
+              <p className="font-medium text-amber-800">💡 {submitError}</p>
+              <p className="text-amber-700 mt-1 text-xs">Kalau sudah, tekan tombol di bawah untuk lanjut.</p>
             </div>
           )}
           {showExplanation && currentExplanation && currentExplanation.trim().length > 5 && (
@@ -2284,19 +2284,20 @@ export default function TestRunner() {
             </div>
           )}
           <button onClick={() => {
-            // If the blocker is "audio not played yet", scrolling to the
-            // player is what the user actually needs — re-submitting from
-            // here would fail the same audioPlayed check. Clear the error,
-            // scroll up, and let the play handler clear it for good.
+            // Telegram's iOS webview doesn't reliably fire <audio> events,
+            // so audioPlayed can stay false even after the user listened.
+            // If they hit Coba Lagi after we warned them, trust them and
+            // proceed — they've read the warning and tapped again. Flip
+            // audioPlayed so handleSubmitAnswer's check passes.
             if (submitError && currentQuestion.audio_url && !audioPlayed) {
+              setAudioPlayed(true);
               setSubmitError(null);
-              audioContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              return;
+              // Fall through to submit immediately — no second click needed.
             }
             handleSubmitAnswer();
           }} disabled={submitting || showExplanation}
             className={`w-full py-3 rounded-xl font-medium disabled:opacity-50 active:scale-95 transition-transform ${submitError ? 'bg-red-500 text-white' : 'bg-tg-button text-tg-button-text'}`}>
-            {submitting ? 'Menyimpan...' : submitError ? 'Coba Lagi' : currentQuestion.type === 'listening_passage'
+            {submitting ? 'Menyimpan...' : submitError ? 'Sudah dengar — lanjut' : currentQuestion.type === 'listening_passage'
               ? 'Lanjut ke Soal'
               : currentQuestionIndex + 1 === questions.length
                 ? sections.findIndex((s) => s.id === currentSection) + 1 === sections.length
