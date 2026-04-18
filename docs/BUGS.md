@@ -31,7 +31,7 @@ ships, move it from Open → Fixed with the commit hash.
 | 10 | P2 | worker | League promotion/demotion silent | [#7](https://github.com/leonardusbayu/osee-edubot/issues/7) | `resolveWeeklyLeagues` records history but no Telegram notification. |
 | 11 | P2 | worker | Friend quests never complete | [#8](https://github.com/leonardusbayu/osee-edubot/issues/8) | `current_value` never incremented. |
 | 12 | P2 | worker | Companion doesn't re-enrich mental-model from its own chat | — | Companion reads mental-model, doesn't write back. |
-| 13 | P1 | ops | CI runs are red since Apr 13 | [#4](https://github.com/leonardusbayu/osee-edubot/issues/4) | `--env=""` fix (commit `4907a06`) applied. Latest run on `cae9c63` still failing. Need run log. |
+| ~~13~~ | ~~P1~~ | ~~ops~~ | ~~CI runs are red since Apr 13~~ | ~~[#4](https://github.com/leonardusbayu/osee-edubot/issues/4)~~ | **FIXED** — see F13 below. |
 | 14 | P2 | content | TOEFL ITP error-id rows with blank content | — | Filtered out server-side (`cae9c63`). Source data needs cleanup/re-import. |
 | 15 | P2 | worker | `findIdleStudents` HAVING-clause flag | — | User flagged earlier; exact SQL not located. Revisit with example. |
 
@@ -53,6 +53,8 @@ ships, move it from Open → Fixed with the commit hash.
 | F10 | `8e9f676` | reports | AI post-test summary, gamification in report, lesson skip audit |
 | F11 | `4907a06` | ci | Pin worker deploy to top-level env |
 | F12 | `cae9c63` | tests | Empty-content filter no longer rejects valid speaking questions |
+| F13 | `4907a06` + token rotation | ops | CI deploys green (wrangler `--env=""` + fresh CLOUDFLARE_API_TOKEN) |
+| F14 | `b4f98b3` | test | Vitest + CI test gate; 17 tests lock in scoring and summary bug classes |
 
 Live in production: F1–F12 (worker deployed manually via wrangler on Windows;
 frontend deployed via `wrangler pages deploy` from Windows). `tts_cache` was
