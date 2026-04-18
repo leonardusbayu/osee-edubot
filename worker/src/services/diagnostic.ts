@@ -358,6 +358,32 @@ export async function submitAnswer(env: Env, userId: number, answer: string): Pr
     "UPDATE diagnostic_sessions SET current_question = ?, answers = ? WHERE id = ?"
   ).bind(nextIndex, JSON.stringify(sessionData), session.id).run();
 
+  // Durable per-answer log (migration 050). Best-effort: if the table is
+  // missing (pre-migration environment), silently skip rather than break
+  // the diagnostic flow. Reports that use this data gracefully handle
+  // missing rows via the existing `safeAll` wrappers in student-report.ts.
+  try {
+    await env.DB.prepare(
+      `INSERT INTO diagnostic_question_answers
+         (session_id, user_id, question_index, question_id, section, topic,
+          question_text, student_answer, correct_answer, is_correct)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      session.id,
+      userId,
+      qIndex,
+      q.id,
+      q.section,
+      q.topic || null,
+      q.question || '',
+      answer.trim(),
+      isWriting ? null : q.answer,
+      isCorrect === null ? null : (isCorrect ? 1 : 0),
+    ).run();
+  } catch (e: any) {
+    console.error('diagnostic_question_answers insert failed (non-fatal):', e?.message || e);
+  }
+
   // Build feedback. For wrong answers, try personalized AI feedback that
   // references this student's history (weak concepts, repeated mistakes,
   // streak). Falls back to canned text on any failure.

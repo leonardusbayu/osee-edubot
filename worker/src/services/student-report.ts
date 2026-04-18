@@ -144,6 +144,18 @@ export interface StudentReport {
     level_placed: string | null;
     date: string | null;
     section_scores: Record<string, number>;
+    // Per-answer audit trail (migration 050). Empty for diagnostics taken
+    // before the migration shipped. `correct` is null for writing questions
+    // that are free-text / AI-scored outside this table.
+    answers: {
+      question_index: number;
+      section: string;
+      topic: string | null;
+      question_text: string;
+      student_answer: string;
+      correct_answer: string | null;
+      correct: boolean | null;
+    }[];
   };
 
   // Gamification — XP, level, streak, league, badges. Previously lived in a
@@ -190,7 +202,7 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
   const [
     profile, masteries, weakTopics, mentalModel, misconceptions, gaps,
     sectionStats, recentAttempts, dailyLogs, srStats, srItems,
-    lessonPlans, activePlan, diagnosticResult, learningPrefs,
+    lessonPlans, activePlan, diagnosticResult, diagnosticAnswers, learningPrefs,
     convStats, convTopics,
     xpRow, leagueRow, coinRow, badgeRows, xpLogRows,
   ] = await Promise.all([
@@ -286,6 +298,17 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
     safeFirst(env.DB.prepare(
       `SELECT * FROM diagnostic_results WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`
     ).bind(userId).first()),
+    // Per-answer diagnostic audit trail (migration 050). Pulls the most
+    // recent 20 — bounded because a diagnostic is typically 20 questions.
+    // Best-effort via safeAll so pre-migration environments or a missing
+    // table don't fail the whole report build.
+    safeAll(env.DB.prepare(
+      `SELECT question_index, section, topic, question_text, student_answer,
+              correct_answer, is_correct, created_at
+         FROM diagnostic_question_answers
+        WHERE user_id = ?
+        ORDER BY session_id DESC, question_index ASC LIMIT 20`
+    ).bind(userId).all()),
     // Learning preferences
     safeFirst(env.DB.prepare(
       `SELECT learning_style, communication_style, depth_level, preferred_language,
@@ -430,6 +453,15 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
       listening: diag.listening_score || 0,
       writing: diag.writing_band || 0,
     } as Record<string, number> : {} as Record<string, number>,
+    answers: ((diagnosticAnswers as any)?.results || []).map((a: any) => ({
+      question_index: Number(a.question_index || 0),
+      section: String(a.section || ''),
+      topic: a.topic || null,
+      question_text: String(a.question_text || ''),
+      student_answer: String(a.student_answer || ''),
+      correct_answer: a.correct_answer || null,
+      correct: a.is_correct === null ? null : a.is_correct === 1,
+    })),
   };
 
   // ── Compute AI recommendations ──

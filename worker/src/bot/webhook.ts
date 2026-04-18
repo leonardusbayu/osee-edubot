@@ -4446,21 +4446,27 @@ async function handleCallbackQuery(query: any, env: Env) {
     return;
   }
 
-  if (data.startsWith('lesson_start_') || data.startsWith('lesson_skip_')) {
-    const planId = parseInt(data.replace(/lesson_(start|skip)_/, ''));
+  if (data.startsWith('lesson_start_') || data.startsWith('lesson_skip_') || data.startsWith('lesson_complete_')) {
+    const planId = parseInt(data.replace(/lesson_(start|skip|complete)_/, ''));
     const isSkip = data.startsWith('lesson_skip_');
+    const isComplete = data.startsWith('lesson_complete_');
 
-    if (isSkip) {
+    if (isSkip || isComplete) {
       const { advanceLessonStep } = await import('../services/lesson-engine');
-      // Pass stepResult so the skip is durably recorded in
-      // lesson_step_results (previously a skip advanced the counter but
-      // left zero trace — admin reports couldn't tell the difference
-      // between "did the lesson" and "smashed skip 7 times").
+      // Passing stepResult makes the advance durably recorded in
+      // lesson_step_results. Skip writes feedback='skipped' (score stays
+      // null). Complete writes feedback='completed' with score=1.0 so
+      // reports can show which steps the student actually finished.
+      //
+      // Previously `lesson_complete_*` didn't exist: there was no path
+      // that advanced current_step on natural completion, so real learners
+      // stayed stuck on step 0 forever while only skip-mashers progressed.
+      // Tracks P1 BUGS.md #6.
       await advanceLessonStep(env, planId, user.id, {
-        score: null as any,
+        score: isComplete ? 1.0 : (null as any),
         time_spent_sec: 0,
         response_data: null as any,
-        feedback: 'skipped',
+        feedback: isComplete ? 'completed' : 'skipped',
       });
     }
 
@@ -4470,14 +4476,27 @@ async function handleCallbackQuery(query: any, env: Env) {
     if (plan && plan.current_step < plan.total_steps) {
       const step = plan.lessons[plan.current_step];
       await editMessage(env, chatId, messageId,
-        `📖 *${step.title}*\n\nKirim pesan apapun untuk mulai step ini dengan tutor.`
+        `📖 *${step.title}*\n\n` +
+        `Kirim pesan apapun untuk mulai step ini dengan tutor.\n\n` +
+        `Kalau sudah selesai ngobrol sama tutor dan paham materinya, tap "✅ Selesai" di bawah — baru step berikutnya kebuka.`,
+        {
+          inline_keyboard: [
+            [
+              { text: '✅ Selesai step ini', callback_data: `lesson_complete_${planId}` },
+              { text: '⏭️ Skip', callback_data: `lesson_skip_${planId}` },
+            ],
+            [
+              { text: '⏸️ Pause plan', callback_data: `lesson_pause_${planId}` },
+            ],
+          ],
+        },
       );
       // Set tutor mode to lesson with the step's topic
       await env.DB.prepare(
         `UPDATE student_profiles SET tutor_mode = 'lesson', current_topic = ?, current_lesson_step = ? WHERE user_id = ?`
       ).bind(step.skill, step.index, user.id).run();
     } else {
-      await editMessage(env, chatId, messageId, '✅ Lesson plan selesai! Ketik /lesson untuk plan baru.');
+      await editMessage(env, chatId, messageId, '🎉 Lesson plan selesai semua! Ketik /lesson untuk plan baru.');
     }
     return;
   }

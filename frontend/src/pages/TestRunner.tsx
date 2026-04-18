@@ -117,7 +117,30 @@ export default function TestRunner() {
     setCurrentSection, setQuestionIndex, saveAnswer, answers,
     prefetchedQuestions, isPrefetchingQuestions, prefetchQuestions,
     networkAvailable, setNetworkAvailable,
+    pendingAnswers,
   } = useTestStore();
+
+  // Student-facing pending-sync state. Previously offline-sync dropped
+  // answers silently after maxRetries — student saw "Test Complete" but the
+  // answers never reached the server. Now we surface the queue so they
+  // know something's off AND can manually retry. Tracks P1 BUGS.md #1.
+  const [showSyncRetrying, setShowSyncRetrying] = useState(false);
+  const pendingCount = pendingAnswers.length;
+  const deadCount = pendingAnswers.filter((a) => a.retries >= a.maxRetries).length;
+  const manualResyncInFlight = useRef(false);
+
+  const handleManualResync = useCallback(async () => {
+    if (manualResyncInFlight.current || !attemptId) return;
+    manualResyncInFlight.current = true;
+    setShowSyncRetrying(true);
+    try {
+      await syncPendingAnswers(parseInt(attemptId));
+    } finally {
+      manualResyncInFlight.current = false;
+      // Leave the banner visible for 1.5s so the user sees the result.
+      setTimeout(() => setShowSyncRetrying(false), 1500);
+    }
+  }, [attemptId]);
 
   const [questions, setQuestions] = useState<any[]>([]);
   const [sectionTimeSeconds, setSectionTimeSeconds] = useState(0);
@@ -1510,6 +1533,40 @@ export default function TestRunner() {
           {encouragement}
         </div>
       )}
+
+      {/* Pending sync banner — surfaces offline-queued answers so the
+          student isn't left thinking their submission went through when
+          it hasn't. Two visual states: warning (queued, retrying) and
+          danger (some answers exhausted retries — need manual action). */}
+      {pendingCount > 0 && (
+        <div
+          className={`fixed top-2 left-2 right-2 z-50 p-3 rounded-lg text-sm shadow-lg ${
+            deadCount > 0
+              ? 'bg-red-500/15 border border-red-500/40 text-red-600 dark:text-red-300'
+              : 'bg-amber-500/15 border border-amber-500/40 text-amber-700 dark:text-amber-300'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <p className="flex-1 leading-tight">
+              {deadCount > 0
+                ? `⚠️ ${deadCount} jawaban gagal tersinkron. Tekan "Coba kirim" atau cek koneksi internet.`
+                : `📡 ${pendingCount} jawaban sedang menunggu terkirim…`}
+            </p>
+            <button
+              type="button"
+              onClick={handleManualResync}
+              disabled={showSyncRetrying || !networkAvailable}
+              className="text-xs px-2 py-1 rounded-lg bg-tg-button text-tg-button-text font-medium disabled:opacity-50 whitespace-nowrap"
+            >
+              {showSyncRetrying ? 'Mengirim…' : 'Coba kirim'}
+            </button>
+          </div>
+          {!networkAvailable && (
+            <p className="text-xs mt-1 opacity-80">Internet belum aktif. Akan dikirim otomatis saat online.</p>
+          )}
+        </div>
+      )}
+
       {/* Header */}
       <div className="sticky top-0 bg-tg-bg border-b border-tg-secondary z-10 px-4 py-3">
         <div className="flex items-center justify-between">

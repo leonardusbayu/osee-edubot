@@ -19,12 +19,12 @@ ships, move it from Open → Fixed with the commit hash.
 
 | # | P | Area | Title | Issue | Notes |
 |---|---|------|-------|:-----:|-------|
-| 1 | P1 | frontend | Offline sync silently drops answers at maxRetries | [#1](https://github.com/leonardusbayu/osee-edubot/issues/1) | When `dropDeadPendingAnswers()` fires, student is not notified. Needs idempotent server confirmation + UI alert. |
-| 2 | P1 | worker | Diagnostic test has no per-answer audit log | [#2](https://github.com/leonardusbayu/osee-edubot/issues/2) | Only summary in `diagnostic_results`. Needs `diagnostic_question_answers` table. |
+| ~~1~~ | ~~P1~~ | ~~frontend~~ | ~~Offline sync silently drops answers at maxRetries~~ | ~~[#1](https://github.com/leonardusbayu/osee-edubot/issues/1)~~ | **UI SHIPPED (F15)** — banner + manual retry. Server-side idempotency (client UUID + dedup) still open as a follow-up if dropped-answer incidents continue. |
+| ~~2~~ | ~~P1~~ | ~~worker~~ | ~~Diagnostic test has no per-answer audit log~~ | ~~[#2](https://github.com/leonardusbayu/osee-edubot/issues/2)~~ | **FIXED (F16)** — migration 050_diagnostic_answer_log.sql + submitAnswer writes rows + buildStudentReport surfaces them. |
 | 3 | P2 | worker | Tutor chat — no per-turn evidence/metadata | [#5](https://github.com/leonardusbayu/osee-edubot/issues/5) | `chat_analysis.analyzeMessageTopic` exists but isn't called. |
 | 4 | P2 | worker | Speaking dimension scores silently dropped on error | — | `speaking.ts` — second insert throws, session still looks successful. |
 | 5 | P2 | worker | Game score + XP award not atomic | — | `games.ts` — two separate writes, no transaction. |
-| 6 | P1 | worker | Lesson steps never advance on natural completion | [#3](https://github.com/leonardusbayu/osee-edubot/issues/3) | `advanceLessonStep` only called on Skip. `current_step` stuck at 0 for real learners. Needs design. |
+| ~~6~~ | ~~P1~~ | ~~worker~~ | ~~Lesson steps never advance on natural completion~~ | ~~[#3](https://github.com/leonardusbayu/osee-edubot/issues/3)~~ | **FIXED (F17)** — explicit "✅ Selesai step ini" button + lesson_complete_X callback. Auto-advance on CQ pass deferred (not yet measured if needed). |
 | 7 | P2 | worker | `/progress` + `/profile` bot commands don't use `buildStudentReport` | — | Each rebuilds subsets with raw SQL. Unify. |
 | 8 | P2 | worker | Coin shop — coins earned but no spend path | [#6](https://github.com/leonardusbayu/osee-edubot/issues/6) | Dead loot. Needs shop UI or `/shop` command. |
 | 9 | P2 | worker | League leaderboard never surfaced | — | `getLeagueLeaderboard()` exists; no caller. |
@@ -55,6 +55,9 @@ ships, move it from Open → Fixed with the commit hash.
 | F12 | `cae9c63` | tests | Empty-content filter no longer rejects valid speaking questions |
 | F13 | `4907a06` + token rotation | ops | CI deploys green (wrangler `--env=""` + fresh CLOUDFLARE_API_TOKEN) |
 | F14 | `b4f98b3` | test | Vitest + CI test gate; 17 tests lock in scoring and summary bug classes |
+| F15 | _this commit_ | frontend | Offline-sync drops surfaced: banner + manual retry when answers queue up or exhaust retries (was: silent console.warn) |
+| F16 | _this commit_ | worker | Diagnostic per-answer audit log — migration 050 + submitAnswer writes + report includes them |
+| F17 | _this commit_ | worker | Lesson step completion — "✅ Selesai step ini" button + `lesson_complete_X` callback; current_step now advances for real learners |
 
 Live in production: F1–F12 (worker deployed manually via wrangler on Windows;
 frontend deployed via `wrangler pages deploy` from Windows). `tts_cache` was
