@@ -1660,81 +1660,19 @@ async function handleMessage(message: any, env: Env) {
       }
 
       case '/progress': {
-        // Inline progress stats combining bot + mini app data
+        // Unified on buildStudentReport — previously this command and
+        // /profile hand-rolled overlapping SQL which drifted. Now both
+        // read from the canonical report; the formatters decide what
+        // view to surface. Tracks P2 BUGS.md #7.
         try {
-          // Total questions from daily logs
-          const dailyTotal = await env.DB.prepare(
-            'SELECT SUM(questions_answered) as total FROM daily_question_logs WHERE user_id = ?'
-          ).bind(user.id).first() as any;
-
-          // Exercise sessions
-          const exercises = await env.DB.prepare(
-            `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-             AVG(CASE WHEN status = 'completed' AND score IS NOT NULL THEN score END) as avg_score
-             FROM exercise_sessions WHERE user_id = ?`
-          ).bind(user.id).first() as any;
-
-          // Test attempts
-          const tests = await env.DB.prepare(
-            `SELECT COUNT(*) as count FROM test_attempts WHERE user_id = ? AND status = 'completed'`
-          ).bind(user.id).first() as any;
-
-          // Mini app accuracy
-          const answers = await env.DB.prepare(
-            `SELECT COUNT(*) as total, SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct
-             FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
-             WHERE ta.user_id = ? AND aa.is_correct IS NOT NULL`
-          ).bind(user.id).first() as any;
-
-          // Streak is on user record directly
-          const freshUser = await env.DB.prepare('SELECT current_streak, longest_streak FROM users WHERE id = ?').bind(user.id).first() as any;
-
-          // Conversation count
-          const convCount = await env.DB.prepare(
-            `SELECT COUNT(*) as c FROM conversation_messages WHERE user_id = ? AND role = 'user'`
-          ).bind(user.id).first() as any;
-
-          // Section accuracy
-          const sections = await env.DB.prepare(
-            `SELECT aa.section,
-              SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct,
-              COUNT(*) as total
-             FROM attempt_answers aa JOIN test_attempts ta ON aa.attempt_id = ta.id
-             WHERE ta.user_id = ? AND aa.is_correct IS NOT NULL
-             GROUP BY aa.section`
-          ).bind(user.id).all();
-
-          const totalQ = dailyTotal?.total || 0;
-          const testCount = tests?.count || 0;
-          const exerciseCount = exercises?.completed || 0;
-          const avgExScore = exercises?.avg_score ? Math.round(exercises.avg_score) : 0;
-          const accuracy = answers?.total > 0 ? Math.round((answers.correct / answers.total) * 100) : 0;
-          const msgCount = convCount?.c || 0;
-
-          let msg = `📊 *Progress ${user.name}*\n\n`;
-          msg += `🎯 Target: ${user.target_test?.replace(/_/g, ' ') || 'TOEFL iBT'}\n`;
-          msg += `📈 Level: ${user.proficiency_level || 'belum diset'}\n\n`;
-
-          msg += `*📝 Aktivitas*\n`;
-          msg += `Total soal: ${totalQ}\n`;
-          msg += `Tes mini app: ${testCount} selesai\n`;
-          msg += `Exercise bot: ${exerciseCount}${avgExScore > 0 ? ` (rata-rata ${avgExScore}%)` : ''}\n`;
-          msg += `Pesan chat: ${msgCount}\n`;
-          msg += `🔥 Streak: ${freshUser?.current_streak || 0} hari (terpanjang: ${freshUser?.longest_streak || 0})\n\n`;
-
-          if (answers?.total > 0) {
-            msg += `*📊 Akurasi Mini App*\n`;
-            msg += `Overall: ${accuracy}% (${answers.correct}/${answers.total})\n`;
-            for (const s of (sections.results || []) as any[]) {
-              const sAcc = s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0;
-              const icon = s.section === 'reading' ? '📖' : s.section === 'listening' ? '🎧' : s.section === 'speaking' ? '🗣' : '✍️';
-              msg += `${icon} ${s.section}: ${sAcc}% (${s.correct}/${s.total})\n`;
-            }
+          const { buildStudentReport } = await import('../services/student-report');
+          const { formatProgressMessage } = await import('../services/bot-report-formatters');
+          const report = await buildStudentReport(env, user.id);
+          if (!report) {
+            await sendMessage(env, chatId, 'Belum ada data progress. Mulai dengan /test atau /diagnostic.');
+            return;
           }
-
-          msg += `\n💡 Buka mini app /test untuk detail lengkap!`;
-
-          await sendMessage(env, chatId, msg, mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id));
+          await sendMessage(env, chatId, formatProgressMessage(report), mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id));
         } catch (e) {
           console.error('Progress command error:', e);
           await sendMessage(env, chatId, 'Gagal memuat progress. Coba lagi nanti.');
@@ -1795,79 +1733,32 @@ async function handleMessage(message: any, env: Env) {
       }
 
       case '/profile': {
-        // Show student profile with all learning metrics
-        const { getStudentProfile } = await import('../services/student-profile');
-        const { getReviewStats, getReviewForecast } = await import('../services/fsrs-engine');
-        const { getKnowledgeGaps, getMisconceptions } = await import('../services/mental-model');
-
-        const studentProfile = await getStudentProfile(env, user.id);
-        const srStats = await getReviewStats(env, user.id);
-        const gaps = await getKnowledgeGaps(env, user.id);
-        const misconceptions = await getMisconceptions(env, user.id);
-        const forecast = await getReviewForecast(env, user.id, 7);
-
-        const learningStyle = (studentProfile as any).learning_style || 'balanced';
-        const commStyle = (studentProfile as any).communication_style || 'socratic';
-        const depthLevel = (studentProfile as any).depth_level || 'intermediate';
-        const studyGoal = (studentProfile as any).study_goal || 'belum diset';
-
-        const styleEmoji: Record<string, string> = {
-          visual: '👁️', verbal: '💬', active: '🏃', reflective: '🤔', balanced: '⚖️',
-        };
-        const depthEmoji: Record<string, string> = {
-          beginner: '🌱', elementary: '🌿', intermediate: '🌳', advanced: '🏔️', expert: '⭐',
-        };
-
-        // Forecast summary
-        const forecastStr = forecast.filter(f => f.count > 0).slice(0, 3)
-          .map(f => `${f.date.slice(5)}: ${f.count}`).join(' | ');
-
-        let msg = `📋 *Profil Belajar — ${user.name}*\n\n`;
-        msg += `*Gaya Belajar*\n`;
-        msg += `${styleEmoji[learningStyle] || '⚖️'} Style: ${learningStyle}\n`;
-        msg += `💬 Komunikasi: ${commStyle}\n`;
-        msg += `${depthEmoji[depthLevel] || '🌳'} Level: ${depthLevel}\n`;
-        msg += `🎯 Tujuan: ${studyGoal}\n\n`;
-
-        msg += `*Statistik*\n`;
-        msg += `📊 Confidence: ${Math.round(studentProfile.confidence_score * 100)}%\n`;
-        msg += `🔥 Streak terbaik: ${studentProfile.longest_correct_streak}\n`;
-        msg += `💬 Total pesan tutor: ${studentProfile.total_tutor_messages}\n`;
-        msg += `⚡ Pace: ${studentProfile.learning_pace}\n\n`;
-
-        msg += `*Spaced Repetition (FSRS)*\n`;
-        msg += `📦 Total items: ${srStats.total}\n`;
-        msg += `📅 Due sekarang: ${srStats.due}\n`;
-        msg += `✅ Mastered: ${srStats.mastered}\n`;
-        msg += `🧠 Avg retention: ${srStats.avgRetention}%\n`;
-        if (forecastStr) msg += `📆 Jadwal: ${forecastStr}\n`;
-        msg += '\n';
-
-        if (misconceptions.length > 0) {
-          msg += `*Misconceptions (perlu dikoreksi!)*\n`;
-          msg += misconceptions.slice(0, 3).map(m => `⚠️ ${m.concept}`).join('\n') + '\n\n';
-        }
-
-        if (gaps.length > 0) {
-          msg += `*Knowledge Gaps*\n`;
-          msg += gaps.slice(0, 5).map(g => {
-            const icon = g.believed_understanding === 'misconception' ? '🔴' :
-                        g.believed_understanding === 'partial' ? '🟡' : '⚪';
-            return `${icon} ${g.concept}: ${g.believed_understanding}`;
-          }).join('\n') + '\n';
-        }
-
-        await sendMessage(env, chatId, msg, {
-          inline_keyboard: [
-            [
-              { text: '🎨 Ubah Gaya Belajar', callback_data: 'profile_change_style' },
-              { text: '🎯 Set Target Score', callback_data: 'profile_set_target' },
+        // Unified on buildStudentReport alongside /progress — see the
+        // /progress handler above for rationale. The formatter returns a
+        // profile-shaped view of the same canonical data. BUGS.md #7.
+        try {
+          const { buildStudentReport } = await import('../services/student-report');
+          const { formatProfileMessage } = await import('../services/bot-report-formatters');
+          const report = await buildStudentReport(env, user.id);
+          if (!report) {
+            await sendMessage(env, chatId, 'Belum ada profil. Mulai dengan /test atau /diagnostic dulu.');
+            return;
+          }
+          await sendMessage(env, chatId, formatProfileMessage(report), {
+            inline_keyboard: [
+              [
+                { text: '🎨 Ubah Gaya Belajar', callback_data: 'profile_change_style' },
+                { text: '🎯 Set Target Score', callback_data: 'profile_set_target' },
+              ],
+              [
+                { text: '📝 Mulai Lesson Plan', callback_data: 'start_lesson_plan' },
+              ],
             ],
-            [
-              { text: '📝 Mulai Lesson Plan', callback_data: 'start_lesson_plan' },
-            ],
-          ],
-        });
+          });
+        } catch (e) {
+          console.error('Profile command error:', e);
+          await sendMessage(env, chatId, 'Gagal memuat profil. Coba lagi nanti.');
+        }
         return;
       }
 

@@ -316,7 +316,18 @@ SAFETY:
 SENTIMENT_ANALYSIS:
 Setelah setiap respons, tambahkan baris terakhir PERSIS format ini (ini akan di-parse, jangan ubah formatnya):
 [SENTIMENT: positive|neutral|negative|distressed]
-[BRIDGE_READY: yes|no]`;
+[BRIDGE_READY: yes|no]
+
+MENTAL MODEL WRITE-BACK (OPSIONAL):
+Kalau dalam pesan student mereka dengan JELAS mengungkap pemahaman atau kebingungan tentang konsep spesifik (grammar, reading, dsb), TAMBAHKAN baris ini SETELAH [BRIDGE_READY] — max 1 tag per pesan:
+[CONCEPT: concept_snake_case; state: misconception|partial|solid; detail: singkat]
+
+Contoh kapan pakai:
+- Student: "bingung passive voice, kenapa was dan were?" → [CONCEPT: basic_passive; state: partial; detail: confused about was vs were selection]
+- Student: "oh jadi present perfect itu udah selesai tapi relevan sekarang" → [CONCEPT: present_perfect; state: solid; detail: articulated core meaning]
+- Student: "main idea itu kayak judul kan?" → [CONCEPT: main_idea; state: misconception; detail: conflates main idea with title]
+- Kalau student cuma chitchat (cerita kerja, kabar, makanan) → SKIP tag ini.
+Jangan mengada-ngada. Tag hanya kalau bukti pemahamannya nyata dalam pesan mereka, bukan asumsi kamu.`;
 
 // ─────────────────── Time Awareness (WIB = UTC+7) ───────────────────
 
@@ -873,6 +884,14 @@ export async function handleCompanionReply(
   // Parse sentiment and bridge-readiness from the response
   const sentimentMatch = reply.match(/\[SENTIMENT:\s*(positive|neutral|negative|distressed)\]/i);
   const bridgeMatch = reply.match(/\[BRIDGE_READY:\s*(yes|no)\]/i);
+  // New: optional concept tag the companion emits when the student's message
+  // clearly shows (mis)understanding of a specific concept. Format:
+  //   [CONCEPT: snake_case_tag; state: misconception|partial|solid; detail: freeform]
+  // Previously the companion read the mental model but never wrote back,
+  // so insights surfaced in chat never reached the tutor. Tracks BUGS.md #12.
+  const conceptMatch = reply.match(
+    /\[CONCEPT:\s*([a-z0-9_]+)\s*;\s*state:\s*(misconception|partial|solid)\s*(?:;\s*detail:\s*([^\]]*))?\]/i,
+  );
 
   const sentiment = sentimentMatch?.[1]?.toLowerCase() || 'neutral';
   const bridgeReady = bridgeMatch?.[1]?.toLowerCase() === 'yes';
@@ -881,7 +900,35 @@ export async function handleCompanionReply(
   reply = reply
     .replace(/\[SENTIMENT:.*?\]/gi, '')
     .replace(/\[BRIDGE_READY:.*?\]/gi, '')
+    .replace(/\[CONCEPT:[^\]]*\]/gi, '')
     .trim();
+
+  // Feed concept evidence back into the mental model (best-effort). Weight
+  // is lower than tutor-mode evidence (0.35 vs 0.5+) because companion
+  // chat is more casual and interpretations are softer — we don't want a
+  // throwaway line to flip a "solid" concept to "misconception".
+  if (conceptMatch) {
+    try {
+      const concept = conceptMatch[1].toLowerCase();
+      const state = conceptMatch[2].toLowerCase();
+      const detail = (conceptMatch[3] || 'companion chat').trim().slice(0, 200);
+      const { recordEvidence, recordMisconception } = await import('./mental-model');
+      if (state === 'misconception') {
+        await recordMisconception(env, user.id, concept, detail);
+      } else {
+        await recordEvidence(
+          env,
+          user.id,
+          concept,
+          state === 'solid' ? 'self_explanation' : 'tutor_assessment',
+          `companion: ${detail}`,
+          state === 'solid' ? 0.4 : 0.3,
+        );
+      }
+    } catch (e: any) {
+      console.error('[companion] mental-model write-back failed:', e?.message || e);
+    }
+  }
 
   // Safety: if distressed, ensure we don't try to bridge
   const isSafe = sentiment !== 'distressed';

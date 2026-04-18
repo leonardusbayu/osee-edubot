@@ -25,15 +25,15 @@ ships, move it from Open → Fixed with the commit hash.
 | 4 | P2 | worker | Speaking dimension scores silently dropped on error | — | `speaking.ts` — second insert throws, session still looks successful. |
 | 5 | P2 | worker | Game score + XP award not atomic | — | `games.ts` — two separate writes, no transaction. |
 | ~~6~~ | ~~P1~~ | ~~worker~~ | ~~Lesson steps never advance on natural completion~~ | ~~[#3](https://github.com/leonardusbayu/osee-edubot/issues/3)~~ | **FIXED (F17)** — explicit "✅ Selesai step ini" button + lesson_complete_X callback. Auto-advance on CQ pass deferred (not yet measured if needed). |
-| 7 | P2 | worker | `/progress` + `/profile` bot commands don't use `buildStudentReport` | — | Each rebuilds subsets with raw SQL. Unify. |
+| ~~7~~ | ~~P2~~ | ~~worker~~ | ~~/progress + /profile bot commands don't use buildStudentReport~~ | — | **FIXED (F22)** — both now call buildStudentReport + dedicated formatters in bot-report-formatters.ts. |
 | ~~8~~ | ~~P2~~ | ~~worker~~ | ~~Coin shop — coins earned but no spend path~~ | ~~[#6](https://github.com/leonardusbayu/osee-edubot/issues/6)~~ | **FIXED (F18)** — `/shop` command + purchase callback; streak_freeze and extra_questions fully wired; others refund with "coming soon" |
 | ~~9~~ | ~~P2~~ | ~~worker~~ | ~~League leaderboard never surfaced~~ | — | **FIXED (F19)** — `/leaderboard` + `/league` bot commands show top 10 + user's rank |
 | ~~10~~ | ~~P2~~ | ~~worker~~ | ~~League promotion/demotion silent~~ | ~~[#7](https://github.com/leonardusbayu/osee-edubot/issues/7)~~ | **FIXED (F20)** — `notifyLeagueChanges()` fires after weekly cron; Telegram messages for promote/demote events |
 | ~~11~~ | ~~P2~~ | ~~worker~~ | ~~Friend quests never complete~~ | ~~[#8](https://github.com/leonardusbayu/osee-edubot/issues/8)~~ | **FIXED (F21)** — `recordQuestEvent()` hooked into `awardXp`; quests now progress, complete, and grant coin rewards |
-| 12 | P2 | worker | Companion doesn't re-enrich mental-model from its own chat | — | Companion reads mental-model, doesn't write back. |
+| ~~12~~ | ~~P2~~ | ~~worker~~ | ~~Companion doesn't re-enrich mental-model from its own chat~~ | — | **FIXED (F23)** — [CONCEPT: tag; state: misconception\|partial\|solid] parsed from GPT reply; recordEvidence/recordMisconception called with weight 0.3–0.4. |
 | ~~13~~ | ~~P1~~ | ~~ops~~ | ~~CI runs are red since Apr 13~~ | ~~[#4](https://github.com/leonardusbayu/osee-edubot/issues/4)~~ | **FIXED** — see F13 below. |
-| 14 | P2 | content | TOEFL ITP error-id rows with blank content | — | Filtered out server-side (`cae9c63`). Source data needs cleanup/re-import. |
-| 15 | P2 | worker | `findIdleStudents` HAVING-clause flag | — | User flagged earlier; exact SQL not located. Revisit with example. |
+| ~~14~~ | ~~P2~~ | ~~content~~ | ~~TOEFL ITP error-id rows with blank content~~ | — | **SCRIPT READY (F24)** — `scripts/cleanup-broken-itp-error-id.sql` marks bad rows as draft. Dry-run command in the script header. Operator runs once. |
+| ~~15~~ | ~~P2~~ | ~~worker~~ | ~~findIdleStudents HAVING-clause flag~~ | — | **N/A — already fixed** in a previous session via subquery rewrite. Comment at companion.ts:428–430 documents the original pitfall. No live bug. |
 
 ---
 
@@ -61,7 +61,10 @@ ships, move it from Open → Fixed with the commit hash.
 | F18 | _this commit_ | worker | Coin shop wired — `/shop` bot command + purchase flow; streak_freeze + extra_questions apply effects, others refund gracefully |
 | F19 | _this commit_ | worker | League leaderboard exposed — `/leaderboard` + `/league` bot commands |
 | F20 | _this commit_ | worker | League promotion/demotion notifications — Telegram message when users change league in weekly cron |
-| F21 | _this commit_ | worker | Friend quest progress — `recordQuestEvent` hooked into awardXp; quests now increment, complete, grant rewards |
+| F21 | `26254ce` | worker | Friend quest progress — `recordQuestEvent` hooked into awardXp; quests now increment, complete, grant rewards |
+| F22 | _this commit_ | worker | `/progress` + `/profile` unified under buildStudentReport + shared formatters |
+| F23 | _this commit_ | worker | Companion writes back to mental model — [CONCEPT: …] tag parsing |
+| F24 | _this commit_ | ops | TOEFL ITP broken error-id cleanup script (operator dry-run + one-off execute) |
 
 Live in production: F1–F12 (worker deployed manually via wrangler on Windows;
 frontend deployed via `wrangler pages deploy` from Windows). `tts_cache` was
