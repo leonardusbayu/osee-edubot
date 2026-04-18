@@ -48,7 +48,7 @@ import { join } from 'path';
 
 const D1_DATABASE_ID = 'd501b671-128e-4a45-9d90-74b22e6691ce';
 const HARD_MAX_COUNT = 100;
-const DEFAULT_BATCH_SIZE = 5;
+const DEFAULT_BATCH_SIZE = 3; // 3 per batch stays well under max_tokens for grouped_speaking / grouped_reading which can be verbose per item
 const FEW_SHOT_COUNT = 10;
 const RATE_LIMIT_MS = 2000;
 
@@ -134,6 +134,7 @@ async function openaiJsonCall(
   systemPrompt: string,
   userPrompt: string,
   model: string = 'gpt-4o-mini',
+  maxTokens: number = 8000,
 ): Promise<any> {
   const resp = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -143,7 +144,7 @@ async function openaiJsonCall(
     },
     body: JSON.stringify({
       model,
-      max_tokens: 3000,
+      max_tokens: maxTokens,
       temperature: 0.8,
       response_format: { type: 'json_object' },
       messages: [
@@ -158,7 +159,20 @@ async function openaiJsonCall(
   }
   const data: any = await resp.json();
   const raw = data.choices?.[0]?.message?.content || '{}';
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch (parseErr: any) {
+    // GPT occasionally produces unparseable JSON when hitting max_tokens or
+    // when it includes stray characters in strings. Dump head + tail of the
+    // raw response so the operator can see the failure mode.
+    const head = raw.substring(0, 300);
+    const tail = raw.substring(Math.max(0, raw.length - 300));
+    const finishReason = data.choices?.[0]?.finish_reason || 'unknown';
+    throw new Error(
+      `JSON parse failed (${parseErr.message}). finish_reason=${finishReason}, raw length=${raw.length}.\n` +
+      `HEAD: ${head}\n...\nTAIL: ${tail}`
+    );
+  }
 }
 
 // ─── GENERATION ─────────────────────────────────────────────────────────
@@ -181,7 +195,16 @@ function buildGenUserPrompt(
   references: any[],
   avoidTopics: string[],
 ): string {
-  const refsBlock = references.map((r, i) => `--- REFERENCE ${i + 1} ---\n${JSON.stringify(r.content_parsed, null, 2)}`).join('\n\n');
+  // Trim each reference's content to a budget so we don't blow the prompt
+  // window with verbose passages. 600 chars per reference × 10 refs = 6k
+  // chars of reference context, leaves ample headroom for generation.
+  const PER_REF_MAX = 600;
+  function trimContent(obj: any): any {
+    const s = JSON.stringify(obj);
+    if (s.length <= PER_REF_MAX) return obj;
+    return { __trimmed_preview: s.substring(0, PER_REF_MAX) + '…[truncated; same shape as above]' };
+  }
+  const refsBlock = references.map((r, i) => `--- REFERENCE ${i + 1} ---\n${JSON.stringify(trimContent(r.content_parsed), null, 2)}`).join('\n\n');
   const avoidBlock = avoidTopics.length > 0
     ? `Topics OVERREPRESENTED in the bank — avoid: ${avoidTopics.join(', ')}.`
     : 'No topic restrictions.';
