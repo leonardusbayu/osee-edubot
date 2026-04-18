@@ -975,12 +975,17 @@ testRoutes.get('/questions/:section', async (c) => {
       };
     }).filter((q: any) => {
       const c = q.content || {};
-      const topText = String(c.question_text || c.passage_text || c.passage || '').trim();
+      // Speaking questions put the sentence in `sq.script` (from parse-ielts
+      // and parse-toeic ingestion), reading/error-ID put it in
+      // `sq.question_text`. Accept either. Without checking sq.script the
+      // whole Speaking section was being filtered out as "empty" → the
+      // mini app showed "Belum ada soal" for every speaking test.
+      const topText = String(c.question_text || c.passage_text || c.passage || c.script || '').trim();
       const topOpts = Array.isArray(c.options) ? c.options.length : 0;
       if (topText || topOpts > 0) return true;
       const subs = Array.isArray(c.questions) ? c.questions : [];
       return subs.some((sq: any) => {
-        const t = String(sq?.question_text || '').trim();
+        const t = String(sq?.question_text || sq?.script || '').trim();
         const o = Array.isArray(sq?.options) ? sq.options.length : 0;
         return t.length > 0 || o > 0;
       });
@@ -1172,15 +1177,15 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
       };
     }).filter((q: any) => {
       // Mirror the /questions/:section filter: drop rows that would render
-      // as empty Q-cards (no question_text, no passage, no options, and no
-      // sub-questions with any of those).
+      // as empty Q-cards. Accept sq.script as well as sq.question_text
+      // because grouped_speaking content puts the sentence in `script`.
       const c = q.content || {};
-      const topText = String(c.question_text || c.passage_text || c.passage || '').trim();
+      const topText = String(c.question_text || c.passage_text || c.passage || c.script || '').trim();
       const topOpts = Array.isArray(c.options) ? c.options.length : 0;
       if (topText || topOpts > 0) return true;
       const subs = Array.isArray(c.questions) ? c.questions : [];
       return subs.some((sq: any) => {
-        const t = String(sq?.question_text || '').trim();
+        const t = String(sq?.question_text || sq?.script || '').trim();
         const o = Array.isArray(sq?.options) ? sq.options.length : 0;
         return t.length > 0 || o > 0;
       });
