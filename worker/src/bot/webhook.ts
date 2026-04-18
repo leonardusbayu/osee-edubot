@@ -4452,7 +4452,16 @@ async function handleCallbackQuery(query: any, env: Env) {
 
     if (isSkip) {
       const { advanceLessonStep } = await import('../services/lesson-engine');
-      await advanceLessonStep(env, planId, user.id);
+      // Pass stepResult so the skip is durably recorded in
+      // lesson_step_results (previously a skip advanced the counter but
+      // left zero trace — admin reports couldn't tell the difference
+      // between "did the lesson" and "smashed skip 7 times").
+      await advanceLessonStep(env, planId, user.id, {
+        score: null as any,
+        time_spent_sec: 0,
+        response_data: null as any,
+        feedback: 'skipped',
+      });
     }
 
     // Send the current step's instruction to tutor mode

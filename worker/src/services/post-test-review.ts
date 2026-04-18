@@ -168,6 +168,100 @@ export async function analyzeAttempt(
 }
 
 // ═══════════════════════════════════════════════════════
+// AI SUMMARY — student-facing one-paragraph Indonesian summary
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Turn an attempt analysis + section scores into a concise Indonesian
+ * paragraph the student sees on their results page. Rule-based (no extra
+ * GPT call) so it's instant and free — we already have all the structured
+ * data from analyzeAttempt().
+ *
+ * Three moves, in order:
+ *   1. Acknowledge the strongest section by name (something real to feel good about)
+ *   2. Call out the top 1–2 priority concepts to focus on next
+ *   3. Invite them to review or keep practicing — never scold
+ *
+ * Returns null if there's nothing meaningful to say (e.g. zero scored
+ * answers), so the caller skips the UPDATE rather than writing a vague
+ * "selamat, teruskan!" message.
+ */
+export function buildAttemptSummary(
+  analysis: AttemptAnalysis,
+  sectionScores: Record<string, number | null>,
+  maxBand: number,
+): string | null {
+  if (!analysis || analysis.total_scored === 0) return null;
+
+  const sectionNames: Record<string, string> = {
+    reading: 'Reading',
+    listening: 'Listening',
+    speaking: 'Speaking',
+    writing: 'Writing',
+    structure: 'Structure',
+  };
+  const conceptNames: Record<string, string> = {
+    main_idea: 'main idea',
+    inference: 'inference',
+    detail: 'detail',
+    subject_verb: 'subject-verb agreement',
+    tense: 'tenses',
+    vocabulary_in_context: 'vocabulary in context',
+    passive_voice: 'passive voice',
+    conditionals: 'conditionals',
+  };
+  const pretty = (concept: string): string =>
+    conceptNames[concept] ?? concept.replace(/_/g, ' ');
+
+  // Find strongest section (highest absolute score, ignoring nulls/zeros)
+  let topSection: string | null = null;
+  let topScore = -1;
+  for (const [section, score] of Object.entries(sectionScores)) {
+    if (typeof score === 'number' && score > topScore) {
+      topScore = score;
+      topSection = section;
+    }
+  }
+
+  const parts: string[] = [];
+
+  if (topSection && topScore >= maxBand * 0.5) {
+    // Real strength — call it out specifically
+    parts.push(
+      `${sectionNames[topSection] ?? topSection} kamu paling kuat (${topScore}/${maxBand}). Pertahankan.`,
+    );
+  } else if (analysis.wrong_count === 0) {
+    parts.push(`Semua jawaban objektif kamu benar — solid banget.`);
+  } else if (analysis.total_scored >= 5) {
+    parts.push(`Kamu udah jawab ${analysis.total_scored} soal — progress-mu tercatat.`);
+  }
+
+  // Focus: top 1–2 priority concepts, with specific miss counts so the
+  // feedback feels grounded in real data, not generic.
+  if (analysis.triaged_concepts.length > 0) {
+    const focus = analysis.triaged_concepts.slice(0, 2).map(pretty);
+    const clusterMisses = analysis.concept_clusters
+      .slice(0, 2)
+      .map((c) => c.miss_count)
+      .reduce((a, b) => a + b, 0);
+    if (focus.length === 1) {
+      parts.push(`Yang masih perlu latihan lagi: ${focus[0]}.`);
+    } else {
+      parts.push(`Yang masih perlu latihan: ${focus.join(' dan ')}${clusterMisses > 0 ? ` (${clusterMisses} jawaban meleset)` : ''}.`);
+    }
+    parts.push(`Kalau mau, aku bisa bantu review konsep ini lewat /review di bot — cuma 5 menit.`);
+  } else if (analysis.wrong_count > 0) {
+    // Wrongs exist but no tagged concepts — happens when content rows
+    // have no skill_tags. Generic but still encouraging.
+    parts.push(`Ada beberapa jawaban yang bisa di-review supaya makin mantap. Coba /review di bot.`);
+  } else {
+    parts.push(`Siap lanjut ke tes berikutnya?`);
+  }
+
+  return parts.join(' ');
+}
+
+// ═══════════════════════════════════════════════════════
 // FSRS INGEST
 // ═══════════════════════════════════════════════════════
 

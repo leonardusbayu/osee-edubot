@@ -146,6 +146,23 @@ export interface StudentReport {
     section_scores: Record<string, number>;
   };
 
+  // Gamification — XP, level, streak, league, badges. Previously lived in a
+  // separate service (commercial.ts getOrCreateGamification) and was absent
+  // from the canonical report, so admin-side "full" reports couldn't see
+  // where a student sat in the progression loop. Now bundled in.
+  gamification: {
+    total_xp: number;
+    level: number;
+    current_streak: number;
+    longest_streak: number;
+    streak_freezes: number;
+    coins: number;
+    league: string | null;      // 'bronze' | 'silver' | 'gold' | 'diamond' | 'champion' | null
+    weekly_xp: number;          // XP earned in the current league week
+    badges: { id: string; name: string; icon: string; earned_at: string | null }[];
+    recent_xp_activity: { source: string; amount: number; at: string }[];
+  };
+
   // AI recommendations (computed)
   recommendations: {
     priority_skills: string[];
@@ -175,6 +192,7 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
     sectionStats, recentAttempts, dailyLogs, srStats, srItems,
     lessonPlans, activePlan, diagnosticResult, learningPrefs,
     convStats, convTopics,
+    xpRow, leagueRow, coinRow, badgeRows, xpLogRows,
   ] = await Promise.all([
     safe(getStudentProfile(env, userId), null),
     safe(getAllTopicMasteries(env, userId), []),
@@ -288,6 +306,28 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
        FROM conversation_messages
        WHERE user_id = ? AND role = 'user'
        GROUP BY topic ORDER BY count DESC LIMIT 10`
+    ).bind(userId).all()),
+    // Gamification state — 4 parallel pulls, each best-effort. If any is
+    // missing (e.g. a user who never earned XP has no user_xp row) the
+    // report still builds with sensible zero defaults.
+    safeFirst(env.DB.prepare(
+      `SELECT total_xp, level, current_streak, longest_streak, streak_freezes
+       FROM user_xp WHERE user_id = ?`
+    ).bind(userId).first()),
+    safeFirst(env.DB.prepare(
+      `SELECT league, weekly_xp FROM user_leagues WHERE user_id = ?`
+    ).bind(userId).first()),
+    safeFirst(env.DB.prepare(
+      `SELECT COALESCE(SUM(amount), 0) as balance FROM coin_log WHERE user_id = ?`
+    ).bind(userId).first()),
+    safeAll(env.DB.prepare(
+      `SELECT ub.badge_id, b.name, b.icon, ub.earned_at
+       FROM user_badges ub LEFT JOIN badges b ON b.id = ub.badge_id
+       WHERE ub.user_id = ? ORDER BY ub.earned_at DESC LIMIT 20`
+    ).bind(userId).all()),
+    safeAll(env.DB.prepare(
+      `SELECT source, amount, created_at FROM xp_log
+       WHERE user_id = ? ORDER BY created_at DESC LIMIT 10`
     ).bind(userId).all()),
   ]);
 
@@ -514,6 +554,27 @@ export async function buildStudentReport(env: Env, userId: number): Promise<Stud
       })),
     },
     diagnostic: diagnosticInfo,
+    gamification: {
+      total_xp: Number((xpRow as any)?.total_xp || 0),
+      level: Number((xpRow as any)?.level || 1),
+      current_streak: Number((xpRow as any)?.current_streak || 0),
+      longest_streak: Number((xpRow as any)?.longest_streak || 0),
+      streak_freezes: Number((xpRow as any)?.streak_freezes || 0),
+      coins: Number((coinRow as any)?.balance || 0),
+      league: (leagueRow as any)?.league || null,
+      weekly_xp: Number((leagueRow as any)?.weekly_xp || 0),
+      badges: ((badgeRows as any).results || []).map((b: any) => ({
+        id: b.badge_id,
+        name: b.name || b.badge_id,
+        icon: b.icon || '🏅',
+        earned_at: b.earned_at || null,
+      })),
+      recent_xp_activity: ((xpLogRows as any).results || []).map((r: any) => ({
+        source: String(r.source || 'unknown'),
+        amount: Number(r.amount || 0),
+        at: r.created_at,
+      })),
+    },
     recommendations: {
       priority_skills: prioritySkills,
       suggested_difficulty: suggestedDifficulty,

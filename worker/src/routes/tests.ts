@@ -809,9 +809,25 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
     if (userId > 0 && finalStatus === 'completed') {
       c.executionCtx.waitUntil((async () => {
         try {
-          const { analyzeAttempt, ingestWrongsToFsrs, sendNudge } = await import('../services/post-test-review');
+          const { analyzeAttempt, ingestWrongsToFsrs, sendNudge, buildAttemptSummary } = await import('../services/post-test-review');
           await ingestWrongsToFsrs(c.env, attemptId, userId);
           const analysis = await analyzeAttempt(c.env, attemptId, userId);
+
+          // Populate test_results.ai_summary so the student sees WHY they
+          // scored what they did when they open the results page a second
+          // time (or when the page loads after the waitUntil finishes).
+          // Rule-based, so no extra OpenAI call or latency.
+          try {
+            const summary = buildAttemptSummary(analysis, sectionScores, maxBand);
+            if (summary) {
+              await c.env.DB.prepare(
+                'UPDATE test_results SET ai_summary = ? WHERE attempt_id = ?'
+              ).bind(summary, attemptId).run();
+            }
+          } catch (e: any) {
+            console.error('ai_summary update failed (non-fatal):', e?.message || e);
+          }
+
           if (analysis && analysis.triaged_concepts && analysis.triaged_concepts.length > 0) {
             await sendNudge(c.env, userId, analysis);
           }
