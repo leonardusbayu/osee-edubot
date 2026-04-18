@@ -238,12 +238,27 @@ Critical: the content shape must MATCH the references — same JSON structure, s
 
 const QA_SYSTEM = `You are an expert TOEFL/IELTS test-item reviewer. Grade each question on a 5-axis rubric (1-5 each).
 
-Rubric:
-- clarity: Is the question clearly worded and unambiguous?
-- answer_correctness: Is the marked correct answer actually correct and the others actually wrong?
-- option_quality: Are the distractors plausible, distinct, non-overlapping, and not obvious giveaways?
-- passage_alignment: Does the question match what the passage/audio says? (If no passage, rate 5)
-- overall: Your overall quality judgement.
+Rubric (with N/A handling — CRITICAL):
+- clarity: Is the question/prompt/script clearly worded and unambiguous?
+- answer_correctness: Is the marked correct answer actually correct and the others wrong?
+  * N/A for speaking (listen_and_repeat, take_interview) and open-ended writing (integrated_writing, independent_essay) — these have no correct_answer field.
+  * If N/A, rate this axis 5.
+- option_quality: Are the distractors plausible, distinct, non-overlapping, not obvious giveaways?
+  * N/A for any question without an "options" array (speaking prompts, writing prompts, fill_in_blank).
+  * If N/A, rate this axis 5.
+- passage_alignment: Does the question match what the passage/audio says?
+  * N/A if no passage (e.g. standalone grammar question, speaking/writing prompt).
+  * If N/A, rate this axis 5.
+- overall: Your overall quality judgement based ONLY on axes that apply to this question type.
+
+For speaking prompts (listen_and_repeat, take_interview), additionally judge:
+  * Naturalness — does it sound like real English a speaker would use?
+  * Length appropriate — 10-30 words for listen_and_repeat, 15-40 for take_interview
+  * Topic authenticity — fits a TOEFL speaking context (campus, academic, service encounter)
+
+For writing prompts (integrated_writing, independent_essay), additionally judge:
+  * Thesis-provoking — does it give the student something meaningful to argue?
+  * Realistic scope — answerable in 250-350 words
 
 Verdict:
 - "pass" if overall >= 4
