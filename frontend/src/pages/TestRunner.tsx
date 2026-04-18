@@ -1222,13 +1222,13 @@ export default function TestRunner() {
       setTimeout(() => { fn(); setTransitioning(false); }, 150);
     };
 
-    // Listening passage — just advance, no answer to save
+    // Listening passage — just advance, no answer to save. Previously we
+    // blocked advance until `audioPlayed` flipped true via an <audio> event
+    // listener, but Telegram's iOS webview swallows those events and left
+    // students permanently stuck. The transcript is available inline as a
+    // fallback, and the time-box already disincentivises rushing through
+    // — students who skip are only hurting themselves. Trust + advance.
     if (currentQuestion.type === 'listening_passage') {
-      if (currentQuestion.audio_url && !audioPlayed) {
-        setSubmitError('Dengarkan audio terlebih dahulu sebelum melanjutkan.');
-        setSubmitting(false);
-        return;
-      }
       setSubmitError(null);
       if (currentQuestionIndex + 1 < questions.length) {
         advanceWithTransition(() => setQuestionIndex(currentQuestionIndex + 1));
@@ -2283,28 +2283,7 @@ export default function TestRunner() {
               <p className="text-tg-text leading-relaxed">{currentExplanation}</p>
             </div>
           )}
-          <button onClick={() => {
-            // Telegram's iOS webview doesn't reliably fire <audio> events,
-            // so audioPlayed can stay false even after the user listened.
-            // If they hit "Sudah dengar — lanjut" after we warned them,
-            // trust them and advance directly. Can't call handleSubmitAnswer
-            // here — its closure still sees audioPlayed=false (React batches
-            // state updates), which would re-block indefinitely.
-            if (submitError && currentQuestion.type === 'listening_passage' && currentQuestion.audio_url && !audioPlayed) {
-              setAudioPlayed(true);
-              setSubmitError(null);
-              hapticTap();
-              if (currentQuestionIndex + 1 < questions.length) {
-                setTransitioning(true);
-                setTimeout(() => {
-                  setQuestionIndex(currentQuestionIndex + 1);
-                  setTransitioning(false);
-                }, 150);
-              }
-              return;
-            }
-            handleSubmitAnswer();
-          }} disabled={submitting || showExplanation}
+          <button onClick={handleSubmitAnswer} disabled={submitting || showExplanation}
             className={`w-full py-3 rounded-xl font-medium disabled:opacity-50 active:scale-95 transition-transform ${submitError ? 'bg-red-500 text-white' : 'bg-tg-button text-tg-button-text'}`}>
             {submitting ? 'Menyimpan...' : submitError ? 'Sudah dengar — lanjut' : currentQuestion.type === 'listening_passage'
               ? 'Lanjut ke Soal'
