@@ -1,5 +1,25 @@
 # EduBot — TOEFL iBT & IELTS AI Tutor
 
+## 📋 Read this first every session
+
+**Bug log & fix history:** [`docs/BUGS.md`](./docs/BUGS.md) — canonical list of
+open issues, recent fixes with commit SHAs, and deferred design decisions.
+Check it before proposing fixes so we don't re-diagnose the same problems.
+
+**GitHub Issues:** https://github.com/leonardusbayu/osee-edubot/issues — each
+open bug in BUGS.md with a `Notes: #N` reference has a matching issue for
+stakeholder tracking.
+
+**When a fix ships:** update `docs/BUGS.md` (move row from Open → Fixed with
+commit SHA) and close the matching GitHub issue. Pruning rule: keep the last
+7 days of fixes in BUGS.md; older history lives in git log.
+
+**Obsidian memory (Claude Desktop sessions):** if Obsidian MCP is wired, use
+the `EduBot` vault for working notes: `sessions/YYYY-MM-DD.md` per session,
+`architecture/*.md` for pinned long-form design docs. Setup instructions:
+[`docs/CLAUDE_OBSIDIAN_SETUP.md`](./docs/CLAUDE_OBSIDIAN_SETUP.md). Git is
+canonical state; Obsidian is working memory — keep the split clean.
+
 ## Architecture
 
 ```
