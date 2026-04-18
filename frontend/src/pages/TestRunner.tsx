@@ -174,6 +174,7 @@ export default function TestRunner() {
   const [currentExplanation, setCurrentExplanation] = useState('');
   const [audioLoadError, setAudioLoadError] = useState(false);
   const [audioPlayed, setAudioPlayed] = useState(false);
+  const audioContainerRef = useRef<HTMLDivElement | null>(null);
   const [questionsLoading, setQuestionsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [offlineMode, setOfflineMode] = useState(false);
@@ -1665,13 +1666,13 @@ export default function TestRunner() {
               <p className="text-sm text-tg-hint mb-3">{currentQuestion.instruction}</p>
             )}
             {currentQuestion.audio_url ? (
-              <div className="bg-tg-secondary rounded-xl p-6 mb-4 text-center">
+              <div ref={audioContainerRef} className="bg-tg-secondary rounded-xl p-6 mb-4 text-center">
                 <p className="text-4xl mb-3">🎧</p>
                 <p className="text-sm font-medium mb-4">Dengarkan audio berikut dengan seksama</p>
                 {currentQuestion.passage && currentQuestion.passage.length > 4000 && (
                   <p className="text-xs text-orange-500 mb-2">⚠️ Audio panjang — bagian akhir mungkin terpotong</p>
                 )}
-                <AudioWithError src={currentQuestion.audio_url} className="w-full" onPlay={() => setAudioPlayed(true)} />
+                <AudioWithError src={currentQuestion.audio_url} className="w-full" onPlay={() => { setAudioPlayed(true); setSubmitError(null); }} />
               </div>
             ) : (
               <div className="bg-tg-secondary rounded-xl p-4 mb-4">
@@ -2265,7 +2266,18 @@ export default function TestRunner() {
               <p className="text-tg-text leading-relaxed">{currentExplanation}</p>
             </div>
           )}
-          <button onClick={handleSubmitAnswer} disabled={submitting || showExplanation}
+          <button onClick={() => {
+            // If the blocker is "audio not played yet", scrolling to the
+            // player is what the user actually needs — re-submitting from
+            // here would fail the same audioPlayed check. Clear the error,
+            // scroll up, and let the play handler clear it for good.
+            if (submitError && currentQuestion.audio_url && !audioPlayed) {
+              setSubmitError(null);
+              audioContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              return;
+            }
+            handleSubmitAnswer();
+          }} disabled={submitting || showExplanation}
             className={`w-full py-3 rounded-xl font-medium disabled:opacity-50 active:scale-95 transition-transform ${submitError ? 'bg-red-500 text-white' : 'bg-tg-button text-tg-button-text'}`}>
             {submitting ? 'Menyimpan...' : submitError ? 'Coba Lagi' : currentQuestion.type === 'listening_passage'
               ? 'Lanjut ke Soal'

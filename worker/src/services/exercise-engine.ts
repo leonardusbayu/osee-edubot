@@ -19,6 +19,8 @@ export interface StepDisplay {
   text: string;
   keyboard?: { inline_keyboard: any[][] };
   tts_text?: string;        // send as voice message
+  scene?: string;           // describe-picture: prompt for image generation
+  scene_vocab?: string[];   // describe-picture: key vocab, shapes the image
 }
 
 // ── Exercise Configuration ─────────────────────────────
@@ -544,7 +546,7 @@ export function getStepDisplay(type: string, lesson: any, step: number, sessionI
     return { text: '⚠️ Konten tidak tersedia. Ketik /study untuk menu.' };
   }
 
-  const { text: itemText, tts } = formatPracticeItem(type, item, lesson, idx);
+  const { text: itemText, tts, scene, scene_vocab } = formatPracticeItem(type, item, lesson, idx);
 
   const header = isChallenge
     ? `🏆 *CHALLENGE!*\n\n`
@@ -560,7 +562,7 @@ export function getStepDisplay(type: string, lesson: any, step: number, sessionI
     keyboard = hintSkipKb(sessionId);
   }
 
-  return { text: header + itemText, keyboard, tts_text: tts };
+  return { text: header + itemText, keyboard, tts_text: tts, scene, scene_vocab };
 }
 
 function formatExample(type: string, ex: any, lesson: any): { text: string; tts?: string } {
@@ -623,7 +625,12 @@ function formatExample(type: string, ex: any, lesson: any): { text: string; tts?
   }
 }
 
-function formatPracticeItem(type: string, item: any, lesson: any, idx: number): { text: string; tts?: string } {
+function formatPracticeItem(
+  type: string,
+  item: any,
+  lesson: any,
+  idx: number,
+): { text: string; tts?: string; scene?: string; scene_vocab?: string[] } {
   switch (type) {
     case 'fix_sentence':
       return { text: `❌ "${item.wrong}"\n\nPerbaiki kalimat ini! Kirim jawaban kamu:` };
@@ -658,7 +665,14 @@ function formatPracticeItem(type: string, item: any, lesson: any, idx: number): 
     case 'note_take':
       return { text: `🎧 Dengarkan dan catat poin-poin penting!\nKirim catatan kamu:`, tts: item.audio_text };
     case 'describe_pic':
-      return { text: `📸 *Scene:*\n${item.scene}\n\nKey vocab: ${(item.key_vocab || []).join(', ')}\n\n🎤 Describe dalam 30-60 detik (voice message)!` };
+      return {
+        // When a scene is present, the webhook consumer will send the image
+        // as a photo with this text as caption. Fallback path (no FAL key /
+        // generation error) shows the scene text inline like before.
+        text: `Key vocab: ${(item.key_vocab || []).join(', ')}\n\n🎤 Describe foto ini dalam 30-60 detik (voice message)!`,
+        scene: item.scene,
+        scene_vocab: item.key_vocab || [],
+      };
     case 'opinion':
       return { text: `💭 *Topic:*\n"${item.topic}"\n\nPhrases: ${(item.useful_phrases || []).join(' | ')}\n\n🎤 Kirim opini kamu (30-60 detik voice message)!` };
     case 'roleplay':
@@ -692,7 +706,14 @@ function formatPracticeItem(type: string, item: any, lesson: any, idx: number): 
       return { text: `${prefix}📌 *Insert:* "${item.sentence}"\n\nWhere does it best fit?\n\n${opts}` };
     }
     case 'photo_desc': {
-      return { text: `📸 *Scene:*\n${item.scene}\n\n🎧 Dengarkan 4 statements:`, tts: (item.audio_statements || []).map((s: string, i: number) => `${['A','B','C','D'][i]}. ${s}`).join('. ') };
+      // listen_describe: send scene as photo AND play audio statements. The
+      // student picks A/B/C/D based on which statement matches the picture.
+      return {
+        text: `🎧 Dengarkan 4 statements, pilih yang paling sesuai dengan gambar:`,
+        tts: (item.audio_statements || []).map((s: string, i: number) => `${['A','B','C','D'][i]}. ${s}`).join('. '),
+        scene: item.scene,
+        scene_vocab: item.key_vocab || [],
+      };
     }
     case 'quick_response':
       return { text: `🎧 Dengarkan pertanyaan, pilih respons terbaik!`, tts: item.audio_question + '. ' + (item.options || []).map((s: string, i: number) => `${['A','B','C'][i]}. ${s}`).join('. ') };

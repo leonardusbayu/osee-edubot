@@ -364,6 +364,43 @@ async function sendPhoto(env: Env, chatId: number, photoBytes: ArrayBuffer, capt
   }
 }
 
+/**
+ * Send an exercise step. If the step has a `scene` (describe-picture /
+ * listen-describe), generate or fetch the cached image and send as a photo
+ * with the step text as caption. Falls back to text-only on any failure so
+ * a down FAL key or R2 outage never kills the practice flow.
+ *
+ * Use this instead of sendMessage at all `getStepDisplay(...)` consumer
+ * sites. `tts` / `keyboard` are still the caller's responsibility.
+ */
+async function sendStepDisplay(
+  env: Env,
+  chatId: number,
+  display: { text: string; keyboard?: any; scene?: string; scene_vocab?: string[] },
+): Promise<void> {
+  if (display.scene) {
+    try {
+      const { getOrGenerateSceneImage } = await import('../services/scene-image');
+      const img = await getOrGenerateSceneImage(env, display.scene, display.scene_vocab || []);
+      if (img) {
+        // Photos can't carry an inline keyboard in the same API call cleanly
+        // with the multipart sendPhoto we use. Send image first, then the
+        // prompt + keyboard as a separate message.
+        await sendPhoto(env, chatId, img.bytes, undefined, 'scene.png', img.mime_type);
+        await sendMessage(env, chatId, display.text, display.keyboard);
+        return;
+      }
+    } catch (e) {
+      console.error('[scene-image] send failed:', (e as any)?.message || e);
+    }
+    // Fallback: no image — surface the scene text inline so the student
+    // still knows what to describe.
+    await sendMessage(env, chatId, `📸 *Scene:*\n${display.scene}\n\n${display.text}`, display.keyboard);
+    return;
+  }
+  await sendMessage(env, chatId, display.text, display.keyboard);
+}
+
 // Resolve a [VISUAL:concept:type] tag: hit the cache, pull bytes from
 // R2, send to Telegram as a photo. Swallows errors — a broken visual
 // must never take down the tutor turn.
@@ -3511,7 +3548,7 @@ async function handleMessage(message: any, env: Env) {
 
         await sendMessage(env, chatId, '⏭ Dilewati.');
         const display = getStepDisplay(activeExercise.type, meta.lesson, meta.step, activeExercise.id);
-        await sendMessage(env, chatId, display.text, display.keyboard);
+        await sendStepDisplay(env, chatId, display);
         if (display.tts_text) await sendTTSAudio(env, chatId, display.tts_text);
         return;
       }
@@ -5324,7 +5361,14 @@ async function handleCallbackQuery(query: any, env: Env) {
 
       // Render step 0 (teach)
       const display = getStepDisplay(exerciseType, lesson, 0, sessionId);
-      await editMessage(env, chatId, messageId, display.text, display.keyboard);
+      if (display.scene) {
+        // Can't editMessage into a photo — clear the old message and send
+        // photo + text as fresh messages via sendStepDisplay.
+        await editMessage(env, chatId, messageId, '📸 Memuat gambar...');
+        await sendStepDisplay(env, chatId, display);
+      } else {
+        await editMessage(env, chatId, messageId, display.text, display.keyboard);
+      }
       if (display.tts_text) await sendTTSAudio(env, chatId, display.tts_text);
     } catch (e: any) {
       console.error('Exercise start error:', e);
@@ -5385,7 +5429,12 @@ async function handleCallbackQuery(query: any, env: Env) {
         ).bind(JSON.stringify(meta), sessionId).run();
 
         const display = getStepDisplay(exerciseType, meta.lesson, meta.step, sessionId);
-        await editMessage(env, chatId, messageId, display.text, display.keyboard);
+        if (display.scene) {
+          await editMessage(env, chatId, messageId, '📸 Memuat gambar...');
+          await sendStepDisplay(env, chatId, display);
+        } else {
+          await editMessage(env, chatId, messageId, display.text, display.keyboard);
+        }
         if (display.tts_text) await sendTTSAudio(env, chatId, display.tts_text);
         return;
       }
@@ -5426,7 +5475,7 @@ async function handleCallbackQuery(query: any, env: Env) {
 
         await sendMessage(env, chatId, '⏭ Dilewati.');
         const display = getStepDisplay(exerciseType, meta.lesson, meta.step, sessionId);
-        await sendMessage(env, chatId, display.text, display.keyboard);
+        await sendStepDisplay(env, chatId, display);
         if (display.tts_text) await sendTTSAudio(env, chatId, display.tts_text);
         return;
       }
