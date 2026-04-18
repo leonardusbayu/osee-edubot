@@ -159,13 +159,30 @@ speakingRoutes.post('/evaluate', async (c) => {
     } else {
       const result = await scoreInterview(c.env.OPENAI_API_KEY, transcription, prompt, testType, maxBand);
       if (sessionId) {
+        // Split the two writes so a dim-insert failure doesn't swallow the
+        // session update with it. Before this split, both ran in one
+        // try/catch — a dim insert throw made the session UPDATE invisible
+        // too (it might have succeeded but the error was opaque, and either
+        // way the dim row never landed). Now:
+        //   1. Session UPDATE (core score) in its own try — if this fails
+        //      the user sees a real error and can retry.
+        //   2. Dim INSERT in its own try — on failure, mark the session
+        //      feedback with a diagnostic note so admins can see which
+        //      sessions have missing dims without a full table scan.
+        // Tracks P2 BUGS.md #4.
+        let sessionUpdated = false;
         try {
           await c.env.DB.prepare(
             `UPDATE speaking_sessions SET transcription = ?, score = ?, feedback = ?, status = 'completed', completed_at = datetime('now') WHERE id = ?`
           ).bind(transcription, result.score, JSON.stringify(result.criteria), sessionId).run();
+          sessionUpdated = true;
+        } catch (e: any) {
+          console.error('speaking_sessions UPDATE failed:', e?.message || e);
+        }
 
-          if (result.dimensions) {
-            const d = result.dimensions;
+        if (sessionUpdated && result.dimensions) {
+          const d = result.dimensions;
+          try {
             await c.env.DB.prepare(
               `INSERT INTO speaking_dimension_scores
                  (session_id, user_id, test_type, fluency_coherence, lexical_resource,
@@ -178,9 +195,19 @@ speakingRoutes.post('/evaluate', async (c) => {
               d.relevancy_score, result.word_count || 0, null,
               d.fluency_note, d.lexical_note, d.grammar_note, d.pronunciation_note
             ).run();
+          } catch (dimErr: any) {
+            // Loud log so ops can surface this, plus a diagnostic stamp
+            // on the session's feedback so admin tools can filter
+            // "sessions with missing dims" without joining every row.
+            console.error('speaking_dimension_scores INSERT failed:', dimErr?.message || dimErr);
+            try {
+              const existing = JSON.parse(JSON.stringify(result.criteria || {}));
+              existing.__dim_insert_failed = dimErr?.message || 'unknown';
+              await c.env.DB.prepare(
+                `UPDATE speaking_sessions SET feedback = ? WHERE id = ?`
+              ).bind(JSON.stringify(existing).slice(0, 4000), sessionId).run();
+            } catch { /* best-effort */ }
           }
-        } catch (e) {
-          console.error('speaking_sessions update error:', (e as any)?.message);
         }
       }
       // Log Whisper API cost (best-effort)

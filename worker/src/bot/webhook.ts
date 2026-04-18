@@ -398,12 +398,13 @@ async function handleVisualTag(
 // already seen the lesson). Log and continue instead.
 async function saveToHistory(env: Env, userId: number, userMsg: string, assistantMsg: string) {
   try {
-    await env.DB.prepare(
-      'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
-    ).bind(userId, 'user', userMsg).run();
-    await env.DB.prepare(
-      'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
-    ).bind(userId, 'assistant', assistantMsg).run();
+    // Use persistConversationMessage so topic + is_confusion are tagged
+    // per turn (BUGS.md #3). Previously these INSERTs wrote role+content
+    // only — reports could count messages but not tell which concepts the
+    // student was struggling with.
+    const { persistConversationMessage } = await import('../services/chat-analysis');
+    await persistConversationMessage(env, userId, 'user', userMsg);
+    await persistConversationMessage(env, userId, 'assistant', assistantMsg);
   } catch (e) {
     console.warn('[webhook] saveToHistory failed (non-fatal):', e);
   }

@@ -19,11 +19,11 @@ ships, move it from Open → Fixed with the commit hash.
 
 | # | P | Area | Title | Issue | Notes |
 |---|---|------|-------|:-----:|-------|
-| ~~1~~ | ~~P1~~ | ~~frontend~~ | ~~Offline sync silently drops answers at maxRetries~~ | ~~[#1](https://github.com/leonardusbayu/osee-edubot/issues/1)~~ | **UI SHIPPED (F15)** — banner + manual retry. Server-side idempotency (client UUID + dedup) still open as a follow-up if dropped-answer incidents continue. |
+| ~~1~~ | ~~P1~~ | ~~frontend/worker~~ | ~~Offline sync silently drops answers at maxRetries~~ | ~~[#1](https://github.com/leonardusbayu/osee-edubot/issues/1)~~ | **FIXED (F15 + F25)** — UI banner + manual retry (F15) + server-side idempotency via client_uuid (F25, migration 052). |
 | ~~2~~ | ~~P1~~ | ~~worker~~ | ~~Diagnostic test has no per-answer audit log~~ | ~~[#2](https://github.com/leonardusbayu/osee-edubot/issues/2)~~ | **FIXED (F16)** — migration 050_diagnostic_answer_log.sql + submitAnswer writes rows + buildStudentReport surfaces them. |
-| 3 | P2 | worker | Tutor chat — no per-turn evidence/metadata | [#5](https://github.com/leonardusbayu/osee-edubot/issues/5) | `chat_analysis.analyzeMessageTopic` exists but isn't called. |
-| 4 | P2 | worker | Speaking dimension scores silently dropped on error | — | `speaking.ts` — second insert throws, session still looks successful. |
-| 5 | P2 | worker | Game score + XP award not atomic | — | `games.ts` — two separate writes, no transaction. |
+| ~~3~~ | ~~P2~~ | ~~worker~~ | ~~Tutor chat — no per-turn evidence/metadata~~ | ~~[#5](https://github.com/leonardusbayu/osee-edubot/issues/5)~~ | **FIXED (F28)** — migration 051 + `persistConversationMessage` helper tags all 6 INSERT sites with topic + is_confusion. |
+| ~~4~~ | ~~P2~~ | ~~worker~~ | ~~Speaking dimension scores silently dropped on error~~ | — | **FIXED (F26)** — session update + dim insert now in separate try/catches; dim failures stamp a diagnostic flag on session.feedback so admin tools can filter. |
+| ~~5~~ | ~~P2~~ | ~~worker~~ | ~~Game score + XP award not atomic~~ | — | **FIXED (F27)** — all 6 game endpoints now call awardXp first then INSERT game_scores with the real xp_earned. Phantom `xp_earned=0` rows eliminated. |
 | ~~6~~ | ~~P1~~ | ~~worker~~ | ~~Lesson steps never advance on natural completion~~ | ~~[#3](https://github.com/leonardusbayu/osee-edubot/issues/3)~~ | **FIXED (F17)** — explicit "✅ Selesai step ini" button + lesson_complete_X callback. Auto-advance on CQ pass deferred (not yet measured if needed). |
 | ~~7~~ | ~~P2~~ | ~~worker~~ | ~~/progress + /profile bot commands don't use buildStudentReport~~ | — | **FIXED (F22)** — both now call buildStudentReport + dedicated formatters in bot-report-formatters.ts. |
 | ~~8~~ | ~~P2~~ | ~~worker~~ | ~~Coin shop — coins earned but no spend path~~ | ~~[#6](https://github.com/leonardusbayu/osee-edubot/issues/6)~~ | **FIXED (F18)** — `/shop` command + purchase callback; streak_freeze and extra_questions fully wired; others refund with "coming soon" |
@@ -64,7 +64,11 @@ ships, move it from Open → Fixed with the commit hash.
 | F21 | `26254ce` | worker | Friend quest progress — `recordQuestEvent` hooked into awardXp; quests now increment, complete, grant rewards |
 | F22 | _this commit_ | worker | `/progress` + `/profile` unified under buildStudentReport + shared formatters |
 | F23 | _this commit_ | worker | Companion writes back to mental model — [CONCEPT: …] tag parsing |
-| F24 | _this commit_ | ops | TOEFL ITP broken error-id cleanup script (operator dry-run + one-off execute) |
+| F24 | `a63196e` + `92c0d6b` | ops | TOEFL ITP broken error-id cleanup — 54 published rows demoted to draft via operator-run script |
+| F25 | _this commit_ | worker/frontend | Offline-sync server-side idempotency via client_uuid; migration 052; both immediate-submit and offline-queue paths carry the UUID |
+| F26 | _this commit_ | worker | Speaking dim score failures no longer silent — session update + dim insert in separate try/catches; dim failures stamp diagnostic flag on feedback |
+| F27 | _this commit_ | worker | Game score + XP — awardXp runs first, INSERT uses real xp_earned; all 6 game endpoints fixed |
+| F28 | _this commit_ | worker | Conversation topic + is_confusion tagging (migration 051 + persistConversationMessage helper); 6 INSERT sites updated |
 
 Live in production: F1–F12 (worker deployed manually via wrangler on Windows;
 frontend deployed via `wrangler pages deploy` from Windows). `tts_cache` was

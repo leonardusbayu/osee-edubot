@@ -331,7 +331,7 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
     } catch {}
 
     const body = await c.req.json();
-    const { section, question_index, content_id, answer_data, time_spent_seconds = 0 } = body;
+    const { section, question_index, content_id, answer_data, time_spent_seconds = 0, client_uuid } = body;
 
     // Input validation — reject malformed payloads before hitting DB
     if (typeof section !== 'string' || section.length === 0 || section.length > 50) {
@@ -349,8 +349,34 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
     if (content_id !== undefined && content_id !== null && (typeof content_id !== 'number' || !Number.isFinite(content_id))) {
       return c.json({ error: 'Invalid content_id' }, 400);
     }
+    const safeUuid = (typeof client_uuid === 'string' && client_uuid.length > 0 && client_uuid.length <= 64)
+      ? client_uuid
+      : null;
 
-    // Check if answer exists
+    // Idempotency: if the client tagged this submission with a UUID,
+    // check for an existing row with the same UUID first. This catches
+    // the offline-sync retry case where the previous POST actually
+    // persisted on the server but the HTTP response was lost — replaying
+    // would otherwise create a duplicate or hit the position-unique
+    // constraint. Nullable column (migration 052); pre-migration clients
+    // that don't send uuid skip this and fall through to the position-
+    // based dedup below, which is how the endpoint used to behave.
+    // Tracks P1 BUGS.md #1 (server-side half).
+    if (safeUuid) {
+      const dup = await c.env.DB.prepare(
+        'SELECT id, is_correct FROM attempt_answers WHERE attempt_id = ? AND client_uuid = ? LIMIT 1'
+      ).bind(attemptId, safeUuid).first() as any;
+      if (dup) {
+        return c.json({
+          saved: true,
+          idempotent: true,
+          is_correct: dup.is_correct,
+          next_question_index: question_index + 1,
+        });
+      }
+    }
+
+    // Check if answer exists at this (attempt, section, question_index)
     const existing = await c.env.DB.prepare(
       'SELECT id FROM attempt_answers WHERE attempt_id = ? AND section = ? AND question_index = ?'
     ).bind(attemptId, section, question_index).first();
@@ -378,17 +404,29 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
 
     if (existing) {
       await c.env.DB.prepare(
-        'UPDATE attempt_answers SET answer_data = ?, is_correct = ?, submitted_at = ?, time_spent_seconds = ?, content_id = ? WHERE id = ?'
-      ).bind(JSON.stringify(answer_data), isCorrect !== null ? (isCorrect ? 1 : 0) : null, new Date().toISOString(), time_spent_seconds, content_id || null, existing.id).run();
+        `UPDATE attempt_answers SET answer_data = ?, is_correct = ?, submitted_at = ?,
+                                    time_spent_seconds = ?, content_id = ?,
+                                    client_uuid = COALESCE(client_uuid, ?)
+         WHERE id = ?`
+      ).bind(
+        JSON.stringify(answer_data),
+        isCorrect !== null ? (isCorrect ? 1 : 0) : null,
+        new Date().toISOString(),
+        time_spent_seconds,
+        content_id || null,
+        safeUuid,
+        existing.id,
+      ).run();
     } else {
       await c.env.DB.prepare(
-        `INSERT INTO attempt_answers (attempt_id, section, question_index, content_id, answer_data, is_correct, score, time_spent_seconds)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO attempt_answers (attempt_id, section, question_index, content_id, answer_data, is_correct, score, time_spent_seconds, client_uuid)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         attemptId, section, question_index, content_id || null, JSON.stringify(answer_data),
         isCorrect !== null ? (isCorrect ? 1 : 0) : null,
         isCorrect !== null ? (isCorrect ? 1.0 : 0.0) : null,
         time_spent_seconds,
+        safeUuid,
       ).run();
     }
 

@@ -8,6 +8,10 @@ interface PendingAnswer {
   answerData: any;
   retries: number;
   maxRetries: number;
+  // Idempotency key generated once when the answer is queued. Sent on
+  // every retry so the server can dedup a second POST for the same
+  // logical submission (see migration 052 + BUGS.md #1).
+  clientUuid: string;
 }
 
 interface TestState {
@@ -166,6 +170,16 @@ export const useTestStore = create<TestState>((set, get) => ({
 
   // Queue answer for syncing
   queueAnswer: (section: string, questionIndex: number, answerData: any) => {
+    // Generate an idempotency key once per queued submission. The sync
+    // loop sends this on every retry so the server dedups if an earlier
+    // attempt actually persisted but the HTTP response was lost (common
+    // on poor mobile connections). crypto.randomUUID is in all modern
+    // browsers and Telegram's in-app webview; fallback covers the rare
+    // edge case where it isn't.
+    const clientUuid =
+      (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function')
+        ? (crypto as any).randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
     set((state) => ({
       pendingAnswers: [
         ...state.pendingAnswers,
@@ -175,6 +189,7 @@ export const useTestStore = create<TestState>((set, get) => ({
           answerData,
           retries: 0,
           maxRetries: 3,
+          clientUuid,
         },
       ],
     }));

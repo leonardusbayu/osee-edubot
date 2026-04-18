@@ -54,6 +54,10 @@ export function startOfflineSyncService() {
             section: answer.section,
             question_index: answer.questionIndex,
             answer_data: answer.answerData,
+            // Idempotency key — if the same UUID landed on a previous
+            // successful POST whose response was lost, the server
+            // dedups instead of creating a duplicate row.
+            client_uuid: answer.clientUuid,
           }),
         });
 
@@ -104,6 +108,7 @@ export async function syncPendingAnswers(attemptId: number) {
           section: answer.section,
           question_index: answer.questionIndex,
           answer_data: answer.answerData,
+          client_uuid: answer.clientUuid,
         }),
       });
 

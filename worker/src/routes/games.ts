@@ -173,22 +173,27 @@ gameRoutes.post('/speed-drill/finish', async (c) => {
   const streakBonus = Math.round(accuracy >= 0.8 ? correct_count * 20 : 0);
   const totalScore = baseScore + timeBonus + streakBonus;
 
-  // Store game score
+  // Compute XP FIRST, then insert game_scores with the real awarded amount.
+  // Previously the INSERT hardcoded xp_earned=0 with a "will be set after
+  // awardXp" comment, but that UPDATE never happened — every game_scores
+  // row had xp_earned=0 even when XP was credited. Order-reversal closes
+  // the gap: if awardXp throws, game_scores isn't written (same as
+  // today's failure mode); if awardXp succeeds, we use the REAL xp_earned
+  // which includes the 2x-first-of-day multiplier. BUGS.md #5.
+  const xpAmount = Math.round(5 + accuracy * 30 + (totalScore > 500 ? 10 : 0));
+  const xpResult = await awardXp(c.env, user.id, 'speed_drill', {
+    amount: xpAmount,
+    detail: `score=${totalScore} correct=${correct_count}/${total_count}`,
+  });
+
   await c.env.DB.prepare(
     `INSERT INTO game_scores (user_id, game_type, score, time_seconds, correct_count, total_count, streak_bonus, metadata, xp_earned)
      VALUES (?, 'speed_drill', ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(
     user.id, totalScore, time_seconds || null, correct_count, total_count,
     streakBonus, JSON.stringify({ answers: answers || [] }),
-    0, // will be set after awardXp
+    xpResult.xp_earned,
   ).run();
-
-  // Award XP based on performance (scales with accuracy: 0%→5 XP, 100%→35 XP)
-  const xpAmount = Math.round(5 + accuracy * 30 + (totalScore > 500 ? 10 : 0));
-  const xpResult = await awardXp(c.env, user.id, 'speed_drill', {
-    amount: xpAmount,
-    detail: `score=${totalScore} correct=${correct_count}/${total_count}`,
-  });
 
   return c.json({
     score: totalScore,
@@ -317,19 +322,27 @@ gameRoutes.post('/wordle/finish', async (c) => {
   const { won, guesses_used } = await c.req.json();
   const score = won ? Math.max(100, 700 - (guesses_used - 1) * 100) : 0;
 
-  await c.env.DB.prepare(
-    `INSERT INTO game_scores (user_id, game_type, score, correct_count, total_count, metadata, xp_earned)
-     VALUES (?, 'wordle', ?, ?, ?, ?, 0)`,
-  ).bind(user.id, score, won ? 1 : 0, guesses_used || 6,
-         JSON.stringify({ won, guesses_used })).run();
-
+  // Award XP first (only on win), then insert game_scores with the real
+  // xp_earned. Same pattern as speed_drill — closes BUGS.md #5.
+  let xpEarned = 0;
+  let xpResult: any = { xp_earned: 0 };
   if (won) {
-    const xpResult = await awardXp(c.env, user.id, 'wordle_win', {
+    xpResult = await awardXp(c.env, user.id, 'wordle_win', {
       detail: `guesses=${guesses_used}`,
     });
-    return c.json({ score, ...xpResult });
+    xpEarned = xpResult.xp_earned;
   }
 
+  await c.env.DB.prepare(
+    `INSERT INTO game_scores (user_id, game_type, score, correct_count, total_count, metadata, xp_earned)
+     VALUES (?, 'wordle', ?, ?, ?, ?, ?)`,
+  ).bind(
+    user.id, score, won ? 1 : 0, guesses_used || 6,
+    JSON.stringify({ won, guesses_used }),
+    xpEarned,
+  ).run();
+
+  if (won) return c.json({ score, ...xpResult });
   return c.json({ score, xp_earned: 0 });
 });
 
@@ -452,17 +465,21 @@ gameRoutes.post('/gap-fill/finish', async (c) => {
   const diffMultiplier = difficulty === 'hard' ? 1.5 : difficulty === 'easy' ? 0.8 : 1.0;
   const score = Math.round(correct_count * 120 * diffMultiplier);
 
-  await c.env.DB.prepare(
-    `INSERT INTO game_scores (user_id, game_type, score, time_seconds, correct_count, total_count, metadata, xp_earned)
-     VALUES (?, 'gap_fill', ?, ?, ?, ?, ?, 0)`,
-  ).bind(user.id, score, time_seconds || null, correct_count, total_count,
-         JSON.stringify({ difficulty })).run();
-
+  // XP first, then game_scores with real xp_earned (BUGS.md #5).
   const xpAmount = Math.round(15 + accuracy * 15);
   const xpResult = await awardXp(c.env, user.id, 'gap_fill', {
     amount: xpAmount,
     detail: `score=${score} ${difficulty} correct=${correct_count}/${total_count}`,
   });
+
+  await c.env.DB.prepare(
+    `INSERT INTO game_scores (user_id, game_type, score, time_seconds, correct_count, total_count, metadata, xp_earned)
+     VALUES (?, 'gap_fill', ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    user.id, score, time_seconds || null, correct_count, total_count,
+    JSON.stringify({ difficulty }),
+    xpResult.xp_earned,
+  ).run();
 
   return c.json({ score, accuracy: Math.round(accuracy * 100), ...xpResult });
 });
@@ -674,15 +691,19 @@ gameRoutes.post('/drag-words/finish', async (c) => {
   const accuracy = total_count > 0 ? correct_count / total_count : 0;
   const score = Math.round(correct_count * 150);
 
-  await c.env.DB.prepare(
-    `INSERT INTO game_scores (user_id, game_type, score, time_seconds, correct_count, total_count, xp_earned)
-     VALUES (?, 'drag_words', ?, ?, ?, ?, 0)`,
-  ).bind(user.id, score, time_seconds || null, correct_count, total_count).run();
-
+  // XP first, then game_scores with real xp_earned (BUGS.md #5).
   const xpResult = await awardXp(c.env, user.id, 'speed_drill', {
     amount: Math.round(10 + accuracy * 20),
     detail: `drag_words score=${score}`,
   });
+
+  await c.env.DB.prepare(
+    `INSERT INTO game_scores (user_id, game_type, score, time_seconds, correct_count, total_count, xp_earned)
+     VALUES (?, 'drag_words', ?, ?, ?, ?, ?)`,
+  ).bind(
+    user.id, score, time_seconds || null, correct_count, total_count,
+    xpResult.xp_earned,
+  ).run();
 
   return c.json({ score, accuracy: Math.round(accuracy * 100), ...xpResult });
 });
@@ -779,15 +800,20 @@ gameRoutes.post('/dictation/finish', async (c) => {
   const accuracy = total_count > 0 ? correct_count / total_count : 0;
   const score = Math.round(correct_count * 80 + accuracy * 200);
 
-  await c.env.DB.prepare(
-    `INSERT INTO game_scores (user_id, game_type, score, time_seconds, correct_count, total_count, xp_earned)
-     VALUES (?, 'dictation', ?, ?, ?, ?, 0)`,
-  ).bind(user.id, score, time_seconds || null, correct_count, total_count).run();
-
+  // XP first, then game_scores with real xp_earned (BUGS.md #5).
   const xpResult = await awardXp(c.env, user.id, 'speed_drill', {
     amount: Math.round(12 + accuracy * 18),
     detail: `dictation score=${score}`,
   });
+
+  await c.env.DB.prepare(
+    `INSERT INTO game_scores (user_id, game_type, score, time_seconds, correct_count, total_count, xp_earned)
+     VALUES (?, 'dictation', ?, ?, ?, ?, ?)`,
+  ).bind(
+    user.id, score, time_seconds || null, correct_count, total_count,
+    xpResult.xp_earned,
+  ).run();
+
   return c.json({ score, accuracy: Math.round(accuracy * 100), ...xpResult });
 });
 
@@ -866,15 +892,20 @@ gameRoutes.post('/mark-words/finish', async (c) => {
   const accuracy = total_count > 0 ? correct_count / total_count : 0;
   const score = Math.round(correct_count * 100 + accuracy * 150);
 
-  await c.env.DB.prepare(
-    `INSERT INTO game_scores (user_id, game_type, score, time_seconds, correct_count, total_count, xp_earned)
-     VALUES (?, 'mark_words', ?, ?, ?, ?, 0)`,
-  ).bind(user.id, score, time_seconds || null, correct_count, total_count).run();
-
+  // XP first, then game_scores with real xp_earned (BUGS.md #5).
   const xpResult = await awardXp(c.env, user.id, 'speed_drill', {
     amount: Math.round(10 + accuracy * 15),
     detail: `mark_words score=${score}`,
   });
+
+  await c.env.DB.prepare(
+    `INSERT INTO game_scores (user_id, game_type, score, time_seconds, correct_count, total_count, xp_earned)
+     VALUES (?, 'mark_words', ?, ?, ?, ?, ?)`,
+  ).bind(
+    user.id, score, time_seconds || null, correct_count, total_count,
+    xpResult.xp_earned,
+  ).run();
+
   return c.json({ score, accuracy: Math.round(accuracy * 100), ...xpResult });
 });
 

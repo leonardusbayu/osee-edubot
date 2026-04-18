@@ -1216,6 +1216,16 @@ export default function TestRunner() {
     const timeSpentSeconds = Math.round((Date.now() - questionStartTimeRef.current) / 1000);
 
     let saved = false;
+    // Generate ONE idempotency key for this logical submission. All retries
+    // within this loop reuse it, so if a prior POST actually persisted but
+    // the response was lost (common on poor mobile), the server dedups
+    // instead of creating a duplicate row. Matches the offline-sync queue
+    // pattern. Server-side: migration 052 + tests.ts safeUuid check.
+    const submitUuid =
+      (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function')
+        ? (crypto as any).randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+
     for (let retry = 0; retry < 3; retry++) {
       try {
         const response = await authedFetch(`/api/tests/attempt/${attemptId}/answer`, {
@@ -1228,6 +1238,7 @@ export default function TestRunner() {
             sub_question_index: currentQuestion?._subIndex ?? null,
             answer_data: answerData,
             time_spent_seconds: timeSpentSeconds,
+            client_uuid: submitUuid,
           }),
         });
 
@@ -1415,6 +1426,14 @@ export default function TestRunner() {
 
         // Submit to backend
         try {
+          // Speaking-only submit path has no retry loop (AudioRecorder
+          // handles retry at audio-upload tier), but still benefit from
+          // the idempotency key — if the server ACK'd but the client lost
+          // connection, advancing forward won't double-count the score.
+          const speakingUuid =
+            (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function')
+              ? (crypto as any).randomUUID()
+              : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
           const submitResp = await authedFetch(`/api/tests/attempt/${attemptId}/answer`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1424,6 +1443,7 @@ export default function TestRunner() {
               content_id: currentQuestion?.id || null,
               sub_question_index: currentQuestion?._subIndex ?? null,
               answer_data: { audio: true, transcription: result.transcription, score: result.score },
+              client_uuid: speakingUuid,
             }),
           });
 

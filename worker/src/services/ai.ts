@@ -167,13 +167,10 @@ export async function getTutorResponse(
   try {
     const text = await openaiChat(env.OPENAI_API_KEY, model, systemPrompt, messages);
 
-    // Save conversation
-    await env.DB.prepare(
-      'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
-    ).bind(user.id, 'user', message).run();
-    await env.DB.prepare(
-      'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
-    ).bind(user.id, 'assistant', text).run();
+    // Save conversation (tagged with topic + is_confusion — BUGS.md #3)
+    const { persistConversationMessage } = await import('./chat-analysis');
+    await persistConversationMessage(env, user.id, 'user', message);
+    await persistConversationMessage(env, user.id, 'assistant', text);
 
     // Log API usage for cost tracking
     try {

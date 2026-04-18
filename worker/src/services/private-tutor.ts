@@ -424,14 +424,11 @@ export async function getPrivateTutorResponse(
     }
   } catch {}
 
-  // 8. Save conversation
+  // 8. Save conversation (tagged with topic + is_confusion — BUGS.md #3)
   try {
-    await env.DB.prepare(
-      'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
-    ).bind(user.id, 'user', message).run();
-    await env.DB.prepare(
-      'INSERT INTO conversation_messages (user_id, role, content) VALUES (?, ?, ?)'
-    ).bind(user.id, 'assistant', responseText).run();
+    const { persistConversationMessage } = await import('./chat-analysis');
+    await persistConversationMessage(env, user.id, 'user', message);
+    await persistConversationMessage(env, user.id, 'assistant', responseText);
   } catch {}
 
   // 9. Update profile message count

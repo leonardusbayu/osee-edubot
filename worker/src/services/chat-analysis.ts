@@ -164,6 +164,29 @@ const CONFUSION_SIGNALS = [
   'same thing', 'indu', ' sama ',
 ];
 
+/**
+ * Insert a conversation_messages row with topic + is_confusion populated.
+ * Replaces the raw INSERT pattern that was scattered across webhook.ts,
+ * ai.ts, and private-tutor.ts — each of those logged role+content but
+ * skipped the topic tagging, so analytics like "which concept is this
+ * student confused about this week" were impossible. Tracks BUGS.md #3.
+ *
+ * For role='user' we always analyze. For role='assistant'/'bot' we also
+ * analyze so admin reports can see "tutor replied about X 40 times this
+ * week" — cheap, and the topic reflects the user's concern either way.
+ */
+export async function persistConversationMessage(
+  env: { DB: any },
+  userId: number,
+  role: 'user' | 'assistant' | 'bot' | string,
+  content: string,
+): Promise<void> {
+  const { topic, isConfusion } = analyzeMessageTopic(content);
+  await env.DB.prepare(
+    'INSERT INTO conversation_messages (user_id, role, content, topic, is_confusion) VALUES (?, ?, ?, ?, ?)',
+  ).bind(userId, role, content, topic, isConfusion ? 1 : 0).run();
+}
+
 // Analyze a message and detect topic
 export function analyzeMessageTopic(content: string): { topic: ChatTopic; isConfusion: boolean } {
   const lowerContent = content.toLowerCase();
