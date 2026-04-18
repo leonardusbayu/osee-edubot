@@ -361,8 +361,11 @@ gameRoutes.get('/gap-fill/start', async (c) => {
   const testType = c.req.query('test_type') || user.target_test || 'TOEFL_IBT';
   const difficulty = c.req.query('difficulty') || 'medium'; // easy=3blanks, medium=4, hard=5
 
-  // Pull listening-section content with passage_text (the transcript)
-  const { results: items } = await c.env.DB.prepare(
+  // Pull listening-section content with passage_text (the transcript).
+  // Over-fetch 3x, then reorder by exposure so the student doesn't see the
+  // same 3 gap-fill passages on every play — this is the content-variety
+  // fix for games (previously games relied purely on ORDER BY RANDOM).
+  const { results: rawItems } = await c.env.DB.prepare(
     `SELECT id, passage_text, question_text, correct_answer, option_a, option_b, option_c, option_d
        FROM test_contents
       WHERE test_type = ? AND status = 'published'
@@ -370,7 +373,15 @@ gameRoutes.get('/gap-fill/start', async (c) => {
         AND passage_text IS NOT NULL AND LENGTH(passage_text) > 50
       ORDER BY RANDOM()
       LIMIT ?`,
-  ).bind(testType, count).all<any>();
+  ).bind(testType, count * 3).all<any>();
+
+  const { reorderByExposure, recordExposures } = await import('../services/question-exposure');
+  const reordered = await reorderByExposure(c.env, user.id, (rawItems || []) as any[]);
+  const items = reordered.slice(0, count);
+  const pickedIds = items.map((r: any) => Number(r.id)).filter((n) => Number.isInteger(n));
+  if (pickedIds.length > 0) {
+    c.executionCtx.waitUntil(recordExposures(c.env, user.id, pickedIds, 'game'));
+  }
 
   if (!items?.length) {
     return c.json({ error: 'Not enough listening content', available: 0 }, 400);
@@ -633,8 +644,10 @@ gameRoutes.get('/drag-words/start', async (c) => {
   count = Math.min(10, Math.max(3, count));
   const testType = c.req.query('test_type') || user.target_test || 'TOEFL_IBT';
 
-  // Pull sentences from passage_text of reading/structure content
-  const { results: items } = await c.env.DB.prepare(
+  // Pull sentences from passage_text of reading/structure content.
+  // Over-fetch 3x + reorder by exposure so the same passages don't
+  // dominate every drag-words session.
+  const { results: rawItems } = await c.env.DB.prepare(
     `SELECT id, passage_text, question_text
        FROM test_contents
       WHERE test_type = ? AND status = 'published'
@@ -642,6 +655,13 @@ gameRoutes.get('/drag-words/start', async (c) => {
         AND passage_text IS NOT NULL AND LENGTH(passage_text) > 30
       ORDER BY RANDOM() LIMIT ?`,
   ).bind(testType, count * 3).all<any>();
+
+  const { reorderByExposure, recordExposures } = await import('../services/question-exposure');
+  const items = await reorderByExposure(c.env, user.id, (rawItems || []) as any[]);
+  const pickedIds = (items || []).slice(0, count).map((r: any) => Number(r.id)).filter((n) => Number.isInteger(n));
+  if (pickedIds.length > 0) {
+    c.executionCtx.waitUntil(recordExposures(c.env, user.id, pickedIds, 'game'));
+  }
 
   const exercises: Array<{
     id: number;
@@ -721,14 +741,22 @@ gameRoutes.get('/dictation/start', async (c) => {
   const testType = c.req.query('test_type') || user.target_test || 'TOEFL_IBT';
 
   // Use listening content that has passage_text as the transcript
-  const { results: items } = await c.env.DB.prepare(
+  // Over-fetch 3x + reorder by exposure so dictation doesn't dry up.
+  const { results: rawItems } = await c.env.DB.prepare(
     `SELECT id, passage_text
        FROM test_contents
       WHERE test_type = ? AND status = 'published'
         AND section = 'listening'
         AND passage_text IS NOT NULL AND LENGTH(passage_text) > 30
       ORDER BY RANDOM() LIMIT ?`,
-  ).bind(testType, count).all<any>();
+  ).bind(testType, count * 3).all<any>();
+
+  const { reorderByExposure, recordExposures } = await import('../services/question-exposure');
+  const items = (await reorderByExposure(c.env, user.id, (rawItems || []) as any[])).slice(0, count);
+  const pickedIds = items.map((r: any) => Number(r.id)).filter((n) => Number.isInteger(n));
+  if (pickedIds.length > 0) {
+    c.executionCtx.waitUntil(recordExposures(c.env, user.id, pickedIds, 'game'));
+  }
 
   const exercises: Array<{
     id: number;
@@ -836,14 +864,22 @@ gameRoutes.get('/mark-words/start', async (c) => {
     { label: 'Tandai semua linking words/transitions', pattern: /\b(however|moreover|furthermore|therefore|consequently|meanwhile|nevertheless|nonetheless|although|whereas|while|despite|besides|additionally|similarly|likewise|conversely|alternatively|subsequently|accordingly|hence|thus|otherwise|instead|indeed|certainly|specifically|particularly|especially|notably|significantly|ultimately|essentially|basically|primarily|initially|finally|eventually|previously|currently|recently|frequently|occasionally|rarely|merely|simply|apparently|presumably|approximately|relatively|virtually)\b/gi },
   ];
 
-  const { results: items } = await c.env.DB.prepare(
+  // Over-fetch 3x + reorder by exposure for mark-words variety.
+  const { results: rawItems } = await c.env.DB.prepare(
     `SELECT id, passage_text
        FROM test_contents
       WHERE test_type = ? AND status = 'published'
         AND section = 'reading'
         AND passage_text IS NOT NULL AND LENGTH(passage_text) > 100
       ORDER BY RANDOM() LIMIT ?`,
-  ).bind(testType, count).all<any>();
+  ).bind(testType, count * 3).all<any>();
+
+  const { reorderByExposure, recordExposures } = await import('../services/question-exposure');
+  const items = (await reorderByExposure(c.env, user.id, (rawItems || []) as any[])).slice(0, count);
+  const pickedIds = items.map((r: any) => Number(r.id)).filter((n) => Number.isInteger(n));
+  if (pickedIds.length > 0) {
+    c.executionCtx.waitUntil(recordExposures(c.env, user.id, pickedIds, 'game'));
+  }
 
   const exercises: Array<{
     id: number;

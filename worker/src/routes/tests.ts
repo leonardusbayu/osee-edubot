@@ -951,19 +951,31 @@ testRoutes.get('/questions/:section', async (c) => {
     }
     params.push(limit, offset);
 
-    // Exposure-aware path: no question_type filter + no offset + logged-in user.
-    // This is the hot path for the web mini-app's section browser, so it's the
-    // one that benefits most from spreading the bank. Otherwise use the
-    // original query (question_type filter or paginated — caller controls order).
+    // Exposure-aware path for EVERY authenticated request with no pagination.
+    // Previously this was gated on "no question_type, no drill" which meant
+    // every filtered request and every drill session bypassed the exposure
+    // sampler — the same 30-50 RANDOM-winning questions kept hitting the
+    // same student over and over. Now we route ALL authenticated requests
+    // through the exposure sampler; each narrows the pool with its own
+    // extraWhere clause. Only anonymous / paginated requests fall back.
+    // Tracks "content repetitive" user report.
     let result: { results: any[] };
-    // Drill mode bypasses the exposure sampler — the point of a drill is to
-    // concentrate on one concept, not spread exposure across the bank.
-    if (userId && !questionType && !offset && !drillConcept) {
+    if (userId && !offset) {
+      const extraClauses: string[] = [`test_type = ?`, `section = ?`, `status = 'published'`];
+      const extraParams: any[] = [testType, section];
+      if (questionType) {
+        extraClauses.push(`question_type = ?`);
+        extraParams.push(questionType);
+      }
+      if (drillConcept) {
+        extraClauses.push(`skill_tags LIKE ?`);
+        extraParams.push(`%"${drillConcept.replace(/"/g, '')}"%`);
+      }
       const rows = await selectUnderExposedQuestions<any>(c.env, {
         userId: Number(userId),
         limit,
-        extraWhere: `test_type = ? AND section = ? AND status = 'published'`,
-        extraParams: [testType, section],
+        extraWhere: extraClauses.join(' AND '),
+        extraParams,
         columns: 'id, question_type, title, content, media_url, difficulty',
       });
       result = { results: rows };

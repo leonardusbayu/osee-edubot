@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTestStore } from '../stores/test';
 import { authedFetch, getTelegramUserId } from '../api/authedFetch';
@@ -109,6 +109,22 @@ const AudioWithError = ({
   );
 };
 
+// Fisher-Yates shuffle. Used to randomize the visual order of multiple-
+// choice options per render so students don't start pattern-matching on
+// "answer is usually B." Each option carries its own letter (A/B/C/D or a
+// .key), so scoring is unaffected by display order — student clicks a
+// letter, server compares that letter to correct_answer. Previously the
+// DB-stored option order was served verbatim, making the experience feel
+// stale across sessions.
+function shuffleArray<T>(arr: T[]): T[] {
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 export default function TestRunner() {
   const { attemptId } = useParams<{ attemptId: string }>();
   const navigate = useNavigate();
@@ -177,6 +193,18 @@ export default function TestRunner() {
   }, []);
 
   const currentQuestion = questions[currentQuestionIndex];
+
+  // Shuffled-for-display version of the current question's options.
+  // useMemo keyed on the question id+subIndex so shuffling is stable
+  // within one question view (prevents re-shuffle on unrelated state
+  // changes like timer ticks) but regenerates when the student moves
+  // to the next question. Preserves the per-option letter (A/B/C/D),
+  // so scoring is untouched.
+  const shuffledOptions = useMemo(() => {
+    const opts = currentQuestion?.options;
+    if (!Array.isArray(opts) || opts.length === 0) return opts;
+    return shuffleArray(opts);
+  }, [currentQuestion?.id, currentQuestion?._subIndex, currentQuestionIndex]);
   const currentSectionInfo = sections.find((s) => s.id === currentSection);
 
   // Load questions for current section from prefetched cache or API
@@ -1769,7 +1797,7 @@ export default function TestRunner() {
             {/* Matching UI */}
             {currentQuestion.type === 'matching' && currentQuestion.options && (
               <div className="space-y-2 mb-4">
-                {currentQuestion.options.map((option: any, i: number) => {
+                {(shuffledOptions || currentQuestion.options).map((option: any, i: number) => {
                   const key = typeof option === 'string' ? option.charAt(0) : option.key;
                   const text = typeof option === 'string' ? option : option.text;
                   return (
@@ -1830,7 +1858,7 @@ export default function TestRunner() {
         {/* Multiple choice (including listening) */}
         {currentQuestion.options && (currentQuestion.type === 'multiple_choice' || currentQuestion.type === 'listening') && (
           <div className="space-y-2 mb-4">
-            {currentQuestion.options.map((option: string, i: number) => {
+            {(shuffledOptions || currentQuestion.options).map((option: string, i: number) => {
               const letter = option.charAt(0);
               return (
                 <button
