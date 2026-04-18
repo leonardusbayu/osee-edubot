@@ -110,6 +110,19 @@ Respond in JSON only:
       }
     }
 
+    // If the model returned unparseable output or no score, refuse to store a
+    // fake "1" — that would look like the student wrote garbage when really
+    // the eval failed. Return an error so the UI can offer a retry.
+    if (typeof result.overall_band !== 'number') {
+      console.error('[writing-eval] missing overall_band in GPT response:',
+        (data.choices?.[0]?.message?.content || '').slice(0, 200));
+      return c.json({
+        error: 'scoring_failed',
+        message: 'Gagal memberi skor — coba submit ulang dalam beberapa detik.',
+        word_count: wordCount,
+      }, 502);
+    }
+
     // Log cost
     try {
       await c.env.DB.prepare('INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)')
@@ -138,7 +151,7 @@ Respond in JSON only:
         crit.coherence_cohesion ?? crit.communication ?? null,
         crit.lexical_resource ?? null,
         crit.grammatical_accuracy ?? null,
-        result.overall_band || 1,
+        result.overall_band,
         relevancyScore,
         wordCount,
         null, null, null, null, // AI notes — could be enriched later
@@ -152,7 +165,7 @@ Respond in JSON only:
       word_count: wordCount,
       min_words: minWords,
       word_count_ok: wordCount >= minWords,
-      overall_band: result.overall_band || 1,
+      overall_band: result.overall_band,
       criteria: result.criteria || {},
       relevancy_score: relevancyScore,
       off_topic: isOffTopic,

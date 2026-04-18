@@ -426,11 +426,14 @@ function safeParseJSON(raw: string): any {
 
 // Interview: AI-powered scoring with 4-dimension IELTS/TOEFL breakdown
 export interface SpeakingDimensions {
-  fluency_coherence: number;
-  lexical_resource: number;
-  grammar_range: number;
-  pronunciation: number;
-  relevancy_score: number;
+  // null when the AI didn't return this sub-score. Consumers must handle
+  // null gracefully — previously these fell through to a silent "1" which
+  // polluted analytics with fake low scores.
+  fluency_coherence: number | null;
+  lexical_resource: number | null;
+  grammar_range: number | null;
+  pronunciation: number | null;
+  relevancy_score: number | null;
   fluency_note: string;
   lexical_note: string;
   grammar_note: string;
@@ -441,7 +444,7 @@ export interface SpeakingResult {
   transcription: string;
   score: number;
   feedback: string;
-  criteria: Record<string, number>;
+  criteria: Record<string, number | null>;
   dimensions?: SpeakingDimensions;
   strengths: string;
   improvement: string;
@@ -519,23 +522,29 @@ Respond in JSON only:
     const raw = data.choices?.[0]?.message?.content || '';
     const result = safeParseJSON(raw);
 
-    if (!result) {
+    // Refuse to return a fake "1" if the model output wasn't parseable — the
+    // student would see a 1 and think their speaking was scored that low,
+    // when really the eval itself failed. Tell them to retry.
+    if (!result || typeof result.overall_band !== 'number') {
+      console.error('[speaking-eval] unparseable or missing overall_band:',
+        (raw || '').slice(0, 200));
       return {
         transcription,
         score: 0,
-        feedback: 'Gagal memproses hasil penilaian. Coba rekam ulang.',
+        feedback: 'Gagal memproses hasil penilaian. Coba rekam ulang dalam beberapa detik.',
         criteria: {},
         strengths: '',
         improvement: '',
+        word_count: wordCount,
       };
     }
 
     const dimensions: SpeakingDimensions = {
-      fluency_coherence: result.fluency_coherence || result.fluency || 1,
-      lexical_resource: result.lexical_resource || result.vocabulary || 1,
-      grammar_range: result.grammar_range || result.grammar || 1,
-      pronunciation: result.pronunciation || 1,
-      relevancy_score: result.relevancy_score ?? 1,
+      fluency_coherence: result.fluency_coherence ?? result.fluency ?? null,
+      lexical_resource: result.lexical_resource ?? result.vocabulary ?? null,
+      grammar_range: result.grammar_range ?? result.grammar ?? null,
+      pronunciation: result.pronunciation ?? null,
+      relevancy_score: result.relevancy_score ?? null,
       fluency_note: result.fluency_note || '',
       lexical_note: result.lexical_note || '',
       grammar_note: result.grammar_note || '',
@@ -544,7 +553,7 @@ Respond in JSON only:
 
     return {
       transcription,
-      score: result.overall_band || 1,
+      score: result.overall_band,
       feedback: result.feedback || 'Tidak bisa memberikan feedback.',
       criteria: {
         fluency_coherence: dimensions.fluency_coherence,

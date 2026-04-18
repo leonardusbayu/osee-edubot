@@ -162,8 +162,10 @@ export async function generateTTSAudioBuffer(env: Env, text: string, multi: bool
 
   const decoded = decodeURIComponent(text).trim();
   if (decoded.length === 0) return null;
-  // Include format in cache key so mp3 and opus are cached separately
-  const cacheKey = await hashText(decoded + (multi ? 'true' : '') + voice + format);
+  // Delimiter (\x1f = ASCII unit separator, never legal in TTS input) prevents
+  // collisions like "Hellotrue|alloy|mp3" vs "Hello|true|alloy|mp3". Include
+  // format in cache key so mp3 and opus are cached separately.
+  const cacheKey = await hashText([decoded, multi ? '1' : '0', voice, format].join('\x1f'));
 
   // Check cache
   const cached = await getCachedAudio(env.DB, cacheKey);
@@ -259,7 +261,9 @@ ttsRoutes.get('/speak', async (c) => {
   const decoded = text.trim();
   if (decoded.length === 0) return c.json({ error: 'Empty text' }, 400);
   // Truncation handled below via .substring(0, 4096) before the OpenAI call.
-  const cacheKey = await hashText(decoded + (multi || '') + voice);
+  // Delimited key so "Hellotrue|alloy" vs "Hello|true|alloy" don't collide.
+  // Format is hardcoded to mp3 here (GET /speak always serves MP3 for <audio>).
+  const cacheKey = await hashText([decoded, multi === 'true' ? '1' : '0', voice, 'mp3'].join('\x1f'));
 
   // Cache-first serve. Auth is intentionally NOT required here — the browser's
   // <audio> element can't carry custom auth headers, and passing tg_id via

@@ -250,12 +250,25 @@ function injectMp3Duration(mp3: ArrayBuffer, durationSec: number): ArrayBuffer {
 // injectMp3Duration above), because Telegram ignores the API-level `duration`
 // param in several clients and reads from the file instead.
 async function sendTTSAudio(env: Env, chatId: number, text: string) {
+  // Guard empty / whitespace-only input. Previous behavior: OpenAI TTS call
+  // would either 400 or return a silent tiny file, then we'd log the failure
+  // but the student saw nothing — invisible bug. Validate at the boundary.
+  if (!text || !text.trim()) {
+    console.warn('[tts] sendTTSAudio called with empty text — skipping');
+    return;
+  }
   try {
     const { generateTTSAudioBuffer } = await import('../routes/tts');
 
     // Detect if text has speaker labels (Man:, Woman:, Professor:, etc.)
     const hasMultiSpeaker = /(?:Woman|Man|Male|Female|Professor|Instructor|Narrator|Student|Speaker)\s*[^:]*:/i.test(text);
-    const audioBuffer = await generateTTSAudioBuffer(env, text, hasMultiSpeaker, 'alloy', 'mp3');
+
+    // Hard timeout: TTS stalling shouldn't pin the whole bot turn. 30s is
+    // generous for OpenAI's ~3-8s typical latency + network slack.
+    const ttsPromise = generateTTSAudioBuffer(env, text, hasMultiSpeaker, 'alloy', 'mp3');
+    const timeoutPromise = new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), 30000));
+    const audioBuffer = await Promise.race([ttsPromise, timeoutPromise]);
 
     if (!audioBuffer || audioBuffer.byteLength < 100) {
       console.error('TTS: generateTTSAudioBuffer returned null/empty for text:', text.substring(0, 80));

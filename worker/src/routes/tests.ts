@@ -658,6 +658,12 @@ export function scoreAttempt(
             : (a.answer_data || {});
           const raw = data?.score;
           if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+            if (raw > maxBand) {
+              // AI returned out-of-range score — log so we can detect a
+              // misbehaving prompt/model before analytics quietly compound.
+              console.warn('[score-clamp] AI score exceeds maxBand:',
+                { raw, maxBand, test_type: testType, section: section.id });
+            }
             score = Math.min(raw, maxBand);
           }
         } catch {}
