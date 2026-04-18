@@ -1,6 +1,16 @@
 import type { Env, User } from '../types';
 import { getTutorResponse } from '../services/ai';
 import { getPrivateTutorResponse } from '../services/private-tutor';
+import {
+  startOnboarding,
+  onTapStart,
+  onPickTarget,
+  onPickDeadline,
+  onPickLevel,
+  onPickCommit,
+  onTrySubmit,
+} from './onboarding';
+import { maybeAppendNudge, toggleTips } from '../services/companion-nudge';
 
 // Speaking practice prompts
 const SPEAKING_PROMPTS: Record<string, string[]> = {
@@ -1269,15 +1279,10 @@ async function handleMessage(message: any, env: Env) {
             mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id),
           );
         } else {
-          await sendMessage(env, chatId,
-            `Halo ${tgUser.first_name}! 👋\n\n` +
-            `Selamat datang di EduBot — Personal TOEFL iBT & IELTS Tutor.\n\n` +
-            `Aku di sini buat bantu kamu persiapan tes bahasa Inggris. ` +
-            `Nggak kaku, nggak boring — langsung practise.\n\n` +
-            `📋 *Step 1 dari 2 — Pilih Target Tes*\n\n` +
-            `Kamu mau persiapan tes yang mana?`,
-            testTypeKeyboard,
-          );
+          // Conversational 6-screen onboarding (welcome → target → deadline
+          // → level → commitment → try-one → handoff). Resumes from last
+          // screen if the user /start'd mid-flow.
+          await startOnboarding(env, chatId, user, tgUser.first_name);
         }
         return;
       }
@@ -1870,7 +1875,8 @@ async function handleMessage(message: any, env: Env) {
             suggestLine = `\n\n💡 Aku saranin latihan ${fallback.section} — itu yang paling perlu kamu perkuat sekarang.\nKetik /study buat mulai.`;
           }
 
-          await sendMessage(env, chatId, `Belum ada yang perlu di-review sekarang. Santai dulu aja! 😎${masteredNote}${nextLine}${suggestLine}`);
+          const nudge = await maybeAppendNudge(env, user.id);
+          await sendMessage(env, chatId, `Belum ada yang perlu di-review sekarang. Santai dulu aja! 😎${masteredNote}${nextLine}${suggestLine}${nudge}`);
         } else {
           const items = await getDueReviews(env, user.id, 1);
           if (items.length > 0) {
@@ -2083,7 +2089,9 @@ async function handleMessage(message: any, env: Env) {
       case '/today': {
         const { getTodayLesson } = await import('../services/studyplan');
         const lesson = await getTodayLesson(env, user.id);
-        await sendMessage(env, chatId, lesson || 'Belum ada study plan. Ketik /diagnostic dulu untuk tes penempatan.');
+        const base = lesson || 'Belum ada study plan. Ketik /diagnostic dulu untuk tes penempatan.';
+        const nudge = await maybeAppendNudge(env, user.id);
+        await sendMessage(env, chatId, base + nudge);
         // Track /today usage for analytics
         try {
           await env.DB.prepare(
@@ -2348,6 +2356,19 @@ async function handleMessage(message: any, env: Env) {
           console.error('/redeem error:', e);
           await sendMessage(env, chatId, '⚠️ Sistem sedang error. Coba lagi sebentar lagi.');
         }
+        return;
+      }
+
+      case '/quiet': {
+        // Toggle companion feature-discovery nudges on/off.
+        // Students who find the 1-per-day tips annoying can mute them here;
+        // daily study reminders + streak warnings are unaffected.
+        const state = await toggleTips(env, user.id);
+        await sendMessage(env, chatId,
+          state === 'off'
+            ? `🔕 Tip harian dimatiin. Aku gak bakal kasih saran fitur lagi sampai kamu /quiet lagi.`
+            : `🔔 Tip harian aktif lagi. Aku bakal kasih saran fitur yang belum kamu coba (max 1x sehari).`
+        );
         return;
       }
 
@@ -4744,63 +4765,78 @@ async function handleCallbackQuery(query: any, env: Env) {
     return;
   }
 
-  // Onboarding: target test
-  if (data.startsWith('target_')) {
-    const target = data.replace('target_', '');
-    if (target === 'back') {
-      // Back to target selection
-      await editMessage(env, chatId, messageId,
-        `📋 *Step 1 dari 2 — Pilih Target Tes*\n\n` +
-        `Kamu mau persiapan tes yang mana?`,
-        testTypeKeyboard,
-      );
-      return;
-    }
-    if (target !== 'skip') {
-      await env.DB.prepare('UPDATE users SET target_test = ? WHERE id = ?').bind(target, user.id).run();
-    } else {
-      // Skip = default to TOEFL_IBT
-      await env.DB.prepare('UPDATE users SET target_test = ? WHERE id = ?').bind('TOEFL_IBT', user.id).run();
-      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          callback_query_id: query.id,
-          text: '⚠️ Dilewati — default TOEFL iBT. Bisa diubah di /settings.',
-        }),
-      });
-    }
-    await editMessage(env, chatId, messageId,
-      `📋 *Step 2 dari 2 — Pilih Level Bahasa Inggris*\n\n` +
-      `Kira-kira level bahasa Inggris kamu sekarang gimana?`,
-      proficiencyKeyboard,
+  // ─── Conversational onboarding callbacks ────────────────────────────
+  // Flow: welcome → target → deadline → level → commitment → tryone → done
+  // All screens edit the same message; completion sends a fresh message
+  // with the main keyboard.
+
+  if (data === 'onb_start') {
+    const { text, keyboard } = await onTapStart(env, user);
+    await editMessage(env, chatId, messageId, text, keyboard);
+    return;
+  }
+
+  if (data.startsWith('onb_target_')) {
+    const target = data.replace('onb_target_', '');
+    const { text, keyboard } = await onPickTarget(env, user, target);
+    await editMessage(env, chatId, messageId, text, keyboard);
+    return;
+  }
+
+  if (data.startsWith('onb_deadline_')) {
+    const code = data.replace('onb_deadline_', '');
+    const { text, keyboard } = await onPickDeadline(env, user, code);
+    await editMessage(env, chatId, messageId, text, keyboard);
+    return;
+  }
+
+  if (data.startsWith('onb_level_')) {
+    const code = data.replace('onb_level_', '');
+    const { text, keyboard } = await onPickLevel(env, user, code);
+    await editMessage(env, chatId, messageId, text, keyboard);
+    return;
+  }
+
+  if (data.startsWith('onb_commit_')) {
+    const minutes = parseInt(data.replace('onb_commit_', ''), 10);
+    const { text, keyboard } = await onPickCommit(env, user, minutes);
+    await editMessage(env, chatId, messageId, text, keyboard);
+    return;
+  }
+
+  if (data.startsWith('onb_try_')) {
+    const correct = data === 'onb_try_correct';
+    const tgUser = (query.from || {}) as any;
+    const firstName = tgUser.first_name || user.name || 'kamu';
+    const { answerText, doneText, doneKeyboard } = await onTrySubmit(
+      env, user, correct, firstName,
+    );
+    // Replace the question with the reaction (Correct! / Hampir…)
+    await editMessage(env, chatId, messageId, answerText);
+    // Send the "setup complete" summary with handoff buttons
+    await sendMessage(env, chatId, doneText, doneKeyboard);
+    return;
+  }
+
+  if (data === 'onb_done_diag') {
+    await editMessage(env, chatId, messageId, '🩺 Diagnostic dimulai — semangat!');
+    // Kick off diagnostic by dispatching /diagnostic internally. Simpler:
+    // show the main keyboard + ask user to tap /diagnostic manually so the
+    // command runs through its normal entry path (consistent state handling).
+    await sendMessage(env, chatId,
+      `Ketik /diagnostic untuk memulai. 20 soal, kurang lebih 15 menit.\n\n` +
+      `Tenang — ini bukan tes beneran, cuma buat aku tau skill kamu di titik mana.`,
+      mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id),
     );
     return;
   }
 
-  // Onboarding: proficiency level
-  if (data.startsWith('level_')) {
-    const level = data.replace('level_', '');
-    await env.DB.prepare(
-      'UPDATE users SET proficiency_level = ?, onboarding_complete = 1 WHERE id = ?'
-    ).bind(level, user.id).run();
-
-    // Remove old inline keyboard
-    await editMessage(env, chatId, messageId,
-      `✅ Setup Selesai!`,
-    );
-
-    // Send celebration + main menu
+  if (data === 'onb_done_menu') {
+    await editMessage(env, chatId, messageId, '📖 Main menu aktif.');
     await sendMessage(env, chatId,
-      `🎉✨ *Selamat, ${user.name}!*\n\n` +
-      `Kamu sekarang terdaftar di EduBot!\n\n` +
-      `📋 *Yang bisa kamu lakuin sekarang:*\n` +
-      `• 📝 Latihan — simulasi tes penuh\n` +
-      `• 📖 Belajar — grammar, vocab, materi\n` +
-      `• 📊 Lihat progress — tracking skor\n` +
-      `• 🩺 Diagnostic — tahu level kamu sekarang\n\n` +
-      `💡 *Saran:* Mulai dengan /diagnostic untuk tahu skill kamu di titik mana!\n\n` +
-      `Mau mulai dari mana?`,
+      `Oke, santai dulu. Kalau siap, /diagnostic kapan aja — ` +
+      `atau langsung coba /study buat pilih topik belajar.\n\n` +
+      `Aku di sini 24/7 💛`,
       mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id),
     );
     return;

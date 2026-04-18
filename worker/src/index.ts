@@ -656,9 +656,11 @@ async function safeSendMessage(
 // Cron handler for daily notifications
 async function handleCron(env: Env) {
   try {
+    const { maybeAppendNudge } = await import('./services/companion-nudge');
+
     // Find all users with active study plans
     const users = await env.DB.prepare(
-      "SELECT u.telegram_id, u.name, sp.current_day, sp.total_days FROM users u JOIN study_plans sp ON u.id = sp.user_id WHERE sp.status = 'active'"
+      "SELECT u.id, u.telegram_id, u.name, sp.current_day, sp.total_days FROM users u JOIN study_plans sp ON u.id = sp.user_id WHERE sp.status = 'active'"
     ).all();
 
     for (const user of users.results as any[]) {
@@ -676,7 +678,10 @@ async function handleCron(env: Env) {
 
       const progressBar = '🟩'.repeat(Math.round(progress / 10)) + '⬜'.repeat(10 - Math.round(progress / 10));
 
-      const message = `${greeting}\n\n${progressBar} ${progress}%\nDay ${user.current_day + 1} of ${user.total_days} — tinggal ${daysLeft} hari lagi!\n\nSiap belajar? Ketik /today yuk!`;
+      // Piggyback a feature-discovery tip onto the reminder (1/day cap means
+      // no extra notifications — same message, slightly richer body).
+      const nudge = await maybeAppendNudge(env, user.id).catch(() => '');
+      const message = `${greeting}\n\n${progressBar} ${progress}%\nDay ${user.current_day + 1} of ${user.total_days} — tinggal ${daysLeft} hari lagi!\n\nSiap belajar? Ketik /today yuk!${nudge}`;
 
       await safeSendMessage(env, tgId, { text: message });
     }

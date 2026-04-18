@@ -40,6 +40,10 @@ export interface User {
   current_streak?: number | null;
   longest_streak?: number | null;
   last_study_date?: string | null;
+  onboarding_step?: string | null;
+  exam_deadline?: string | null;
+  daily_minutes_goal?: number | null;
+  tips_enabled?: number | null;
 }
 
 export interface TelegramUser {
