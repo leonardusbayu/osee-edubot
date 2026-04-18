@@ -32,6 +32,17 @@
 -- Safe to re-run: WHERE clause filters for status='published' so a second
 -- run is a no-op.
 
+-- Target the rows the server-side filter actually rejects: grouped content
+-- where the first sub-question's question_text is empty (these render as
+-- an empty Q-card with no sentence to find the error in). Matches the
+-- count the dry-run returned (18).
+--
+-- First run of this UPDATE had 0 rows written because it ALSO required
+-- the top-level $.question_text to be missing — it turns out the broken
+-- ITP rows have SOMETHING non-empty at the top (probably a stray
+-- direction/title leaked there by the parser) even though the
+-- sub-question, which is what the UI actually reads, is blank. The UI
+-- filter only cares about the sub-question, so we mirror that.
 UPDATE test_contents
    SET status = 'draft'
  WHERE test_type = 'TOEFL_ITP'
@@ -39,11 +50,6 @@ UPDATE test_contents
    AND status = 'published'
    AND json_valid(content) = 1
    AND (
-     -- Top-level question_text is missing (fallback single-question shape)
-     (json_extract(content, '$.question_text') IS NULL
-      OR TRIM(json_extract(content, '$.question_text')) = '')
-     AND
-     -- AND the first sub-question's text is also missing (grouped_reading shape)
-     (json_extract(content, '$.questions[0].question_text') IS NULL
-      OR TRIM(json_extract(content, '$.questions[0].question_text')) = '')
+     json_extract(content, '$.questions[0].question_text') IS NULL
+     OR TRIM(json_extract(content, '$.questions[0].question_text')) = ''
    );
