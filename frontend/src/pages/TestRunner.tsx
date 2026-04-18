@@ -2286,13 +2286,22 @@ export default function TestRunner() {
           <button onClick={() => {
             // Telegram's iOS webview doesn't reliably fire <audio> events,
             // so audioPlayed can stay false even after the user listened.
-            // If they hit Coba Lagi after we warned them, trust them and
-            // proceed — they've read the warning and tapped again. Flip
-            // audioPlayed so handleSubmitAnswer's check passes.
-            if (submitError && currentQuestion.audio_url && !audioPlayed) {
+            // If they hit "Sudah dengar — lanjut" after we warned them,
+            // trust them and advance directly. Can't call handleSubmitAnswer
+            // here — its closure still sees audioPlayed=false (React batches
+            // state updates), which would re-block indefinitely.
+            if (submitError && currentQuestion.type === 'listening_passage' && currentQuestion.audio_url && !audioPlayed) {
               setAudioPlayed(true);
               setSubmitError(null);
-              // Fall through to submit immediately — no second click needed.
+              hapticTap();
+              if (currentQuestionIndex + 1 < questions.length) {
+                setTransitioning(true);
+                setTimeout(() => {
+                  setQuestionIndex(currentQuestionIndex + 1);
+                  setTransitioning(false);
+                }, 150);
+              }
+              return;
             }
             handleSubmitAnswer();
           }} disabled={submitting || showExplanation}
