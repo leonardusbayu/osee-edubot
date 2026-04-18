@@ -347,25 +347,43 @@ async function main() {
     process.exit(1);
   }
 
-  // 5. Anti-copy guard: drop any generated item whose content shares a ≥5-word
-  //    substring with any reference. Prevents accidental verbatim leaks.
-  const refTexts = refs.map((r: any) => JSON.stringify(r.content_parsed || {}).toLowerCase());
-  function hasLongCopy(s: string): boolean {
-    const lower = s.toLowerCase();
-    const words = lower.split(/\s+/);
-    for (let i = 0; i <= words.length - 5; i++) {
-      const ngram = words.slice(i, i + 5).join(' ');
-      if (ngram.length < 20) continue;
-      for (const ref of refTexts) {
-        if (ref.includes(ngram)) return true;
+  // 5. Anti-copy guard: only compare actual TEXT VALUES (script, passages,
+  //    question_text, options, explanations) not the JSON structure. Checks
+  //    for >=7-word n-gram overlap — short enough to catch real copying,
+  //    long enough to skip over structural phrases like "the professor
+  //    said that" that recur naturally in academic prose.
+  function extractTextValues(obj: any, out: string[] = []): string[] {
+    if (obj == null) return out;
+    if (typeof obj === 'string') {
+      // Only keep strings that look like content (>15 chars, whitespace)
+      if (obj.length >= 15 && /\s/.test(obj)) out.push(obj);
+    } else if (Array.isArray(obj)) {
+      for (const item of obj) extractTextValues(item, out);
+    } else if (typeof obj === 'object') {
+      for (const v of Object.values(obj)) extractTextValues(v, out);
+    }
+    return out;
+  }
+  const refTextValues = refs.flatMap((r: any) => extractTextValues(r.content_parsed || {}));
+  const refBlob = refTextValues.join(' \n ').toLowerCase().replace(/\s+/g, ' ');
+  const NGRAM_SIZE = 7;
+  function hasLongCopy(content: any): boolean {
+    const values = extractTextValues(content);
+    for (const v of values) {
+      const lower = v.toLowerCase().replace(/\s+/g, ' ');
+      const words = lower.split(' ');
+      for (let i = 0; i + NGRAM_SIZE <= words.length; i++) {
+        const ngram = words.slice(i, i + NGRAM_SIZE).join(' ');
+        if (ngram.length < 25) continue;
+        if (refBlob.includes(ngram)) return true;
       }
     }
     return false;
   }
   const beforeGuard = generated.length;
-  const filtered = generated.filter((q) => !hasLongCopy(JSON.stringify(q.content || {})));
+  const filtered = generated.filter((q) => !hasLongCopy(q.content || {}));
   const copyDrops = beforeGuard - filtered.length;
-  if (copyDrops > 0) console.log(`\n🛡  Dropped ${copyDrops} items with >=5-word copy from references`);
+  if (copyDrops > 0) console.log(`\n🛡  Dropped ${copyDrops} items with >=${NGRAM_SIZE}-word content-copy from references`);
 
   // 6. Quality-score each and decide promotion
   console.log(`\n━━━ Quality Pass ━━━`);
