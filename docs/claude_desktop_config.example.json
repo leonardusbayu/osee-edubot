@@ -1,0 +1,25 @@
+{
+  "_comment": "Claude Desktop MCP config for EduBot. Copy to your OS-specific location, fill placeholders, restart Claude Desktop. macOS: ~/Library/Application Support/Claude/claude_desktop_config.json | Windows: %APPDATA%\\Claude\\claude_desktop_config.json | Linux: ~/.config/Claude/claude_desktop_config.json",
+
+  "mcpServers": {
+    "obsidian": {
+      "_comment": "Gives Claude read/write on your Obsidian vault. Requires the Local REST API plugin inside Obsidian to be enabled and running.",
+      "command": "mcp-obsidian",
+      "_alt_command_note": "If 'mcp-obsidian' isn't on your PATH, use the full path. macOS with uv: /Users/YOU/.local/bin/mcp-obsidian. Windows with pip: %APPDATA%\\Python\\Scripts\\mcp-obsidian.exe. Find it with: which mcp-obsidian (mac/linux) or where mcp-obsidian (Windows)",
+      "env": {
+        "OBSIDIAN_API_KEY": "PASTE_FROM_OBSIDIAN_LOCAL_REST_API_PLUGIN_SETTINGS",
+        "OBSIDIAN_HOST": "127.0.0.1",
+        "OBSIDIAN_PORT": "27124"
+      }
+    },
+
+    "github": {
+      "_comment": "Read/write GitHub issues, PRs, files. You already have this from Claude mobile — keep the token same.",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "PASTE_GITHUB_TOKEN_WITH_repo_SCOPE"
+      }
+    }
+  }
+}

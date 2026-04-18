@@ -585,14 +585,14 @@ testRoutes.post('/attempt/:id/section/:nextSection', async (c) => {
  * every answer malformed). Caller should NOT write a 0/0/0/0 row in
  * that case — it's misleading data, not a result.
  */
-interface AttemptScoring {
+export interface AttemptScoring {
   sectionScores: Record<string, number | null>;
   totalScore: number;
   scoredSectionCount: number;
   scoredAnswerCount: number;
 }
 
-function scoreAttempt(
+export function scoreAttempt(
   answers: any[],
   testType: string,
   configSections: any[] | undefined,

@@ -5,8 +5,40 @@ on:
     branches: [main]
 
 jobs:
+  # Runs first. Both deploy jobs depend on this so failing tests block
+  # production deploys.
+  test:
+    name: Tests (worker + frontend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Worker dependencies
+        working-directory: worker
+        run: npm install
+
+      - name: Run Worker tests
+        working-directory: worker
+        run: npm test
+
+      - name: Install Frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Run Frontend tests
+        working-directory: frontend
+        # No frontend tests yet; this still succeeds ("No test files found"
+        # is treated as success when --passWithNoTests). Kept so the job
+        # stays in the CI chain and picks up tests as we add them.
+        run: npm test -- --passWithNoTests
+
   deploy-worker:
     name: Deploy Worker
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +64,7 @@ jobs:
 
   deploy-frontend:
     name: Deploy Frontend
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
