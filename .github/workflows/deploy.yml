@@ -21,7 +21,11 @@ jobs:
 
       - name: Deploy Worker
         working-directory: worker
-        run: npx wrangler deploy
+        # `--env=""` targets the top-level production config. Required because
+        # wrangler.toml defines an `[env.staging]` block; wrangler v4 in a
+        # non-interactive CI run refuses to pick an env for you and exits
+        # non-zero instead of defaulting to the top-level one like v3 did.
+        run: npx wrangler deploy --env=""
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
