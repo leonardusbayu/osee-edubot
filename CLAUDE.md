@@ -147,12 +147,15 @@ Set via `npx wrangler secret put <NAME>`:
 | /premium | All | View premium plans + pricing |
 | /referral | All | View referral code + stats |
 | /buy | All | Purchase premium with Telegram Stars |
+| /redeem CODE | All | Redeem a premium code (from teacher) |
 | /admin | Teacher+ | Admin panel |
 | /broadcast MSG | Teacher+ | Send to all students |
 | /addclass | Teacher+ | Link Telegram group to class |
 | /teacher CODE | Anyone | Become teacher (invite code) |
 | /promote @user role | Admin | Change user role |
 | /stats | Admin | System statistics |
+| /gencodes N DAYS [batch] | Admin | Generate N premium redemption codes (1-500 codes, 1-730 days each) |
+| /codestatus [batch] | Admin | Check redemption rate for a code batch (or list recent) |
 
 ## API Endpoints
 

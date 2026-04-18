@@ -1307,6 +1307,7 @@ async function handleMessage(message: any, env: Env) {
 
         const premiumHelp = `⭐ *Premium & Referral*\n\n` +
           `/premium — Cek status atau upgrade\n` +
+          `/redeem KODE — Tukar kode premium (dari guru)\n` +
           `/referral — Lihat kode & link referral\n\n` +
           `🎁 *Referral:* Ajak teman = dapat gratis!`;
 
@@ -1320,6 +1321,8 @@ async function handleMessage(message: any, env: Env) {
           `/stats — Statistik sistem\n` +
           `/promote @user role — Ubah role user\n` +
           `/teacher KODE — Buat kode guru baru\n` +
+          `/gencodes N DAYS label — Generate N premium codes\n` +
+          `/codestatus [batch] — Check code redemption rate\n` +
           `/markfounders — Mark founding students\n` +
           `/pendingpayments — Lihat payment pending\n` +
           `/confirm [ID] — Konfirmasi pembayaran\n` +
@@ -2284,6 +2287,179 @@ async function handleMessage(message: any, env: Env) {
           }
         }
         await sendMessage(env, chatId, `📢 Broadcast sent to ${sent} students:\n\n"${msg}"`);
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════
+      // PREMIUM REDEMPTION CODES — teacher-as-reseller channel
+      // ═══════════════════════════════════════════════════════
+      // Students redeem one-time codes that teachers bought in bulk from
+      // the admin. Bypasses the Telegram Stars billing friction for
+      // students who don't have it set up. Migration 053.
+
+      case '/redeem': {
+        // Rate-limit: loose check against recent /redeem attempts to deter
+        // brute-force enumeration. The code space is 32^10 (infeasible to
+        // brute-force regardless) but we still cap attempts per user.
+        const rawCode = (text.split(/\s+/).slice(1).join(' ') || '').trim();
+        if (!rawCode) {
+          await sendMessage(env, chatId,
+            `🎟️ *Tukar Kode Premium*\n\n` +
+            `Ketik: /redeem KODE-KAMU\n\n` +
+            `Contoh: /redeem OSEE-7K3PM-9X2RH\n\n` +
+            `Kode biasanya dapat dari guru kamu. Satu kode = satu akun premium.`
+          );
+          return;
+        }
+
+        try {
+          const { redeemCode } = await import('../services/premium-codes');
+          const result = await redeemCode(env, user.id, rawCode);
+
+          if (result.success) {
+            const expiry = result.new_expiry
+              ? new Date(result.new_expiry).toLocaleDateString('id-ID', {
+                  year: 'numeric', month: 'long', day: 'numeric',
+                })
+              : '(tidak diketahui)';
+            await sendMessage(env, chatId,
+              `🎉 *Kode Berhasil Ditukar!*\n\n` +
+              `✨ Premium aktif untuk ${result.days_granted} hari\n` +
+              `📅 Berlaku sampai: ${expiry}\n\n` +
+              `Sekarang kamu bisa:\n` +
+              `• Unlimited soal latihan\n` +
+              `• AI Tutor 24/7\n` +
+              `• Speaking evaluation\n` +
+              `• Study plan personalized\n\n` +
+              `Coba /test atau /study untuk mulai!`
+            );
+          } else {
+            const errMsg: Record<string, string> = {
+              not_found: '❌ Kode tidak ditemukan. Pastikan kode yang kamu ketik benar persis.',
+              already_redeemed: '⚠️ Kode ini sudah pernah ditukar. Satu kode hanya bisa dipakai sekali.',
+              expired: '⏰ Kode ini sudah kadaluarsa. Minta kode baru ke guru/admin.',
+              invalid_format: '❌ Format kode salah. Contoh yang benar: OSEE-7K3PM-9X2RH',
+            };
+            await sendMessage(env, chatId,
+              errMsg[result.error || ''] || '❌ Gagal menukar kode. Coba lagi.'
+            );
+          }
+        } catch (e: any) {
+          console.error('/redeem error:', e);
+          await sendMessage(env, chatId, '⚠️ Sistem sedang error. Coba lagi sebentar lagi.');
+        }
+        return;
+      }
+
+      case '/gencodes': {
+        if (user.role !== 'admin') {
+          await sendMessage(env, chatId, 'Command ini hanya untuk admin.');
+          return;
+        }
+        // Syntax: /gencodes COUNT DAYS "batch_label" [notes]
+        // Example: /gencodes 50 30 budi_mar26 "50 seats for Budi's class"
+        const parts = text.match(/^\/gencodes\s+(\d+)\s+(\d+)(?:\s+(\S+))?(?:\s+(.+))?$/i);
+        if (!parts) {
+          await sendMessage(env, chatId,
+            `Usage: /gencodes COUNT DAYS [batch_label] [notes]\n\n` +
+            `Examples:\n` +
+            `• /gencodes 50 30 budi_mar26\n` +
+            `  → 50 codes × 30 days each, batch='budi_mar26'\n` +
+            `• /gencodes 10 7 trial_batch "Jan trial for 10 students"\n` +
+            `• /gencodes 20 90 — (no batch label)\n\n` +
+            `Limits: 1-500 codes, 1-730 days per code.`
+          );
+          return;
+        }
+        const count = parseInt(parts[1]);
+        const days = parseInt(parts[2]);
+        const batchId = parts[3] || null;
+        const notes = parts[4] || null;
+
+        if (count > 500) {
+          await sendMessage(env, chatId, 'Max 500 codes per batch. Split into multiple /gencodes.');
+          return;
+        }
+
+        try {
+          const { generateCodes } = await import('../services/premium-codes');
+          const codes = await generateCodes(env, user.id, count, days, batchId, notes);
+
+          // Send summary first
+          await sendMessage(env, chatId,
+            `✅ ${codes.length} codes generated\n` +
+            `⏱️ ${days} days each\n` +
+            `🏷️ Batch: ${batchId || '(none)'}\n\n` +
+            `Codes below (copy and send to teacher). Each line = one code.`
+          );
+
+          // Chunk codes into messages of ~30 lines each (Telegram 4096 char limit)
+          const CHUNK = 30;
+          for (let i = 0; i < codes.length; i += CHUNK) {
+            const slice = codes.slice(i, i + CHUNK);
+            const block = slice.map((c) => c.code).join('\n');
+            await sendMessage(env, chatId, '```\n' + block + '\n```');
+          }
+
+          if (batchId) {
+            await sendMessage(env, chatId, `Track redemptions with: /codestatus ${batchId}`);
+          }
+        } catch (e: any) {
+          console.error('/gencodes error:', e);
+          await sendMessage(env, chatId, `⚠️ Generation failed: ${e.message}`);
+        }
+        return;
+      }
+
+      case '/codestatus': {
+        if (user.role !== 'admin') {
+          await sendMessage(env, chatId, 'Command ini hanya untuk admin.');
+          return;
+        }
+        const batchId = (text.split(/\s+/)[1] || '').trim();
+        try {
+          const { getBatchStats, listRecentBatches } = await import('../services/premium-codes');
+
+          if (!batchId) {
+            // No batch specified — list all recent batches
+            const batches = await listRecentBatches(env, 20);
+            if (batches.length === 0) {
+              await sendMessage(env, chatId, 'Belum ada batch kode. Generate dengan /gencodes COUNT DAYS label.');
+              return;
+            }
+            let msg = `📦 *Recent batches (${batches.length})*\n\n`;
+            for (const b of batches) {
+              const rate = b.total > 0 ? Math.round((b.redeemed / b.total) * 100) : 0;
+              const date = (b.created_at || '').slice(0, 10);
+              msg += `• \`${b.batch_id}\` — ${b.redeemed}/${b.total} redeemed (${rate}%) · ${b.days}d · ${date}\n`;
+            }
+            msg += `\nDetails: /codestatus BATCH_ID`;
+            await sendMessage(env, chatId, msg);
+            return;
+          }
+
+          const stats = await getBatchStats(env, batchId);
+          if (stats.total === 0) {
+            await sendMessage(env, chatId, `Batch \`${batchId}\` tidak ada. List batch: /codestatus (tanpa argumen)`);
+            return;
+          }
+          const rate = Math.round((stats.redeemed / stats.total) * 100);
+          let msg = `📦 *Batch: ${batchId}*\n\n`;
+          msg += `Total codes: ${stats.total}\n`;
+          msg += `Redeemed: ${stats.redeemed} (${rate}%)\n`;
+          msg += `Unused: ${stats.unused}\n`;
+          if (stats.expired > 0) msg += `Expired: ${stats.expired}\n`;
+          msg += `Days per code: ${stats.days_per_code || '?'}\n`;
+          if (stats.sample_codes.length > 0) {
+            msg += `\nFirst ${stats.sample_codes.length} unused (for reprinting):\n\`\`\`\n`;
+            msg += stats.sample_codes.join('\n');
+            msg += `\n\`\`\``;
+          }
+          await sendMessage(env, chatId, msg);
+        } catch (e: any) {
+          console.error('/codestatus error:', e);
+          await sendMessage(env, chatId, `⚠️ Error: ${e.message}`);
+        }
         return;
       }
 
