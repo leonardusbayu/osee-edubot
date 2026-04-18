@@ -26,6 +26,25 @@ speakingRoutes.post('/evaluate', async (c) => {
     }, 403);
   }
 
+  // Daily quota — even premium users shouldn't burn unlimited Whisper + GPT
+  // budget. 50/day per user is well past any realistic practice load and
+  // stops runaway script-abuse from a leaked session.
+  try {
+    const todayCount = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM speaking_sessions
+        WHERE user_id = ? AND date(created_at) = date('now')`
+    ).bind(user.id).first() as any;
+    if (Number(todayCount?.n || 0) >= 50) {
+      return c.json({
+        error: 'Daily speaking quota reached',
+        code: 'QUOTA_REACHED',
+        message: 'Kamu udah latihan speaking 50x hari ini — istirahat dulu! Reset besok pagi.',
+      }, 429);
+    }
+  } catch (e) {
+    console.warn('[speaking-quota] check failed, allowing request:', (e as any)?.message);
+  }
+
   let formData: FormData;
   try {
     formData = await c.req.formData();
@@ -139,6 +158,40 @@ speakingRoutes.post('/evaluate', async (c) => {
         transcription: '',
         score: 0,
         feedback: 'Tidak terdeteksi suara. Pastikan mikrofon kamu berfungsi dan coba lagi.',
+        criteria: {},
+      });
+    }
+
+    // Whisper hallucination guard — common failure modes on near-silent or
+    // mis-codec audio. Flag and ask the student to retry rather than scoring
+    // garbage as real speaking. Also logs so we can detect a bad codec path.
+    const stripped = transcription.toLowerCase().replace(/[^a-z]/g, '');
+    const isRepetitive = stripped.length > 10
+      && /^(.{1,10})\1{3,}$/.test(stripped);                 // same 1-10 chars repeated 4+ times
+    const hallucinatedPhrases = [
+      'thank you for watching',
+      'thanks for watching',
+      'please subscribe',
+      'music playing',
+      '♪',
+      'subtitles by',
+    ];
+    const isHallucination = hallucinatedPhrases.some(p => transcription.toLowerCase().includes(p));
+
+    if (isRepetitive || isHallucination) {
+      console.warn('[whisper-guard] likely hallucination:',
+        { session: sessionId, transcription: transcription.slice(0, 120) });
+      if (sessionId) {
+        try {
+          await c.env.DB.prepare(
+            `UPDATE speaking_sessions SET transcription = ?, score = 0, feedback = ?, status = 'completed', completed_at = datetime('now') WHERE id = ?`
+          ).bind(transcription, 'Rekaman tidak jelas. Coba rekam ulang di tempat yang lebih sepi.', sessionId).run();
+        } catch {}
+      }
+      return c.json({
+        transcription: '',
+        score: 0,
+        feedback: 'Audio kamu tidak jelas atau terlalu sepi. Coba rekam ulang di tempat yang tenang, dekat dengan mikrofon.',
         criteria: {},
       });
     }

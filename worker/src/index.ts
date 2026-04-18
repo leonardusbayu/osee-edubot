@@ -1475,6 +1475,37 @@ async function handleContentHealthCheck(env: Env) {
       issues.push(`📝 ${draftCount.count} questions in draft status awaiting review`);
     }
 
+    // 5. HEAD-check a sample of http(s) media URLs to catch 404s that slip
+    //    past publish-time format validation. Capped at 50/run to protect
+    //    the worker's CPU/time budget; over time every URL gets checked.
+    try {
+      const withHttpMedia = await env.DB.prepare(`
+        SELECT id, media_url FROM test_contents
+         WHERE status = 'published'
+           AND (media_url LIKE 'http://%' OR media_url LIKE 'https://%')
+         ORDER BY RANDOM() LIMIT 50
+      `).all();
+      const dead: number[] = [];
+      await Promise.all(((withHttpMedia.results || []) as any[]).map(async (row) => {
+        try {
+          const res = await fetch(row.media_url, {
+            method: 'HEAD',
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!res.ok && (res.status === 404 || res.status === 403 || res.status === 410)) {
+            dead.push(row.id);
+          }
+        } catch {
+          // Network error / timeout — don't auto-flag as dead (may be transient).
+        }
+      }));
+      if (dead.length > 0) {
+        issues.push(`🚫 ${dead.length} published questions have 404/403 media URLs (ids: ${dead.slice(0, 10).join(', ')}${dead.length > 10 ? '…' : ''})`);
+      }
+    } catch (e) {
+      console.error('[content-health] media HEAD sweep failed:', (e as any)?.message);
+    }
+
     // Report to admin if issues found
     if (issues.length > 0) {
       const admins = await env.DB.prepare("SELECT telegram_id FROM users WHERE role = 'admin'").all();

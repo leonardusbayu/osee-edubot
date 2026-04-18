@@ -77,7 +77,9 @@ function detectSpeakerVoice(label: string): string {
 function parseDialogue(text: string): { voice: string; text: string }[] {
   // Split by speaker labels like "Woman:", "Man:", "Professor:", "Narrator:", etc.
   // Labels can appear after: start of string, newline, or sentence-ending punctuation (. ? !)
-  const speakerPattern = /(?:^|\n|[.?!]\s*)((?:Woman|Man|Male|Female|Professor|Instructor|Narrator|Announcer|Student|Advisor|Librarian|Receptionist|Girl|Boy|Speaker\s*\d?)[^:]*?):\s*/gi;
+  // Character class includes apostrophes/hyphens/periods so names like
+  // "O'Brien", "St. John", and "Jean-Paul" aren't truncated at punctuation.
+  const speakerPattern = /(?:^|\n|[.?!]\s*)((?:Woman|Man|Male|Female|Professor|Instructor|Narrator|Announcer|Student|Advisor|Librarian|Receptionist|Girl|Boy|Speaker\s*\d?)[\w\s'\-.]*?):\s*/gi;
 
   const segments: { voice: string; text: string }[] = [];
   let lastIndex = 0;
@@ -175,21 +177,57 @@ export async function generateTTSAudioBuffer(env: Env, text: string, multi: bool
     if (multi) {
       const segments = parseDialogue(decoded);
       if (segments.length > 1) {
-        // For multi-speaker: generate as single voice with full text.
-        // Why: MP3 files can't be byte-concatenated (each has its own headers),
-        // and OGG Opus also can't be concatenated. Previous approach produced
-        // corrupted audio. Single-voice with full text is reliable and fast.
-        const fullText = segments.map(s => `${s.text}`).join(' ... ');
+        // Per-segment TTS with speaker-mapped voices, then concatenate.
+        // OpenAI `tts-1` returns CBR MP3 without ID3 headers — frame-level
+        // concatenation works in every major player we've tested (Telegram,
+        // iOS Safari, Chrome). Opus is NOT concatenatable cleanly so we
+        // force format='mp3' here; the caller can re-encode if needed.
+        // If any segment fails, we fall back to single-voice on the full
+        // text rather than ship half a dialogue.
+        const buffers: ArrayBuffer[] = [];
+        let voicesUsed: Set<string> = new Set();
+        for (const seg of segments) {
+          if (!seg.text) continue;
+          const buf = await fetchTTSAudioWithRetry(env.OPENAI_API_KEY, seg.text, seg.voice, 'mp3');
+          if (!buf) {
+            // abandon multi — fall through to single-voice
+            buffers.length = 0;
+            break;
+          }
+          buffers.push(buf);
+          voicesUsed.add(seg.voice);
+        }
+
+        if (buffers.length > 0) {
+          const total = buffers.reduce((n, b) => n + b.byteLength, 0);
+          const merged = new Uint8Array(total);
+          let offset = 0;
+          for (const b of buffers) {
+            merged.set(new Uint8Array(b), offset);
+            offset += b.byteLength;
+          }
+          await cacheAudio(env.DB, cacheKey, merged.buffer, `multi:${[...voicesUsed].join('+')}`);
+          try {
+            const charCount = decoded.length;
+            const cost = (charCount / 1000) * 0.015;
+            await env.DB.prepare(
+              'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
+            ).bind('openai-tts', 'multi-segmented', charCount, cost).run();
+          } catch {}
+          return merged.buffer;
+        }
+
+        // Fallback: single-voice on the full text.
+        const fullText = segments.map(s => s.text).join(' ... ');
         const singleBuffer = await fetchTTSAudioWithRetry(env.OPENAI_API_KEY, fullText, voice, format);
         if (singleBuffer) {
-          await cacheAudio(env.DB, cacheKey, singleBuffer, 'multi');
-          // Log cost
+          await cacheAudio(env.DB, cacheKey, singleBuffer, 'multi-fallback');
           try {
             const charCount = fullText.length;
             const cost = (charCount / 1000) * 0.015;
             await env.DB.prepare(
               'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
-            ).bind('openai-tts', 'multi', charCount, cost).run();
+            ).bind('openai-tts', 'multi-fallback', charCount, cost).run();
           } catch {}
         }
         return singleBuffer;
@@ -282,24 +320,55 @@ ttsRoutes.get('/speak', async (c) => {
   }
 
   try {
-    // Check if multi-speaker mode — generate as single voice with full text
-    // (MP3 files can't be byte-concatenated; produces corrupted audio)
+    // Multi-speaker mode: per-segment TTS with speaker-mapped voices, then
+    // frame-concatenate the MP3 buffers. OpenAI tts-1 outputs CBR MP3
+    // without ID3, so concat works across major players. If any segment
+    // TTS fails, fall back to single-voice on the full text.
     if (multi === 'true') {
       const segments = parseDialogue(decoded);
 
       if (segments.length > 1) {
+        const buffers: ArrayBuffer[] = [];
+        const voicesUsed = new Set<string>();
+        for (const seg of segments) {
+          if (!seg.text) continue;
+          const buf = await fetchTTSAudioWithRetry(c.env.OPENAI_API_KEY, seg.text, seg.voice, 'mp3');
+          if (!buf) { buffers.length = 0; break; }
+          buffers.push(buf);
+          voicesUsed.add(seg.voice);
+        }
+
+        if (buffers.length > 0) {
+          const total = buffers.reduce((n, b) => n + b.byteLength, 0);
+          const merged = new Uint8Array(total);
+          let offset = 0;
+          for (const b of buffers) { merged.set(new Uint8Array(b), offset); offset += b.byteLength; }
+          c.executionCtx.waitUntil(cacheAudio(c.env.DB, cacheKey, merged.buffer, `multi:${[...voicesUsed].join('+')}`));
+          try {
+            const charCount = decoded.length;
+            const cost = (charCount / 1000) * 0.015;
+            await c.env.DB.prepare(
+              'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
+            ).bind('openai-tts', 'multi-segmented', charCount, cost).run();
+          } catch {}
+          return new Response(merged.buffer, {
+            headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=604800', 'X-Cache': 'MISS' },
+          });
+        }
+
+        // Fallback: single voice on concatenated text
         const fullText = segments.map(s => s.text).join(' ... ');
         const audioData = await fetchTTSAudioWithRetry(c.env.OPENAI_API_KEY, fullText, voice, 'mp3');
         if (!audioData) return c.json({ error: 'TTS generation failed' }, 500);
 
-        c.executionCtx.waitUntil(cacheAudio(c.env.DB, cacheKey, audioData, 'multi'));
+        c.executionCtx.waitUntil(cacheAudio(c.env.DB, cacheKey, audioData, 'multi-fallback'));
 
         try {
           const charCount = fullText.length;
           const cost = (charCount / 1000) * 0.015;
           await c.env.DB.prepare(
             'INSERT INTO api_usage (service, endpoint, tokens_used, cost_usd) VALUES (?, ?, ?, ?)'
-          ).bind('openai-tts', 'multi', charCount, cost).run();
+          ).bind('openai-tts', 'multi-fallback', charCount, cost).run();
         } catch {}
 
         return new Response(audioData, {

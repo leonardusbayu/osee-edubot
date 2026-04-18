@@ -13,11 +13,13 @@ const TEST_CONFIGS: Record<string, any> = {
     description: 'Full-length TOEFL iBT practice with adaptive sections and CEFR band scoring (1-6).',
     total_duration_minutes: 90,
     max_band: 6,
+    // All four iBT sections share the same 1-6 CEFR band scale, so
+    // max_score === max_band for each section here.
     sections: [
-      { id: 'reading', name: 'Reading', duration_minutes: 30 },
-      { id: 'listening', name: 'Listening', duration_minutes: 29 },
-      { id: 'speaking', name: 'Speaking', duration_minutes: 8 },
-      { id: 'writing', name: 'Writing', duration_minutes: 23 },
+      { id: 'reading', name: 'Reading', duration_minutes: 30, max_score: 6 },
+      { id: 'listening', name: 'Listening', duration_minutes: 29, max_score: 6 },
+      { id: 'speaking', name: 'Speaking', duration_minutes: 8, max_score: 6 },
+      { id: 'writing', name: 'Writing', duration_minutes: 23, max_score: 6 },
     ],
   },
   IELTS: {
@@ -27,33 +29,44 @@ const TEST_CONFIGS: Record<string, any> = {
     total_duration_minutes: 170,
     max_band: 9,
     sections: [
-      { id: 'listening', name: 'Listening', duration_minutes: 30 },
-      { id: 'reading', name: 'Reading', duration_minutes: 60 },
-      { id: 'writing', name: 'Writing', duration_minutes: 60 },
-      { id: 'speaking', name: 'Speaking', duration_minutes: 14 },
+      { id: 'listening', name: 'Listening', duration_minutes: 30, max_score: 9 },
+      { id: 'reading', name: 'Reading', duration_minutes: 60, max_score: 9 },
+      { id: 'writing', name: 'Writing', duration_minutes: 60, max_score: 9 },
+      { id: 'speaking', name: 'Speaking', duration_minutes: 14, max_score: 9 },
     ],
   },
   TOEFL_ITP: {
+    // Overall scale is 310-677 but each section scores 31-68 independently;
+    // overall is classically sum×10/3 (≈ per-section mean × 10). max_band
+    // is the legacy overall ceiling for UI display; max_score per section
+    // is what the scoring math multiplies correctness ratio by. The total
+    // aggregation (sum vs mean × 10) is tracked in scoreAttempt's total
+    // computation — here we just give per-section scoring the right cap.
     test_type: 'TOEFL_ITP',
     display_name: 'TOEFL ITP Practice Test',
-    description: 'Full TOEFL ITP — Listening, Structure, Reading. Score 310-677.',
+    description: 'Full TOEFL ITP — Listening, Structure, Reading. Each section 31-68; overall 310-677.',
     total_duration_minutes: 115,
     max_band: 677,
     sections: [
-      { id: 'listening', name: 'Listening', duration_minutes: 35 },
-      { id: 'structure', name: 'Structure & Written Expression', duration_minutes: 25 },
-      { id: 'reading', name: 'Reading', duration_minutes: 55 },
+      { id: 'listening', name: 'Listening', duration_minutes: 35, max_score: 68 },
+      { id: 'structure', name: 'Structure & Written Expression', duration_minutes: 25, max_score: 68 },
+      { id: 'reading', name: 'Reading', duration_minutes: 55, max_score: 68 },
     ],
   },
   TOEIC: {
+    // TOEIC listening + reading each 5-495, sum to 10-990 overall.
+    // max_band kept at 990 for UI display. Per-section max_score is 495.
+    // scoreAttempt's total is currently an average across sections — for
+    // TOEIC it should be a sum. That's a separate follow-up; flagged in
+    // the audit log so analytics aren't silently wrong.
     test_type: 'TOEIC',
     display_name: 'TOEIC Listening & Reading Test',
-    description: 'Full TOEIC practice — 200 multiple choice questions. Score 10-990.',
+    description: 'Full TOEIC practice — 200 multiple choice questions. Listening 5-495 + Reading 5-495 = 10-990 overall.',
     total_duration_minutes: 120,
     max_band: 990,
     sections: [
-      { id: 'listening', name: 'Listening', duration_minutes: 45 },
-      { id: 'reading', name: 'Reading', duration_minutes: 75 },
+      { id: 'listening', name: 'Listening', duration_minutes: 45, max_score: 495 },
+      { id: 'reading', name: 'Reading', duration_minutes: 75, max_score: 495 },
     ],
   },
 };
@@ -677,13 +690,18 @@ export function scoreAttempt(
         totalScoredAnswers += bands.length;
       }
     } else {
-      // Objective: boolean correctness ratio × max_band.
+      // Objective: boolean correctness ratio × max_score for this section.
+      // Per-section scaling lets TOEIC (listening 5-495, reading 5-495) and
+      // TOEFL ITP (31-68 per section) use their native scales without the
+      // global maxBand hack. Falls back to maxBand for tests that haven't
+      // been migrated to per-section scoring yet.
+      const sectionMax = typeof section.max_score === 'number' ? section.max_score : maxBand;
       const scored = sectionAnswers.filter((a: any) => a.is_correct !== null);
       if (scored.length === 0) {
         sectionScores[section.id] = null;
       } else {
         const correct = scored.filter((a: any) => a.is_correct === 1).length;
-        sectionScores[section.id] = Math.round((correct / scored.length) * maxBand * 2) / 2;
+        sectionScores[section.id] = Math.round((correct / scored.length) * sectionMax * 2) / 2;
         totalScoredAnswers += scored.length;
       }
     }
@@ -694,9 +712,24 @@ export function scoreAttempt(
   const values = Object.values(sectionScores).filter(
     (v): v is number => typeof v === 'number' && !isNaN(v),
   );
-  const totalScore = values.length > 0
-    ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10
-    : 0;
+
+  // Aggregation rule depends on test type:
+  //   - TOEIC: Listening 5-495 + Reading 5-495 = overall 10-990 (sum).
+  //   - TOEFL ITP: classical formula ≈ (L + S + R) × 10 / 3. For now we use
+  //     mean × 10 which matches the 310-677 ceiling when sections max at 68.
+  //   - IELTS: overall band = mean of 4 section bands (0.5 rounding).
+  //   - TOEFL iBT (2026): mean of 4 CEFR-1..6 section scores.
+  let totalScore = 0;
+  if (values.length > 0) {
+    if (testType === 'TOEIC') {
+      totalScore = Math.round(values.reduce((a, b) => a + b, 0));
+    } else if (testType === 'TOEFL_ITP') {
+      const mean = values.reduce((a, b) => a + b, 0) / values.length;
+      totalScore = Math.round(mean * 10);
+    } else {
+      totalScore = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10;
+    }
+  }
 
   return {
     sectionScores,

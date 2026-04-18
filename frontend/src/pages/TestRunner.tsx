@@ -74,6 +74,29 @@ const AudioWithError = ({
 }) => {
   const [err, setErr] = useState(false);
   const [attempt, setAttempt] = useState(0);
+
+  // Preflight HEAD check — catches 404s the <audio> onError handler
+  // misses in Telegram's iOS webview (it renders a silent player instead
+  // of firing error). Only checks same-origin /api/ URLs, since CORS
+  // blocks HEAD on external CDNs and we can't tell 404 from blocked.
+  useEffect(() => {
+    if (!src) return;
+    if (!src.startsWith('/api/') && !src.includes('/api/tts/speak')) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(src, { method: 'HEAD' });
+        if (!cancelled && (res.status === 404 || res.status === 410)) {
+          setErr(true);
+        }
+      } catch {
+        // Network error / CORS — don't false-fail. <audio> onError + the
+        // Coba Lagi button still cover the runtime case.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [src, attempt]);
+
   if (!src) return null;
   if (err) {
     return (

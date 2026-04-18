@@ -317,10 +317,17 @@ async function sendTTSAudio(env: Env, chatId: number, text: string) {
         const { generateTTSAudioBuffer } = await import('../routes/tts');
         const ogg = await generateTTSAudioBuffer(env, text, hasMultiSpeaker, 'alloy', 'opus');
         if (ogg) {
+          // Opus in OGG is ~6-8 KB/s (vs MP3's ~18 KB/s). Reusing the
+          // MP3-based durationSec here made the voice widget show the
+          // wrong duration and broke seeking. Recompute from opus bytes.
+          const oggDuration = Math.max(1,
+            Math.ceil(ogg.byteLength / 7000),
+            Math.ceil(words * 0.36),
+          );
           const voiceForm = new FormData();
           voiceForm.append('chat_id', String(chatId));
           voiceForm.append('voice', new File([ogg], 'audio.ogg', { type: 'audio/ogg' }));
-          voiceForm.append('duration', String(durationSec));
+          voiceForm.append('duration', String(oggDuration));
           const resp2 = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendVoice`, {
             method: 'POST',
             body: voiceForm,
