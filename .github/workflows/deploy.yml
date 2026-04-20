@@ -27,15 +27,15 @@ jobs:
 
       - name: TypeScript check (worker)
         working-directory: worker
-        run: npx tsc --noEmit
-
-      - name: TypeScript check (frontend)
-        working-directory: frontend
-        run: npx tsc --noEmit
+        run: ./node_modules/.bin/tsc --noEmit
 
       - name: Install Frontend dependencies
         working-directory: frontend
         run: npm install
+
+      - name: TypeScript check (frontend)
+        working-directory: frontend
+        run: ./node_modules/.bin/tsc --noEmit
 
       - name: Run Frontend tests
         working-directory: frontend
