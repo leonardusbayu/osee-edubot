@@ -1463,7 +1463,7 @@ async function handleMessage(message: any, env: Env) {
           {
             inline_keyboard: [
               [{ text: '💳 Beli dengan Telegram Stars', callback_data: 'buy_stars' }],
-              [{ text: '📤 Beli via GoPay', callback_data: 'buy_gopay' }],
+              [{ text: '🏦 Bayar via QRIS / Transfer Bank', callback_data: 'buy_tripay' }],
             ],
           }
         );
@@ -1717,7 +1717,7 @@ async function handleMessage(message: any, env: Env) {
           {
             inline_keyboard: [
               [{ text: '1️⃣ Beli via Stars', callback_data: 'buy_stars' }],
-              [{ text: '2️⃣ Beli via GoPay', callback_data: 'buy_gopay' }],
+              [{ text: '2️⃣ Bayar via QRIS / Transfer Bank', callback_data: 'buy_tripay' }],
               [{ text: '3️⃣ Hubungi WhatsApp', url: 'https://wa.me/628112467784' }],
             ],
           }
@@ -2022,7 +2022,7 @@ async function handleMessage(message: any, env: Env) {
             {
               inline_keyboard: [
                 [{ text: '⭐ Upgrade Premium', callback_data: 'buy_stars' }],
-                [{ text: '📤 via GoPay', callback_data: 'buy_gopay' }],
+                [{ text: '🏦 via QRIS / Transfer Bank', callback_data: 'buy_tripay' }],
                 [{ text: '🎁 Dapat Bonus — Undang Teman', callback_data: 'copy_referral' }],
               ],
             }
@@ -5680,19 +5680,21 @@ async function handleCallbackQuery(query: any, env: Env) {
       return;
     }
 
-    // Premium purchase with GoPay
-    if (data === 'buy_gopay') {
+    // Premium purchase via Tripay — step 1: choose plan
+    if (data === 'buy_tripay') {
       await editMessage(env, chatId, messageId,
-        `💳 *Pembelian Premium via GoPay*\n\n` +
-        `Transfer ke:\n\n` +
-        `🟢 GoPay: 085643597072\n` +
-        `   a.n. Leonardus Bayu Ari P\n\n` +
-        `Setelah transfer, ketik:\n` +
-        `/paid Sudah transfer GoPay 085643597072 a.n. Leonardus Bayu Ari P\n\n` +
-        `atau hubungi @oseeadmin untuk konfirmasi.`,
+        `🏦 *Bayar via QRIS / Transfer Bank*\n\n` +
+        `Pilih paket premium:\n\n` +
+        `• 7 hari — Rp 30.000\n` +
+        `• 30 hari — Rp 99.000\n` +
+        `• 90 hari — Rp 270.000\n` +
+        `• 180 hari — Rp 500.000\n` +
+        `• 365 hari — Rp 950.000`,
         {
           inline_keyboard: [
-            [{ text: '📤 Sudah Transfer', callback_data: 'gopay_confirm' }],
+            [{ text: '7 Hari — Rp 30rb', callback_data: 'tp_plan_7' }, { text: '30 Hari — Rp 99rb', callback_data: 'tp_plan_30' }],
+            [{ text: '90 Hari — Rp 270rb', callback_data: 'tp_plan_90' }, { text: '180 Hari — Rp 500rb', callback_data: 'tp_plan_180' }],
+            [{ text: '365 Hari — Rp 950rb', callback_data: 'tp_plan_365' }],
             [{ text: '◀️ Kembali', callback_data: 'back_premium' }],
           ],
         }
@@ -5700,14 +5702,109 @@ async function handleCallbackQuery(query: any, env: Env) {
       return;
     }
 
-    // GoPay confirm - ask user to submit payment proof
-    if (data === 'gopay_confirm') {
+    // Tripay — step 2: choose payment method
+    if (data.startsWith('tp_plan_')) {
+      const planDays = data.replace('tp_plan_', '');
       await editMessage(env, chatId, messageId,
-        `📋 *Submit Payment Proof*\n\n` +
-        `Ketik command berikut dengan bukti transfer:\n\n` +
-        `/paid Sudah transfer GoPay 085643597072 a.n. Leonardus Bayu Ari P\n\n` +
-        `Ganti dengan screenshot atau detail transfer kamu.`
+        `💳 *Pilih Metode Pembayaran*\n\n` +
+        `Paket: ${planDays} hari\n\n` +
+        `Pilih metode:`,
+        {
+          inline_keyboard: [
+            [{ text: '📱 QRIS (scan QR)', callback_data: `tp_pay_${planDays}_QRIS2` }],
+            [{ text: '🏦 BNI Virtual Account', callback_data: `tp_pay_${planDays}_BNIVA` }],
+            [{ text: '🏦 BCA Virtual Account', callback_data: `tp_pay_${planDays}_BCAVA` }],
+            [{ text: '🏦 Mandiri Virtual Account', callback_data: `tp_pay_${planDays}_MANDIRIVA` }],
+            [{ text: '🏦 BSI Virtual Account', callback_data: `tp_pay_${planDays}_BSIVA` }],
+            [{ text: '💚 OVO', callback_data: `tp_pay_${planDays}_OVO` }, { text: '💙 DANA', callback_data: `tp_pay_${planDays}_DANA` }],
+            [{ text: '🧡 ShopeePay', callback_data: `tp_pay_${planDays}_SHOPEEPAY` }],
+            [{ text: '◀️ Kembali', callback_data: 'buy_tripay' }],
+          ],
+        }
       );
+      return;
+    }
+
+    // Tripay — step 3: create transaction
+    if (data.startsWith('tp_pay_')) {
+      const parts = data.replace('tp_pay_', '').split('_');
+      const planDays = parts[0];
+      const method = parts.slice(1).join('_');
+      const planKey = `plan_${planDays}`;
+
+      try {
+        const { createTransaction, TRIPAY_PLANS } = await import('../services/tripay');
+        const plan = TRIPAY_PLANS[planKey];
+        if (!plan) {
+          await editMessage(env, chatId, messageId, '❌ Paket tidak valid.');
+          return;
+        }
+
+        await editMessage(env, chatId, messageId, '⏳ Membuat transaksi...');
+
+        const result = await createTransaction(env, {
+          userId: user.id,
+          userName: user.name || `User ${user.id}`,
+          planKey,
+          method,
+        });
+
+        if (!result.success || !result.data) {
+          await sendMessage(env, chatId,
+            `❌ Gagal membuat transaksi: ${result.error || 'Unknown error'}\n\nCoba lagi atau hubungi @oseeadmin.`);
+          return;
+        }
+
+        const tx = result.data;
+        const expiredDate = tx.expired_time
+          ? new Date(tx.expired_time * 1000).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
+          : '24 jam';
+
+        let paymentInfo = '';
+        if (tx.pay_code) {
+          paymentInfo = `🔢 *Kode Bayar:* \`${tx.pay_code}\`\n`;
+        }
+        if (tx.qr_url) {
+          paymentInfo += `📱 *QR Code:* [Lihat QR](${tx.qr_url})\n`;
+        }
+
+        // Save to DB
+        try {
+          await env.DB.prepare(
+            `INSERT INTO payment_transactions
+             (user_id, merchant_ref, tripay_reference, payment_method, payment_name,
+              amount, fee_merchant, fee_customer, status, plan_days,
+              pay_code, checkout_url, expired_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(
+            user.id, tx.merchant_ref, tx.reference, tx.payment_method,
+            tx.payment_name, tx.amount, tx.fee_merchant, tx.fee_customer,
+            tx.status, plan.days, tx.pay_code || null, tx.checkout_url,
+            tx.expired_time ? new Date(tx.expired_time * 1000).toISOString() : null,
+          ).run();
+        } catch (e) {
+          console.error('[webhook] payment_transactions insert error:', e);
+        }
+
+        await sendMessage(env, chatId,
+          `🏦 *Pembayaran Premium ${plan.label}*\n\n` +
+          `💰 *Total:* Rp ${tx.amount.toLocaleString('id-ID')}\n` +
+          `📋 *Metode:* ${tx.payment_name}\n` +
+          paymentInfo +
+          `⏰ *Batas bayar:* ${expiredDate} WIB\n\n` +
+          `🔗 *Link Pembayaran:*\n${tx.checkout_url}\n\n` +
+          `Klik link di atas untuk membayar. Premium akan otomatis aktif setelah pembayaran berhasil! ✅`,
+          {
+            inline_keyboard: [
+              [{ text: '🔗 Buka Halaman Bayar', url: tx.checkout_url }],
+              [{ text: '◀️ Kembali', callback_data: 'back_premium' }],
+            ],
+          }
+        );
+      } catch (e: any) {
+        console.error('[webhook] Tripay payment error:', e);
+        await sendMessage(env, chatId, `❌ Terjadi kesalahan. Coba lagi atau hubungi @oseeadmin.`);
+      }
       return;
     }
 
@@ -5735,7 +5832,7 @@ async function handleCallbackQuery(query: any, env: Env) {
           {
             inline_keyboard: [
               [{ text: '⭐ via Telegram Stars', callback_data: 'buy_stars' }],
-              [{ text: '📤 via GoPay', callback_data: 'buy_gopay' }],
+              [{ text: '🏦 via QRIS / Transfer Bank', callback_data: 'buy_tripay' }],
             ],
           }
         );
