@@ -364,6 +364,8 @@ Teachers can generate redemption codes to sell or give to students.
 
 ## QA Checklist (Before Deploying)
 
+**Full ship checklist:** [`docs/SHIP_QA_CHECKLIST.md`](./docs/SHIP_QA_CHECKLIST.md)
+
 When implementing features, verify:
 1. **Pricing consistency** — Bot `/premium` command and API `/options` must show same Stars prices
 2. **Indonesian UI** — No Chinese characters (完成) or English typos in Indonesian messages
@@ -389,10 +391,9 @@ cd worker && npx wrangler d1 execute edubot-db --remote --file=./migrations/0NNN
 ## Recent Commits
 
 Latest commits on main:
+- `7b15b65` — feat(qa): add TypeScript check to CI + ship QA checklist for team
+- `85e7ceb` — docs: update CLAUDE.md with full project structure and BUGS.md cleanup
 - `adfa25e` — fix(audit): batch 2 — multi-speaker audio, section scoring, Whisper guard
 - `4093032` — fix(audit): critical sales-readiness fixes from content + audio audits
-- `8478899` — fix(audio): remove listening-passage audioPlayed block entirely
-- `a3ae866` — feat(onboarding+nudges): conversational 6-screen setup + feature discovery
 - `a96f081` — feat(premium): redemption codes — teacher-as-reseller channel
-- `c9a01e4` — feat(content): bulk AI content generator with few-shot + auto-QA
 - `74e3942` — feat: student weakness analysis system - 3-source profile
