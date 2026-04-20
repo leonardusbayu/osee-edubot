@@ -25,15 +25,20 @@ jobs:
         working-directory: worker
         run: npm test
 
+      - name: TypeScript check (worker)
+        working-directory: worker
+        run: npx tsc --noEmit
+
+      - name: TypeScript check (frontend)
+        working-directory: frontend
+        run: npx tsc --noEmit
+
       - name: Install Frontend dependencies
         working-directory: frontend
         run: npm install
 
       - name: Run Frontend tests
         working-directory: frontend
-        # No frontend tests yet; this still succeeds ("No test files found"
-        # is treated as success when --passWithNoTests). Kept so the job
-        # stays in the CI chain and picks up tests as we add them.
         run: npm test -- --passWithNoTests
 
   deploy-worker:
