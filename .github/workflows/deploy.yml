@@ -41,6 +41,14 @@ jobs:
         working-directory: frontend
         run: npm test -- --passWithNoTests
 
+      - name: Content validator (draft mode)
+        working-directory: worker
+        run: npx tsx src/services/content-validator.ts --mode=draft 2>&1 || true
+
+      - name: Check for published questions
+        working-directory: worker
+        run: npx wrangler d1 execute edubot-db --remote --command="SELECT COUNT(*) as total, SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) as published FROM test_contents" 2>&1
+
   deploy-worker:
     name: Deploy Worker
     needs: test
