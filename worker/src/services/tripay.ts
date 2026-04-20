@@ -115,7 +115,16 @@ export async function createTransaction(
 
   const merchantRef = `EDU-${params.userId}-${plan.days}-${Date.now()}`;
   const amount = plan.amount;
-  const expiry = Math.floor(Date.now() / 1000) + 24 * 60 * 60; // 24 hours
+  // Expiry time per metode (dalam detik dari sekarang):
+  // - QRIS: maks 30 menit (batas Tripay untuk QRIS)
+  // - E-Wallet (OVO/DANA/ShopeePay): 1 jam
+  // - Virtual Account: 24 jam
+  const expirySeconds = (() => {
+    if (params.method === 'QRIS2') return 30 * 60;           // 30 menit
+    if (['OVO', 'DANA', 'SHOPEEPAY'].includes(params.method)) return 60 * 60; // 1 jam
+    return 24 * 60 * 60;                                       // 24 jam (VA)
+  })();
+  const expiry = Math.floor(Date.now() / 1000) + expirySeconds;
 
   const signature = await generateTransactionSignature(privateKey, merchantCode, merchantRef, amount);
 
