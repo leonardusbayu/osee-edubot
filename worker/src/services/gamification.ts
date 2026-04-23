@@ -31,9 +31,13 @@ function computeLevel(totalXp: number): number {
 }
 
 function todayWIB(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date());
+}
+
+function yesterdayWIB(): string {
   const now = new Date();
-  const wib = new Date(now.getTime() + 7 * 3600 * 1000);
-  return wib.toISOString().slice(0, 10);
+  const yesterday = new Date(now.getTime() - 86400000);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(yesterday);
 }
 
 export interface XpResult {
@@ -47,6 +51,7 @@ export interface XpResult {
   bonus_drop: number;
   total_coins: number;
   new_badges: Array<{ id: string; name: string; icon: string; xp_reward: number }>;
+  streak_freeze_awarded: boolean;
 }
 
 /**
@@ -84,7 +89,7 @@ export async function awardXp(
 
   // Update streak
   if (isFirstToday) {
-    const yesterday = new Date(new Date().getTime() + 7 * 3600 * 1000 - 86400 * 1000).toISOString().slice(0, 10);
+    const yesterday = yesterdayWIB();
     if (lastDate === yesterday) {
       streak += 1;
     } else if (lastDate !== today) {
@@ -100,6 +105,15 @@ export async function awardXp(
         streak = 1; // reset
       }
     }
+  }
+
+  // Auto-award streak freeze at 7-day streak milestone
+  let freezeAwarded = false;
+  if (streak === 7 && streak > Number(row?.current_streak || 0)) {
+    await env.DB.prepare(
+      `UPDATE user_xp SET streak_freezes = streak_freezes + 1 WHERE user_id = ?`,
+    ).bind(userId).run();
+    freezeAwarded = true;
   }
 
   const newXp = oldXp + xpEarned;
@@ -165,6 +179,7 @@ export async function awardXp(
     bonus_drop: coinResult.bonus_drop,
     total_coins: coinResult.total_coins,
     new_badges: newBadges,
+    streak_freeze_awarded: freezeAwarded,
   };
 }
 

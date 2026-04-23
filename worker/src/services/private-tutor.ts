@@ -225,6 +225,17 @@ Jawab pertanyaan mereka, tapi kalau ada kesempatan, sisipkan mini-lesson.
 Kalau mereka terlihat bosan/random, suggest topik yang perlu diperbaiki.`;
   }
 
+  // ── Indonesian Analogies Context ─────────────────────
+  // Inject cultural analogies for concepts the student struggles with.
+  let analogyCtx = '';
+  try {
+    const { buildAnalogyContext } = await import('./indonesian-analogies');
+    const currentTopic = profile.current_topic || '';
+    if (currentTopic) {
+      analogyCtx = await buildAnalogyContext(env, currentTopic);
+    }
+  } catch {}
+
   return `${persona}
 
 ${prefsContext}
@@ -242,6 +253,8 @@ ${lessonPlanCtx}
 ${pausedCtx}
 
 ${modeInstructions}
+
+${analogyCtx}
 
 AUDIO LISTENING:
 Kalau konteks latihan listening, bisa kasih dialog multi-speaker dalam format:
@@ -324,10 +337,16 @@ export async function getPrivateTutorResponse(
   env: Env,
   user: User,
   message: string,
-): Promise<{ text: string; profile: StudentProfile }> {
+): Promise<{ text: string; profile: StudentProfile; moodIntervention?: string }> {
   if (!env.OPENAI_API_KEY) {
     const profile = await getStudentProfile(env, user.id);
     return { text: 'AI tutoring belum dikonfigurasi. Hubungi admin.', profile };
+  }
+
+  // Guard against oversized messages that blow up context window and cost.
+  const MAX_MESSAGE_LENGTH = 4000;
+  if (message.length > MAX_MESSAGE_LENGTH) {
+    message = message.slice(0, MAX_MESSAGE_LENGTH);
   }
 
   // 1. Load student profile + masteries
@@ -337,6 +356,31 @@ export async function getPrivateTutorResponse(
   // 2. Detect intent and emotional state
   const intent = detectIntent(message, profile);
   const confidenceSignal = detectConfidenceSignal(message, 0, profile);
+
+  // 2b. Mood detection (frustration/confusion/boredom/confidence)
+  let moodContext = '';
+  try {
+    const { analyzeMood, buildMoodContext, trackMoodHistory } = await import('./mood-detector');
+    const moodAnalysis = analyzeMood(message);
+    if (moodAnalysis.confidence >= 0.3) {
+      moodContext = buildMoodContext(moodAnalysis.mood, moodAnalysis.confidence);
+      const intervention = await trackMoodHistory(env, user.id, moodAnalysis.mood);
+      if (intervention.needsIntervention && intervention.message) {
+        // Will be sent after the tutor response
+        (globalThis as any).__moodIntervention = intervention.message;
+      }
+    }
+  } catch {}
+
+  // 2c. Adaptive difficulty context
+  let difficultyContext = '';
+  try {
+    const { loadDifficultyState, buildDifficultyPrompt } = await import('./adaptive-difficulty');
+    const diffState = await loadDifficultyState(env, user.id);
+    if (profile.tutor_mode === 'exercise') {
+      difficultyContext = buildDifficultyPrompt(diffState.currentDifficulty);
+    }
+  } catch {}
 
   // 3. Handle meta-commands
   if (intent.type === 'topic_request') {
@@ -399,6 +443,16 @@ export async function getPrivateTutorResponse(
     });
   }
 
+  // Inject mood context (frustration/confusion/boredom)
+  if (moodContext) {
+    messages.push({ role: 'system', content: moodContext });
+  }
+
+  // Inject difficulty context (for exercise mode)
+  if (difficultyContext) {
+    messages.push({ role: 'system', content: difficultyContext });
+  }
+
   messages.push({ role: 'user', content: message });
 
   // 6. Call LLM with fallback
@@ -451,7 +505,7 @@ export async function getPrivateTutorResponse(
     ).bind('openai', 'private-tutor', tokens, cost, user.id).run();
   } catch {}
 
-  return { text: responseText, profile };
+  return { text: responseText, profile, moodIntervention: (globalThis as any).__moodIntervention || undefined };
 }
 
 // ═══════════════════════════════════════════════════════

@@ -133,17 +133,142 @@ function cleanForTelegram(text: string): string {
     .trim();
 }
 
-export async function sendMessage(env: Env, chatId: number, text: string, replyMarkup?: any) {
+export async function sendMessage(env: Env, chatId: number, text: string, replyMarkup?: any): Promise<any> {
   const cleaned = cleanForTelegram(text);
-  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chat_id: chatId,
       text: cleaned,
+      parse_mode: 'Markdown',
       reply_markup: replyMarkup,
     }),
   });
+  return res.json();
+}
+
+async function sendChatAction(env: Env, chatId: number, action: string): Promise<void> {
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendChatAction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, action }),
+    });
+  } catch {}
+}
+
+async function deleteMessage(env: Env, chatId: number, messageId: number): Promise<void> {
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
+    });
+  } catch {}
+}
+
+async function sendQuiz(env: Env, chatId: number, question: string, options: string[], correctIndex: number, explanation?: string, replyMarkup?: any): Promise<any> {
+  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPoll`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      question,
+      options,
+      type: 'quiz',
+      correct_option_id: correctIndex,
+      explanation: explanation || undefined,
+      reply_markup: replyMarkup,
+    }),
+  });
+  return res.json();
+}
+
+async function editMessageMedia(env: Env, chatId: number, messageId: number, mediaUrl: string, caption?: string): Promise<void> {
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageMedia`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        media: JSON.stringify({ type: 'photo', media: mediaUrl, caption: caption || undefined }),
+      }),
+    });
+  } catch {}
+}
+
+async function pinChatMessage(env: Env, chatId: number, messageId: number, disableNotification = true): Promise<void> {
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/pinChatMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, message_id: messageId, disable_notification: disableNotification }),
+    });
+  } catch {}
+}
+
+async function sendAnimation(env: Env, chatId: number, animationUrl: string, caption?: string, replyMarkup?: any): Promise<any> {
+  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendAnimation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      animation: animationUrl,
+      caption: caption || undefined,
+      reply_markup: replyMarkup,
+    }),
+  });
+  return res.json();
+}
+
+// Unified quota-exceeded message used across all entry points
+function quotaExceededMsg(used: number, limit: number): string {
+  return `⚠️ Kuota harian habis (${used}/${limit} soal).\n\n` +
+    `Reset besok jam 00:00 WIB.\nKetik /premium untuk unlimited akses.`;
+}
+
+async function answerInlineQuery(env: Env, inlineQueryId: string, results: any[], cacheTime = 300, isPersonal = false): Promise<void> {
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerInlineQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        inline_query_id: inlineQueryId,
+        results,
+        cache_time: cacheTime,
+        is_personal: isPersonal,
+      }),
+    });
+  } catch {}
+}
+
+async function sendChecklist(env: Env, chatId: number, title: string, tasks: { text: string; done?: boolean }[]): Promise<any> {
+  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendChecklist`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      title,
+      tasks: tasks.map(t => ({ text: t.text, is_done: t.done || false })),
+    }),
+  });
+  return res.json();
+}
+
+async function editChecklistTasks(env: Env, chatId: number, messageId: number, tasks: { text: string; done?: boolean }[]): Promise<void> {
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageChecklistTasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        tasks: tasks.map(t => ({ text: t.text, is_done: t.done || false })),
+      }),
+    });
+  } catch {}
 }
 
 async function getOrCreateUser(env: Env, tgUser: any): Promise<User> {
@@ -361,7 +486,7 @@ async function sendTTSAudio(env: Env, chatId: number, text: string) {
 // from /api/visual/:id/bytes on this same worker — Telegram can't reach
 // a relative URL, and handing it an internal URL forces an extra round
 // trip. Direct byte upload keeps it to one request.
-async function sendPhoto(env: Env, chatId: number, photoBytes: ArrayBuffer, caption?: string, filename = 'visual.png', mimeType = 'image/png') {
+async function sendPhoto(env: Env, chatId: number, photoBytes: ArrayBuffer, caption?: string, filename = 'visual.png', mimeType = 'image/png'): Promise<any> {
   try {
     const form = new FormData();
     form.append('chat_id', String(chatId));
@@ -374,13 +499,13 @@ async function sendPhoto(env: Env, chatId: number, photoBytes: ArrayBuffer, capt
     if (!resp.ok) {
       const errText = await resp.text();
       console.error('sendPhoto failed:', errText);
-      // Fallback: at least tell the student there was a visual so they
-      // don't feel like the tutor silently dropped something. Caption
-      // alone often carries the useful context.
       if (caption) await sendMessage(env, chatId, `🖼 (gambar gagal dimuat) ${caption}`);
+      return null;
     }
+    return resp.json();
   } catch (e) {
     console.error('sendPhoto error:', e);
+    return null;
   }
 }
 
@@ -397,18 +522,35 @@ async function sendStepDisplay(
   env: Env,
   chatId: number,
   display: { text: string; keyboard?: any; scene?: string; scene_vocab?: string[] },
-): Promise<void> {
+  existingMessageId?: number,
+): Promise<number | null> {
   if (display.scene) {
     try {
       const { getOrGenerateSceneImage } = await import('../services/scene-image');
       const img = await getOrGenerateSceneImage(env, display.scene, display.scene_vocab || []);
       if (img) {
+        // If we have an existing photo message, update it in-place with editMessageMedia
+        if (existingMessageId) {
+          try {
+            const buf = await new Response(img.bytes as any).arrayBuffer();
+            const r2Url = `data:${img.mime_type};base64,${btoa(String.fromCharCode(...new Uint8Array(buf)))}`;
+            await editMessageMedia(env, chatId, existingMessageId, r2Url, undefined);
+            if (display.text) {
+              await sendMessage(env, chatId, display.text, display.keyboard);
+            }
+            return existingMessageId;
+          } catch (editErr) {
+            console.error('[editMessageMedia] failed, falling back to sendPhoto:', editErr);
+          }
+        }
         // Photos can't carry an inline keyboard in the same API call cleanly
         // with the multipart sendPhoto we use. Send image first, then the
         // prompt + keyboard as a separate message.
-        await sendPhoto(env, chatId, img.bytes, undefined, 'scene.png', img.mime_type);
-        await sendMessage(env, chatId, display.text, display.keyboard);
-        return;
+        const msg = await sendPhoto(env, chatId, img.bytes, undefined, 'scene.png', img.mime_type);
+        if (display.text) {
+          await sendMessage(env, chatId, display.text, display.keyboard);
+        }
+        return msg?.result?.message_id ?? null;
       }
     } catch (e) {
       console.error('[scene-image] send failed:', (e as any)?.message || e);
@@ -416,9 +558,10 @@ async function sendStepDisplay(
     // Fallback: no image — surface the scene text inline so the student
     // still knows what to describe.
     await sendMessage(env, chatId, `📸 *Scene:*\n${display.scene}\n\n${display.text}`, display.keyboard);
-    return;
+    return null;
   }
   await sendMessage(env, chatId, display.text, display.keyboard);
+  return null;
 }
 
 // Resolve a [VISUAL:concept:type] tag: hit the cache, pull bytes from
@@ -486,6 +629,44 @@ const testTypeKeyboard = {
   ],
 };
 
+// Premium button helper — adds style and custom emoji for visual differentiation
+function premiumButton(text: string, callbackData: string, style: 'primary' | 'secondary' | 'destructive' = 'primary'): any {
+  return {
+    text,
+    callback_data: callbackData,
+    style: style === 'primary' ? 1 : style === 'destructive' ? 2 : undefined,
+  };
+}
+
+// Study topic keyboard with premium-styled buttons for key actions
+function studyTopicKeyboardWithStyle(targetTest?: string) {
+  return {
+    inline_keyboard: [
+      [
+        premiumButton('📖 Lesson', 'study_lesson', 'primary'),
+        premiumButton('🧠 Mini Test', 'study_minitest', 'primary'),
+      ],
+      [
+        { text: '📝 Grammar Drill', callback_data: 'cat_practice' },
+        { text: '📚 Vocabulary', callback_data: 'cat_vocabulary' },
+      ],
+      [
+        { text: '📖 Reading', callback_data: 'cat_reading' },
+        { text: '🎧 Listening', callback_data: 'cat_listening' },
+      ],
+      [
+        { text: '🏋️ Drill Grammar', callback_data: 'study_drill' },
+        { text: '🔊 Pronunciation Drill', callback_data: 'pronun_random' },
+      ],
+      [
+        premiumButton('🎯 Daily Challenge', 'study_challenge', 'secondary'),
+        premiumButton('📊 Score Estimator', 'study_score', 'secondary'),
+      ],
+      [{ text: '⬅️ Kembali', callback_data: 'back_study' }],
+    ],
+  };
+}
+
 const proficiencyKeyboard = {
   inline_keyboard: [
     [{ text: '🌱 Beginner', callback_data: 'level_beginner' }, { text: '🌿 Intermediate', callback_data: 'level_intermediate' }],
@@ -552,6 +733,9 @@ function studyTopicKeyboard(targetTest?: string | null) {
       ],
       [
         { text: '🏋️ Latihan', callback_data: 'cat_practice' },
+        { text: '🎯 Skills & Strategy', callback_data: 'cat_skills' },
+      ],
+      [
         { text: '❓ Tanya Bebas', callback_data: 'study_ask' },
       ],
     ],
@@ -744,6 +928,21 @@ export async function handleWebhook(update: any, env: Env) {
         const parts = payment.invoice_payload.split('_');
         const userId = parseInt(parts[1] || '0');
         const days = parseInt(parts[2] || '30');
+        if (!Number.isFinite(userId) || userId <= 0) {
+          console.error('[payment] Invalid userId from payload:', payment.invoice_payload);
+          await sendMessage(env, chatId,
+            `⚠️ *Pembayaran Diterima, Tapi Ada Masalah*\n\n` +
+            `Kami menerima pembayaran kamu, tapi terjadi error saat aktivasi premium.\n\n` +
+            `Silakan hubungi admin dengan screenshot bukti pembayaran ini.\n\n` +
+            `Payment ID: ${payment.telegram_payment_charge_id}`
+          );
+          return;
+        }
+        if (!Number.isFinite(days) || days <= 0) {
+          console.error('[payment] Invalid days from payload:', payment.invoice_payload);
+          await sendMessage(env, chatId, `⚠️ Ada masalah dengan pembayaran kamu. Hubungi admin ya.`);
+          return;
+        }
         if (userId > 0) {
           // Get current premium_until to extend instead of overwrite
           const current = await env.DB.prepare('SELECT premium_until FROM users WHERE id = ?').bind(userId).first() as any;
@@ -757,14 +956,15 @@ export async function handleWebhook(update: any, env: Env) {
           expiresAt.setDate(expiresAt.getDate() + days);
           await env.DB.prepare('UPDATE users SET is_premium = 1, premium_until = ? WHERE id = ?')
             .bind(expiresAt.toISOString(), userId).run();
-          await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              chat_id: chatId, 
-              text: `🎉 *Premium Aktif!*\n\nKamu sekarang punya akses premium selama ${days} hari!\n📅 Berakhir: ${expiresAt.toLocaleDateString('id-ID')}\n\nKetik /premium untuk cek status.`,
-              parse_mode: 'Markdown'
-            }),
-          });
+          await sendMessage(env, chatId,
+            `🎉 *Premium Aktif!*\n\nKamu sekarang punya akses premium selama ${days} hari!\n📅 Berakhir: ${expiresAt.toLocaleDateString('id-ID')}\n\nKetik /premium untuk cek status.`
+          );
+          try {
+            await sendAnimation(env, chatId,
+              'https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif',
+              '🎊 Welcome to Premium!'
+            );
+          } catch {}
         }
         return;
       }
@@ -791,6 +991,12 @@ export async function handleWebhook(update: any, env: Env) {
       }
     } else if (update.callback_query) {
       await handleCallbackQuery(update.callback_query, env);
+    } else if (update.inline_query) {
+      await handleInlineQuery(update.inline_query, env);
+    } else if (update.business_connection) {
+      await handleBusinessConnection(update.business_connection, env);
+    } else if (update.business_message) {
+      await handleBusinessMessage(update.business_message, env);
     }
   } catch (e: any) {
     console.error('Webhook error:', e);
@@ -810,6 +1016,326 @@ export async function handleWebhook(update: any, env: Env) {
   }
 }
 
+// ═══════════════════════════════════════════════════════
+// INLINE MODE — @edubot quiz/practice in any chat
+// ═══════════════════════════════════════════════════════
+async function handleInlineQuery(inlineQuery: any, env: Env) {
+  const query = (inlineQuery.query || '').trim().toLowerCase();
+  const userId = inlineQuery.from?.id;
+  const inlineQueryId = inlineQuery.id;
+
+  // No query → show help + quick actions
+  if (!query) {
+    await answerInlineQuery(env, inlineQueryId, [
+      {
+        type: 'article',
+        id: 'help',
+        title: '📚 EduBot — Quick Practice',
+        description: 'Tap to start a quick quiz or practice session',
+        input_message_content: { message_text: '📚 *Quick Practice*\n\nMau latihan apa? Pilih di bawah:', parse_mode: 'Markdown' },
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🧠 Quick Quiz', callback_data: 'study_minitest' }],
+            [{ text: '📖 Study Lesson', callback_data: 'study_lesson' }],
+            [{ text: '🎤 Speaking Practice', callback_data: 'speak_topic_random' }],
+          ],
+        },
+      },
+      {
+        type: 'article',
+        id: 'quiz_grammar',
+        title: '🧠 Quiz — Grammar',
+        description: 'Test your grammar skills',
+        input_message_content: { message_text: '🧠 *Grammar Quiz*\n\nGenerate a quick grammar quiz!', parse_mode: 'Markdown' },
+        reply_markup: { inline_keyboard: [[{ text: '🔄 Generate Quiz', switch_inline_query_current_chat: 'quiz grammar' }]] },
+      },
+      {
+        type: 'article',
+        id: 'quiz_vocabulary',
+        title: '📝 Quiz — Vocabulary',
+        description: 'Test your vocabulary',
+        input_message_content: { message_text: '📝 *Vocabulary Quiz*\n\nGenerate a quick vocabulary quiz!', parse_mode: 'Markdown' },
+        reply_markup: { inline_keyboard: [[{ text: '🔄 Generate Quiz', switch_inline_query_current_chat: 'quiz vocabulary' }]] },
+      },
+      {
+        type: 'article',
+        id: 'quiz_reading',
+        title: '📖 Quiz — Reading',
+        description: 'Test your reading comprehension',
+        input_message_content: { message_text: '📖 *Reading Quiz*\n\nGenerate a quick reading quiz!', parse_mode: 'Markdown' },
+        reply_markup: { inline_keyboard: [[{ text: '🔄 Generate Quiz', switch_inline_query_current_chat: 'quiz reading' }]] },
+      },
+    ]);
+    return;
+  }
+
+  // Parse inline query: "quiz grammar", "quiz vocabulary", "explain past tense", etc.
+  const parts = query.split(' ');
+  const action = parts[0];
+  const topic = parts.slice(1).join(' ');
+
+  if (action === 'quiz' && topic) {
+    // Generate a quiz question via AI
+    try {
+      const user = userId ? await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(String(userId).replace('.0', '')).first() as any : null;
+      if (!user) {
+        await answerInlineQuery(env, inlineQueryId, [{
+          type: 'article',
+          id: 'error',
+          title: '⚠️ User not found',
+          description: 'Start @edubot first to use inline mode',
+          input_message_content: { message_text: '⚠️ Kamu belum terdaftar. Mulai /start di @edubot dulu ya!', parse_mode: 'Markdown' },
+        }]);
+        return;
+      }
+
+      const prompt = `Buat 1 soal TOEFL iBT ${topic} (grammar/vocabulary/reading comprehension). Format JSON: {"question":"...","options":["A. ...","B. ...","C. ...","D. ..."],"correct":0,"explanation":"..."}`;
+      const { getTutorResponse } = await import('../services/ai');
+      const raw = await getTutorResponse(env, user, prompt);
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        const options = parsed.options.map((o: string) => o.replace(/^[A-D]\.\s*/, ''));
+        const optionsText = options.map((o: string, i: number) => `${String.fromCharCode(65 + i)}. ${o}`).join('\n');
+
+        await answerInlineQuery(env, inlineQueryId, [{
+          type: 'article',
+          id: `quiz_${topic}_${Date.now()}`,
+          title: `🧠 ${topic.charAt(0).toUpperCase() + topic.slice(1)} Quiz`,
+          description: parsed.question.substring(0, 100),
+          input_message_content: {
+            message_text: `🧠 *${topic.charAt(0).toUpperCase() + topic.slice(1)} Quiz*\n\n${parsed.question}\n\n${optionsText}\n\n_Jawaban ada di penjelasan di bawah (tap untuk reveal)_`,
+            parse_mode: 'Markdown',
+          },
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '👁️ Lihat Jawaban', callback_data: `inline_answer:${parsed.correct}:${encodeURIComponent(parsed.explanation)}` }],
+              [{ text: '🔄 Soal Baru', switch_inline_query_current_chat: `quiz ${topic}` }],
+            ],
+          },
+        }]);
+      } else {
+        await answerInlineQuery(env, inlineQueryId, [{
+          type: 'article',
+          id: 'error',
+          title: `🧠 ${topic} Quiz`,
+          description: raw.substring(0, 100),
+          input_message_content: { message_text: raw, parse_mode: 'Markdown' },
+          reply_markup: { inline_keyboard: [[{ text: '🔄 Coba Lagi', switch_inline_query_current_chat: `quiz ${topic}` }]] },
+        }]);
+      }
+    } catch (e: any) {
+      console.error('Inline quiz error:', e);
+      await answerInlineQuery(env, inlineQueryId, [{
+        type: 'article',
+        id: 'error',
+        title: '⚠️ Error',
+        description: 'Failed to generate quiz',
+        input_message_content: { message_text: '⚠️ Gagal buat quiz. Coba lagi ya.', parse_mode: 'Markdown' },
+      }]);
+    }
+    return;
+  }
+
+  if (action === 'explain' && topic) {
+    try {
+      const user = userId ? await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(String(userId).replace('.0', '')).first() as any : null;
+      if (!user) {
+        await answerInlineQuery(env, inlineQueryId, [{
+          type: 'article',
+          id: 'error',
+          title: '⚠️ User not found',
+          description: 'Start @edubot first',
+          input_message_content: { message_text: '⚠️ Mulai /start di @edubot dulu ya!', parse_mode: 'Markdown' },
+        }]);
+        return;
+      }
+
+      const prompt = `Jelaskan "${topic}" dalam bahasa Indonesia. Maks 5 baris. Plain text. Kasih 2 contoh kalimat.`;
+      const { getTutorResponse } = await import('../services/ai');
+      const explanation = await getTutorResponse(env, user, prompt);
+
+      await answerInlineQuery(env, inlineQueryId, [{
+        type: 'article',
+        id: `explain_${topic}_${Date.now()}`,
+        title: `📖 Explain: ${topic}`,
+        description: explanation.substring(0, 100),
+        input_message_content: {
+          message_text: `📖 *Penjelasan: ${topic}*\n\n${explanation}`,
+          parse_mode: 'Markdown',
+        },
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🧠 Quiz Ini', switch_inline_query_current_chat: `quiz ${topic}` }],
+            [{ text: '🔄 Topik Lain', switch_inline_query_current_chat: '' }],
+          ],
+        },
+      }]);
+    } catch (e: any) {
+      console.error('Inline explain error:', e);
+      await answerInlineQuery(env, inlineQueryId, [{
+        type: 'article',
+        id: 'error',
+        title: '⚠️ Error',
+        description: 'Failed to explain',
+        input_message_content: { message_text: '⚠️ Gagal explain. Coba lagi.', parse_mode: 'Markdown' },
+      }]);
+    }
+    return;
+  }
+
+  // Default: search for matching topics
+  const topics = ['grammar', 'vocabulary', 'reading', 'listening', 'speaking', 'writing', 'tenses', 'prepositions', 'conditionals', 'passive voice'];
+  const matches = topics.filter(t => t.includes(query) || query.includes(t));
+
+  if (matches.length > 0) {
+    await answerInlineQuery(env, inlineQueryId, matches.map(topic => ({
+      type: 'article',
+      id: `topic_${topic}`,
+      title: `📚 ${topic.charAt(0).toUpperCase() + topic.slice(1)}`,
+      description: `Practice ${topic}`,
+      input_message_content: {
+        message_text: `📚 *${topic.charAt(0).toUpperCase() + topic.slice(1)}*\n\nMau latihan atau belajar?`,
+        parse_mode: 'Markdown',
+      },
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🧠 Quiz', switch_inline_query_current_chat: `quiz ${topic}` }],
+          [{ text: '📖 Explain', switch_inline_query_current_chat: `explain ${topic}` }],
+        ],
+      },
+    })));
+  } else {
+    await answerInlineQuery(env, inlineQueryId, [{
+      type: 'article',
+      id: 'default',
+      title: `🔍 Search: "${query}"`,
+      description: 'Tap to search EduBot for this topic',
+      input_message_content: {
+        message_text: `🔍 Mencari "${query}"...`,
+        parse_mode: 'Markdown',
+      },
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🧠 Quiz', switch_inline_query_current_chat: `quiz ${query}` }],
+          [{ text: '📖 Explain', switch_inline_query_current_chat: `explain ${query}` }],
+        ],
+      },
+    }]);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// BUSINESS CONNECTION — teachers connect EduBot as AI assistant
+// ═══════════════════════════════════════════════════════
+async function handleBusinessConnection(businessConnection: any, env: Env) {
+  const connectionId = businessConnection.id;
+  const userId = businessConnection.user?.id;
+  const canReply = businessConnection.can_reply;
+
+  if (!userId) return;
+
+  try {
+    const user = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(String(userId).replace('.0', '')).first() as any;
+    if (!user) return;
+
+    if (businessConnection.enabled !== false) {
+      // Store the business connection
+      await env.DB.prepare(
+        `INSERT INTO business_connections (user_id, connection_id, can_reply, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, connection_id) DO UPDATE SET can_reply = ?, updated_at = ?`
+      ).bind(user.id, connectionId, canReply, new Date().toISOString(), canReply, new Date().toISOString()).run();
+
+      // Notify the teacher
+      const chatId = userId;
+      await sendMessage(env, chatId,
+        `🏢 *Business Connection Aktif!*\n\n` +
+        `EduBot sekarang bisa membantu menjawab pesan siswa atas nama kamu.\n\n` +
+        `✅ Bisa reply pesan: ${canReply ? 'Ya' : 'Tidak'}\n\n` +
+        `Siswa yang chat ke kamu akan mendapat respons otomatis dari AI EduBot.`
+      );
+    } else {
+      // Connection disabled
+      await env.DB.prepare(
+        `UPDATE business_connections SET enabled = 0, disabled_at = ? WHERE user_id = ? AND connection_id = ?`
+      ).bind(new Date().toISOString(), user.id, connectionId).run();
+
+      const chatId = userId;
+      await sendMessage(env, chatId,
+        `🏢 *Business Connection Dinonaktifkan*\n\n` +
+        `EduBot tidak lagi membantu menjawab pesan siswa atas nama kamu.`
+      );
+    }
+  } catch (e) {
+    console.error('Business connection handler error:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// BUSINESS MESSAGE — messages from connected business accounts
+// ═══════════════════════════════════════════════════════
+async function handleBusinessMessage(businessMessage: any, env: Env) {
+  const chatId = businessMessage.chat?.id;
+  const text = businessMessage.text;
+  const connectionId = businessMessage.business_connection_id;
+  const from = businessMessage.from;
+
+  if (!chatId || !text || !from) return;
+
+  try {
+    // Find the teacher who owns this business connection
+    const connection = await env.DB.prepare(
+      `SELECT * FROM business_connections WHERE connection_id = ? AND enabled = 1`
+    ).bind(connectionId).first() as any;
+
+    if (!connection) return;
+
+    // Get the student
+    const student = await env.DB.prepare('SELECT * FROM users WHERE telegram_id = ?').bind(String(from.id).replace('.0', '')).first() as any;
+
+    if (!student) {
+      // Student not registered — send a friendly nudge
+      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `Halo! 👋 Aku AI assistant dari guru kamu. Untuk mulai belajar, silakan start bot @edubot dulu ya!`,
+          business_connection_id: connectionId,
+        }),
+      });
+      return;
+    }
+
+    // Show typing indicator
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendChatAction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, action: 'typing', business_connection_id: connectionId }),
+    });
+
+    // Get AI response
+    const { getTutorResponse } = await import('../services/ai');
+    const response = await getTutorResponse(env, student, text);
+
+    // Send response on behalf of the teacher
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: response,
+        parse_mode: 'Markdown',
+        business_connection_id: connectionId,
+      }),
+    });
+  } catch (e) {
+    console.error('Business message handler error:', e);
+  }
+}
+
 async function handleVoiceMessage(message: any, env: Env) {
   const chatId = message.chat.id;
   const tgUser = message.from;
@@ -824,6 +1350,9 @@ async function handleVoiceMessage(message: any, env: Env) {
   const fileId = voice.file_id;
 
   try {
+    // Show typing indicator while processing
+    await sendChatAction(env, chatId, 'record_voice');
+
     // Get file URL from Telegram
     const fileResp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`);
     const fileData: any = await fileResp.json();
@@ -1145,6 +1674,9 @@ async function handleVoiceMessage(message: any, env: Env) {
     // Show what was heard
     await sendMessage(env, chatId, `Aku dengar: "${transcription}"`);
 
+    // Show typing indicator while AI processes
+    await sendChatAction(env, chatId, 'typing');
+
     // Process as text message
     message.text = transcription;
     await handleMessage(message, env);
@@ -1181,7 +1713,13 @@ async function handleMessage(message: any, env: Env) {
         return;
       }
       await env.DB.prepare('UPDATE classes SET group_chat_id = ? WHERE id = ?').bind(groupChatId, cls.id).run();
-      await sendMessage(env, chatId, `Grup ini terhubung ke kelas "${cls.name}"!\n\nAku akan kirim quiz harian dan leaderboard mingguan di sini.`);
+      const pinMsg = await sendMessage(env, chatId, `📌 Kelas "${cls.name}" aktif di grup ini!\n\nQuiz harian dan leaderboard mingguan akan muncul di sini.`);
+      // Pin the connection message so new members can see it
+      try {
+        if (pinMsg?.ok) {
+          await pinChatMessage(env, chatId, pinMsg.result.message_id);
+        }
+      } catch {}
       return;
     }
 
@@ -1766,9 +2304,75 @@ async function handleMessage(message: any, env: Env) {
         });
         return;
 
-      case '/study':
-        await sendMessage(env, chatId, '📚 *Menu Belajar*\n\nPilih skill yang mau dilatih:', studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
+      case '/study': {
+        const { checkPremium } = await import('../services/premium');
+        const premiumInfo = await checkPremium(env, user.id);
+        await sendMessage(env, chatId, '📚 *Menu Belajar*\n\nPilih skill yang mau dilatih:',
+          premiumInfo.is_premium ? studyTopicKeyboardWithStyle(user.target_test || 'TOEFL_IBT') : studyTopicKeyboard(user.target_test || 'TOEFL_IBT')
+        );
         return;
+      }
+
+      case '/quickquiz': {
+        await sendChatAction(env, chatId, 'typing');
+        const prompt = `Buat 1 soal TOEFL iBT quiz (grammar/vocabulary/reading). Format JSON: {"question":"...","options":["A. ...","B. ...","C. ...","D. ..."],"correct":0,"explanation":"..."}`;
+        try {
+          const { getTutorResponse } = await import('../services/ai');
+          const raw = await getTutorResponse(env, user, prompt);
+          const jsonMatch = raw.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            const options = parsed.options.map((o: string) => o.replace(/^[A-D]\.\s*/, ''));
+            await sendQuiz(env, chatId, parsed.question, options, parsed.correct, parsed.explanation);
+          } else {
+            await sendMessage(env, chatId, raw);
+          }
+        } catch (e: any) {
+          console.error('Quick quiz error:', e);
+          await sendMessage(env, chatId, 'Gagal buat quiz. Coba lagi ya.');
+        }
+        return;
+      }
+
+      case '/checklist': {
+        await sendChatAction(env, chatId, 'typing');
+        try {
+          const today = new Date();
+          const todayStr = today.toISOString().split('T')[0];
+
+          // Get today's study plan or generate a default checklist
+          const { getTodayLesson } = await import('../services/studyplan');
+          const lesson = await getTodayLesson(env, user.id);
+
+          if (lesson) {
+            // Parse lesson into checklist tasks
+            const lines = lesson.split('\n').filter((l: string) => l.trim().length > 0 && !l.startsWith('#'));
+            const tasks = lines.slice(0, 8).map((line: string) => ({
+              text: line.replace(/^[-•]\s*/, '').trim(),
+              done: false,
+            }));
+
+            if (tasks.length > 0) {
+              await sendChecklist(env, chatId, `📚 ${todayStr} — Study Plan`, tasks);
+              return;
+            }
+          }
+
+          // Default checklist if no lesson plan
+          const defaultTasks = [
+            { text: '📖 Review 10 vocabulary words', done: false },
+            { text: '🧠 Complete 1 grammar quiz', done: false },
+            { text: '🎤 Practice speaking (5 min)', done: false },
+            { text: '📝 Read 1 article in English', done: false },
+            { text: '🔄 Review yesterday\'s mistakes', done: false },
+          ];
+          await sendChecklist(env, chatId, `📚 ${todayStr} — Daily Tasks`, defaultTasks);
+        } catch (e: any) {
+          console.error('Checklist error:', e);
+          await sendMessage(env, chatId, 'Gagal buat checklist. Coba lagi ya.');
+        }
+        return;
+      }
 
       // ═══════════════════════════════════════════════════════
       // PERSONALIZED LEARNING COMMANDS
@@ -1859,9 +2463,11 @@ async function handleMessage(message: any, env: Env) {
         } else {
           // Generate new plan
           await sendMessage(env, chatId, '🤖 Generating lesson plan berdasarkan analisis profilmu...');
+          await sendChatAction(env, chatId, 'typing');
           try {
             const plan = await generatePersonalizedPlan(env, user);
             const skills = plan.target_skills.map(s => formatTopicName(s)).join(', ');
+            const firstStep = plan.lessons?.[0];
 
             let msg = `📖 *Lesson Plan Baru!*\n\n`;
             msg += `*${plan.title}*\n`;
@@ -1869,9 +2475,19 @@ async function handleMessage(message: any, env: Env) {
             msg += `📚 Skills: ${skills}\n`;
             msg += `⏱️ Estimasi: ${plan.estimated_minutes} menit\n`;
             msg += `📝 ${plan.total_steps} steps\n\n`;
-            msg += `Ketik /lesson lagi untuk mulai!`;
 
-            await sendMessage(env, chatId, msg);
+            if (firstStep) {
+              msg += `*Step 1: ${firstStep.title || 'Lesson'}*\n`;
+              msg += `${(firstStep as any).content || 'Siap mulai? Tap tombol di bawah.'}`;
+              await sendMessage(env, chatId, msg, {
+                inline_keyboard: [
+                  [{ text: '▶️ Mulai Step 1', callback_data: `lesson_start_${plan.id}` }],
+                ],
+              });
+            } else {
+              msg += `Ketik /lesson untuk mulai!`;
+              await sendMessage(env, chatId, msg);
+            }
           } catch (e: any) {
             console.error('Lesson plan error:', e);
             await sendMessage(env, chatId, 'Gagal generate lesson plan. Coba lagi nanti ya.');
@@ -1942,8 +2558,13 @@ async function handleMessage(message: any, env: Env) {
             await env.DB.prepare(
               'INSERT OR REPLACE INTO review_sessions (user_id, current_review_id) VALUES (?, ?)'
             ).bind(user.id, item.id).run();
-            const remaining = stats.due > 1 ? `\n\nMasih ada ${stats.due - 1} soal lagi setelah ini.` : '';
-            await sendMessage(env, chatId, `Yuk review! 📝\n\nSoal ${item.section}:\n"${item.question_data}"\n\nJawaban kamu sebelumnya: ${item.student_answer}\nJawaban yang benar: ${item.correct_answer}\n\nUdah paham sekarang kenapa? Ketik "ya" atau "belum" — kalau belum, aku jelaskan.${remaining}\n\nKetik /cancel review untuk keluar.`);
+          const remaining = stats.due > 1 ? `\n\nMasih ada ${stats.due - 1} soal lagi setelah ini.` : '';
+          await sendMessage(env, chatId, `Yuk review! 📝\n\nSoal ${item.section}:\n"${item.question_data}"\n\nJawaban kamu sebelumnya: ${item.student_answer}\nJawaban yang benar: ${item.correct_answer}`, {
+            inline_keyboard: [
+              [{ text: '✅ Udah paham', callback_data: `review:ya:${item.id}` }, { text: '❓ Belum paham', callback_data: `review:belum:${item.id}` }],
+              [{ text: '⏸️ Stop review', callback_data: 'review:stop' }],
+            ],
+          });
           }
         }
         return;
@@ -2069,9 +2690,15 @@ async function handleMessage(message: any, env: Env) {
       }
 
       case '/diagnostic': {
-        const { startDiagnostic } = await import('../services/diagnostic');
-        const intro = await startDiagnostic(env, user);
-        await sendMessage(env, chatId, intro);
+        await sendChatAction(env, chatId, 'typing');
+        try {
+          const { startDiagnostic } = await import('../services/diagnostic');
+          const intro = await startDiagnostic(env, user);
+          await sendMessage(env, chatId, intro);
+        } catch (e: any) {
+          console.error('/diagnostic error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memulai diagnostic. Coba lagi sebentar ya.');
+        }
         return;
       }
 
@@ -2148,7 +2775,7 @@ async function handleMessage(message: any, env: Env) {
         const lesson = await getTodayLesson(env, user.id);
         const base = lesson || 'Belum ada study plan. Ketik /diagnostic dulu untuk tes penempatan.';
         const nudge = await maybeAppendNudge(env, user.id);
-        await sendMessage(env, chatId, base + nudge);
+        await sendMessage(env, chatId, nudge ? `${base}\n\n${nudge}` : base);
         // Track /today usage for analytics
         try {
           await env.DB.prepare(
@@ -2319,7 +2946,7 @@ async function handleMessage(message: any, env: Env) {
 
       case '/admin':
         if (user.role !== 'teacher' && user.role !== 'admin') {
-          await sendMessage(env, chatId, '⛔ Teachers and admins only.');
+          await sendMessage(env, chatId, '⛔ Hanya untuk guru dan admin.');
           return;
         }
         await sendMessage(env, chatId, '🏫 Admin Panel', adminKeyboard(env.WEBAPP_URL, user.telegram_id));
@@ -2327,7 +2954,7 @@ async function handleMessage(message: any, env: Env) {
 
       case '/broadcast': {
         if (user.role !== 'teacher' && user.role !== 'admin') {
-          await sendMessage(env, chatId, '⛔ Teachers and admins only.');
+          await sendMessage(env, chatId, '⛔ Hanya untuk guru dan admin.');
           return;
         }
         const msg = text.replace('/broadcast', '').trim();
@@ -2398,6 +3025,12 @@ async function handleMessage(message: any, env: Env) {
               `• Study plan personalized\n\n` +
               `Coba /test atau /study untuk mulai!`
             );
+            try {
+              await sendAnimation(env, chatId,
+                'https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif',
+                '🎊 Premium unlocked!'
+              );
+            } catch {}
           } else {
             const errMsg: Record<string, string> = {
               not_found: '❌ Kode tidak ditemukan. Pastikan kode yang kamu ketik benar persis.',
@@ -2577,14 +3210,21 @@ async function handleMessage(message: any, env: Env) {
 
         const count = studentCount?.count || 0;
 
+        const prices = [
+          { months: 1, stars: 500 },
+          { months: 3, stars: 1400 },
+          { months: 6, stars: 2500 },
+          { months: 12, stars: 4500 },
+        ];
+
         await sendMessage(env, chatId,
           `👨‍🏫 *Teacher Premium Subscription*\n\n` +
           `Siswa terdaftar: ${count} siswa\n\n` +
           `📦 *Paket Langganan:*\n\n` +
-          `1️⃣ 1 bulan = ${(count * 50000).toLocaleString('id-ID')} ⭐\n` +
-          `2️⃣ 3 bulan = ${(count * 150000).toLocaleString('id-ID')} ⭐\n` +
-          `3️⃣ 6 bulan = ${(count * 300000).toLocaleString('id-ID')} ⭐\n` +
-          `4️⃣ 12 bulan = ${(count * 600000).toLocaleString('id-ID')} ⭐\n\n` +
+          `1️⃣ 1 bulan = ${prices[0].stars.toLocaleString('id-ID')} ⭐\n` +
+          `2️⃣ 3 bulan = ${prices[1].stars.toLocaleString('id-ID')} ⭐\n` +
+          `3️⃣ 6 bulan = ${prices[2].stars.toLocaleString('id-ID')} ⭐\n` +
+          `4️⃣ 12 bulan = ${prices[3].stars.toLocaleString('id-ID')} ⭐\n\n` +
           `Klik tombol di bawah untuk beli via Telegram Stars.`,
           {
             inline_keyboard: [
@@ -2897,7 +3537,7 @@ async function handleMessage(message: any, env: Env) {
             });
           }
 
-        await sendMessage(env, chatId, `✅ Payment #${paymentId} confirmed. Premium granted for ${payment.days} days.`);
+        await sendMessage(env, chatId, `✅ Pembayaran #${paymentId} dikonfirmasi. Premium aktif selama ${payment.days} hari.`);
         return;
       }
 
@@ -2943,7 +3583,7 @@ async function handleMessage(message: any, env: Env) {
           });
         }
 
-        await sendMessage(env, chatId, `❌ Payment #${paymentId} rejected. User notified.`);
+        await sendMessage(env, chatId, `❌ Pembayaran #${paymentId} ditolak. User telah diberitahu.`);
         return;
       }
 
@@ -3227,7 +3867,24 @@ async function handleMessage(message: any, env: Env) {
     const item = await env.DB.prepare('SELECT * FROM spaced_repetition WHERE id = ?').bind(reviewSession.current_review_id).first() as any;
 
     if (item) {
-      const understood = text.toLowerCase() === 'ya' || text.toLowerCase() === 'y';
+      const lower = text.toLowerCase().trim();
+      const isAnswer = lower === 'ya' || lower === 'y' || lower === 'belum' || lower === 'n' || lower === 'no';
+
+      if (lower === 'stop' || lower === 'berhenti' || lower === 'keluar') {
+        await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
+        await sendMessage(env, chatId, '✅ Sesi review dibatalkan. Soal yang belum direview akan muncul lagi nanti.');
+        return;
+      }
+
+      if (!isAnswer) {
+        await sendMessage(env, chatId,
+          `Ketik "ya" kalau udah paham, atau "belum" kalau butuh penjelasan lebih lanjut.\n\n` +
+          `Atau ketik "stop" untuk berhenti.`
+        );
+        return;
+      }
+
+      const understood = lower === 'ya' || lower === 'y';
       await markReviewed(env, item.id, understood);
 
       // Clean up session
@@ -3431,6 +4088,7 @@ async function handleMessage(message: any, env: Env) {
       }
 
       const weaknesses = JSON.parse(recentDiag.weaknesses || '[]');
+      await sendChatAction(env, chatId, 'typing');
       const { generateStudyPlan } = await import('../services/studyplan');
       const plan = await generateStudyPlan(env, user.id, targetDate.toISOString(), weaknesses, user.target_test || undefined);
       await sendMessage(env, chatId, plan);
@@ -3465,6 +4123,7 @@ async function handleMessage(message: any, env: Env) {
 
   if (text === '🩺 Diagnostic' || text.toLowerCase() === 'diagnostic' || text === '/diagnostic') {
     try {
+      await sendChatAction(env, chatId, 'typing');
       const { startDiagnostic } = await import('../services/diagnostic');
       const intro = await startDiagnostic(env, user);
       await sendMessage(env, chatId, intro);
@@ -3476,6 +4135,7 @@ async function handleMessage(message: any, env: Env) {
 
   if (text === '📅 Hari Ini' || text.toLowerCase() === 'hari ini' || text === '/today') {
     try {
+      await sendChatAction(env, chatId, 'typing');
       const { getTodayLesson } = await import('../services/studyplan');
       const lesson = await getTodayLesson(env, user.id);
       await sendMessage(env, chatId, lesson || 'Belum ada study plan. Tap "Diagnostic" dulu untuk tes penempatan.');
@@ -3607,6 +4267,13 @@ async function handleMessage(message: any, env: Env) {
             const { getStreakRecoveryMessage } = await import('../services/companion');
             const recoveryMsg = getStreakRecoveryMessage(user.name, streakResult.previousStreak);
             await sendMessage(env, chatId, recoveryMsg);
+          } else if (streakResult?.newStreak && [7, 14, 30, 100].includes(streakResult.newStreak)) {
+            try {
+              await sendAnimation(env, chatId,
+                'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcTd1dWlrMnB6eWV3a3B6eWV3a3B6eWV3a3B6eWV3a3B6eSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l0HlBO7eyXzSZkexa/giphy.gif',
+                `🔥 ${streakResult.newStreak} hari berturut-turut! Luar biasa!`
+              );
+            } catch {}
           }
         } catch (e) { console.error('updateStreak (text) error:', e); }
 
@@ -3638,7 +4305,9 @@ async function handleMessage(message: any, env: Env) {
       // If not awaiting input, fall through to AI tutor
     } catch (e: any) {
       console.error('Exercise text handler error:', e);
-      // Fall through to AI tutor on error
+      // Only fall through to AI tutor if no message was sent yet
+      await sendMessage(env, chatId, `⚠️ Ada masalah saat latihan. Coba lagi ya.`);
+      return;
     }
   }
 
@@ -3685,11 +4354,7 @@ async function handleMessage(message: any, env: Env) {
     const { checkTestAccess, trackQuestionAnswer } = await import('../services/premium');
     const access = await checkTestAccess(env, user.id);
     if (!access.allowed) {
-      await sendMessage(env, chatId,
-        `⚠️ Kuota harian habis (${access.used_today}/${access.daily_limit} soal).\n\n` +
-        `Kuota direset besok jam 00:00 WIB.\n` +
-        `Ketik /premium untuk akses unlimited! 🚀\n\n` +
-        `Atau ajak teman pakai /referral untuk bonus kuota! 🎁`);
+      await sendMessage(env, chatId, quotaExceededMsg(access.used_today, access.daily_limit));
       return;
     }
     // Track this as a question usage
@@ -3704,24 +4369,55 @@ async function handleMessage(message: any, env: Env) {
     }
   } catch (e) {
     console.error('Bot conversation quota check error:', e);
-    // Don't block if quota check fails — let the conversation continue
+    // Block on quota check failure to prevent free user bypass
+    await sendMessage(env, chatId, `⚠️ Terjadi masalah saat cek kuota. Coba lagi sebentar ya.`);
+    return;
   }
 
   // Use private tutor for rich tracking (student profiles, topic mastery, tutor interactions)
   let response: string;
   let tutorProfile: any = null;
+  let moodIntervention: string | undefined;
   try {
+    await sendChatAction(env, chatId, 'typing');
     const result = await getPrivateTutorResponse(env, user, text);
     response = result.text;
     tutorProfile = result.profile;
+    moodIntervention = result.moodIntervention;
+    // Save conversation history for main tutor flow
+    try { await saveToHistory(env, user.id, text, response); } catch {}
   } catch (e: any) {
     // Surface the actual error — "falling back to generic" with no detail
     // obscured a real persona failure for days. Include message + stack so
     // `wrangler tail` shows what exactly is breaking.
     console.error('[private-tutor] FAILED — falling back to generic tutor:',
       e?.message || e, e?.stack?.split('\n').slice(0, 4).join(' | '));
+    await sendChatAction(env, chatId, 'typing');
     response = await getTutorResponse(env, user, text);
     await saveToHistory(env, user.id, text, response);
+  }
+
+  // ── Socratic Questioning Engine ──────────────────────
+  // Post-process AI response: if it gave a direct answer,
+  // rewrite as a guiding question (max 3 attempts before reveal).
+  try {
+    const { applySocraticFilter } = await import('../services/socratic-engine');
+    const socraticResult = await applySocraticFilter(env, user.id, response, text);
+    response = socraticResult.text;
+  } catch (e) {
+    console.error('[socratic] Filter failed (ignored):', e);
+  }
+
+  // ── Indonesian Analogies Injection ───────────────────
+  // If student seems confused/struggling, append a cultural analogy.
+  try {
+    const { getAnalogyHint } = await import('../services/indonesian-analogies');
+    const hint = await getAnalogyHint(env, text);
+    if (hint && !response.includes('💡')) {
+      response = `${response}\n\n${hint}`;
+    }
+  } catch (e) {
+    console.error('[analogies] Hint failed (ignored):', e);
   }
 
   // ── Teach-then-check: extract [CHECK] block if tutor emitted one ──
@@ -3831,6 +4527,13 @@ async function handleMessage(message: any, env: Env) {
     }
   } catch (e) {
     // Silent fail — break reminders are nice-to-have, not critical
+  }
+
+  // Mood intervention — if persistent frustration detected
+  if (moodIntervention) {
+    try {
+      await sendMessage(env, chatId, moodIntervention);
+    } catch {}
   }
 }
 
@@ -3943,6 +4646,26 @@ async function handleCallbackQuery(query: any, env: Env) {
   const user = await getOrCreateUser(env, tgUser);
 
   // ═══════════════════════════════════════════════════════
+  // INLINE QUIZ ANSWER REVEAL
+  //   inline_answer:<correctIndex>:<encodedExplanation>
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('inline_answer:')) {
+    const parts = data.split(':');
+    const correctIndex = parseInt(parts[1] || '0');
+    const explanation = decodeURIComponent(parts.slice(2).join(':') || '');
+    const letter = String.fromCharCode(65 + correctIndex);
+    await editMessage(env, chatId, messageId,
+      `✅ *Jawaban: ${letter}*\n\n${explanation}\n\n_Mau soal lain? Tap tombol di bawah._`,
+      {
+        inline_keyboard: [
+          [{ text: '🔄 Soal Baru', switch_inline_query_current_chat: 'quiz' }],
+        ],
+      }
+    );
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
   // COMPREHENSION CHECK (teach-then-check flow)
   //   cq:a:<letter>  — student picked an answer
   //   cq:p           — "tunggu dulu" (pause)
@@ -4026,6 +4749,12 @@ async function handleCallbackQuery(query: any, env: Env) {
                 await sendMessage(env, chatId,
                   '🎉 Mantap! Semua konsep udah dibahas. Soal serupa bakal muncul lagi di /review buat ngetes ingatan kamu.',
                 );
+                try {
+                  await sendAnimation(env, chatId,
+                    'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcTd1dWlrMnB6eWV3a3B6eWV3a3B6eWV3a3B6eWV3a3B6eSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l0HlBO7eyXzSZkexa/giphy.gif',
+                    '🎯 Review selesai! Great work!'
+                  );
+                } catch {}
               } else {
                 const nextConcept = review.concepts[review.current_index + 1]
                   .split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -4175,6 +4904,7 @@ async function handleCallbackQuery(query: any, env: Env) {
       // Drive the tutor with the concept prompt so it emits teach + [CHECK].
       // This reuses the same engine as normal chat — private-tutor first,
       // generic tutor as fallback.
+      await sendChatAction(env, chatId, 'typing');
       let response: string;
       try {
         const result = await getPrivateTutorResponse(env, user, prompt);
@@ -4258,6 +4988,80 @@ async function handleCallbackQuery(query: any, env: Env) {
       }
     } catch (e) {
       console.error('drill callback error:', e);
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // ONE-TAP DAILY REVIEW (inline buttons)
+  //   review:ya:<id>     — student understands
+  //   review:belum:<id>  — student needs explanation
+  //   review:stop        — end review session
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('review:')) {
+    try {
+      const parts = data.split(':');
+      const action = parts[1];
+
+      if (action === 'stop') {
+        await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
+        await sendMessage(env, chatId, '✅ Review dibatalkan. Soal yang belum direview akan muncul lagi nanti.');
+        return;
+      }
+
+      const understood = action === 'ya';
+      const reviewId = parseInt(parts[2] || '0', 10);
+      if (!reviewId) return;
+
+      const { markReviewed, getDueReviews, getReviewStats } = await import('../services/fsrs-engine');
+      await markReviewed(env, reviewId, understood);
+
+      // If student didn't understand, send AI explanation before next question
+      if (!understood) {
+        const item = await env.DB.prepare('SELECT * FROM spaced_repetition WHERE id = ?').bind(reviewId).first() as any;
+        if (item) {
+          try {
+            await sendChatAction(env, chatId, 'typing');
+            const { getTutorResponse } = await import('../services/ai');
+            const explanation = await getTutorResponse(env, user, `Jelaskan singkat kenapa jawaban yang benar untuk soal ini adalah "${item.correct_answer}" dan bukan "${item.student_answer}". Soal: ${item.question_data}. Maksimal 5 baris. Plain text.`);
+            await sendMessage(env, chatId, explanation);
+          } catch {}
+        }
+      }
+
+      // Clean up session
+      await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
+
+      // Check if more reviews due
+      const stats = await getReviewStats(env, user.id);
+      if (stats.due > 0) {
+        const items = await getDueReviews(env, user.id, 1);
+        if (items.length > 0) {
+          const nextItem = items[0] as any;
+          await env.DB.prepare(
+            'INSERT OR REPLACE INTO review_sessions (user_id, current_review_id) VALUES (?, ?)'
+          ).bind(user.id, nextItem.id).run();
+          const remaining = stats.due > 1 ? `\n\nMasih ada ${stats.due - 1} soal lagi.` : '';
+          await sendMessage(env, chatId, `${understood ? '👍' : '📚'} ${understood ? 'Oke, next!' : 'Oke, aku jelaskan ya...'}\n\nSoal ${nextItem.section}:\n"${nextItem.question_data}"\n\nJawaban kamu sebelumnya: ${nextItem.student_answer}\nJawaban yang benar: ${nextItem.correct_answer}`, {
+            inline_keyboard: [
+              [{ text: '✅ Udah paham', callback_data: `review:ya:${nextItem.id}` }, { text: '❓ Belum paham', callback_data: `review:belum:${nextItem.id}` }],
+              [{ text: '⏸️ Stop review', callback_data: 'review:stop' }],
+            ],
+          });
+          return;
+        }
+      }
+
+      // No more reviews
+      await sendMessage(env, chatId,
+        `🎉 *Sesi Review Selesai!*\n\n` +
+        `Kamu sudah review semua soal yang perlu diulang.\n` +
+        `${stats.mastered} soal udah kamu kuasai. Pertahankan! 💪\n\n` +
+        `Sesi berikutnya akan muncul lagi nanti sesuai jadwal.`
+      );
+      return;
+    } catch (e) {
+      console.error('review callback error:', e);
     }
     return;
   }
@@ -4662,6 +5466,7 @@ async function handleCallbackQuery(query: any, env: Env) {
   // Lesson plan callbacks
   if (data === 'start_lesson_plan') {
     await editMessage(env, chatId, messageId, '🤖 Generating lesson plan...');
+    await sendChatAction(env, chatId, 'typing');
     try {
       const { generatePersonalizedPlan, formatTopicName } = await import('../services/lesson-engine');
       const plan = await generatePersonalizedPlan(env, user);
@@ -4729,6 +5534,12 @@ async function handleCallbackQuery(query: any, env: Env) {
       ).bind(step.skill, step.index, user.id).run();
     } else {
       await editMessage(env, chatId, messageId, '🎉 Lesson plan selesai semua! Ketik /lesson untuk plan baru.');
+      try {
+        await sendAnimation(env, chatId,
+          'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcTd1dWlrMnB6eWV3a3B6eWV3a3B6eWV3a3B6eWV3a3B6eSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/l0HlBO7eyXzSZkexa/giphy.gif',
+          '🏆 Plan selesai! Kamu luar biasa!'
+        );
+      } catch {}
     }
     return;
   }
@@ -4944,12 +5755,31 @@ async function handleCallbackQuery(query: any, env: Env) {
     return;
   }
   if (data === 'back_target') {
-    // User hit "Kembali" on level selection — return to target-test picker
     await editMessage(env, chatId, messageId,
       `📋 *Step 1 dari 2 — Pilih Target Tes*\n\n` +
       `Kamu mau persiapan tes yang mana?`,
       testTypeKeyboard,
     );
+    return;
+  }
+
+  // Target test selection (legacy keyboard — used by onboarding fallback)
+  if (data.startsWith('target_')) {
+    const target = data.replace('target_', '');
+    if (target === 'skip') {
+      await editMessage(env, chatId, messageId, '✅ Oke, kamu bisa ganti target kapan saja via /settings.');
+      return;
+    }
+    await env.DB.prepare('UPDATE users SET target_test = ? WHERE id = ?').bind(target, user.id).run();
+    await editMessage(env, chatId, messageId, `✅ Target diset ke: ${target.replace(/_/g, ' ')}.\n\nKetik /study untuk mulai belajar.`);
+    return;
+  }
+
+  // Proficiency level selection (legacy keyboard)
+  if (data.startsWith('level_')) {
+    const level = data.replace('level_', '');
+    await env.DB.prepare('UPDATE users SET proficiency_level = ? WHERE id = ?').bind(level, user.id).run();
+    await editMessage(env, chatId, messageId, `✅ Level diset ke: ${level}.\n\nKetik /study untuk mulai.`);
     return;
   }
 
@@ -5217,9 +6047,7 @@ async function handleCallbackQuery(query: any, env: Env) {
         const { trackQuestionAnswer, checkTestAccess } = await import('../services/premium');
         const access = await checkTestAccess(env, freshUser.id);
         if (!access.allowed) {
-          await editMessage(env, chatId, messageId,
-            `⚠️ Kuota harian habis (${access.used_today}/${access.daily_limit} soal).\n\n` +
-            `Reset besok jam 00:00 WIB.\nKetik /premium untuk unlimited akses.`);
+          await editMessage(env, chatId, messageId, quotaExceededMsg(access.used_today, access.daily_limit));
           return;
         }
         const trackResult = await trackQuestionAnswer(env, freshUser.id);
@@ -5231,6 +6059,7 @@ async function handleCallbackQuery(query: any, env: Env) {
         console.error('Quota tracking error in study_lesson:', e);
       }
       await editMessage(env, chatId, messageId, '⏳ Menyiapkan pelajaran...');
+      await sendChatAction(env, chatId, 'typing');
       const prompt = `Pilih 1 topik (articles/tenses/prepositions/sv-agreement/passive-voice/conditionals). Kasih perbandingan Bahasa vs English (2 baris), 3 contoh kalimat, lalu 1 soal. Maks 8 baris. Plain text.`;
       const response = await getTutorResponse(env, freshUser, prompt);
       await sendMessage(env, chatId, response);
@@ -5244,9 +6073,7 @@ async function handleCallbackQuery(query: any, env: Env) {
         const { trackQuestionAnswer, checkTestAccess } = await import('../services/premium');
         const access = await checkTestAccess(env, freshUser.id);
         if (!access.allowed) {
-          await editMessage(env, chatId, messageId,
-            `⚠️ Kuota harian habis (${access.used_today}/${access.daily_limit} soal).\n\n` +
-            `Reset besok jam 00:00 WIB.\nKetik /premium untuk unlimited akses.`);
+          await editMessage(env, chatId, messageId, quotaExceededMsg(access.used_today, access.daily_limit));
           return;
         }
         await trackQuestionAnswer(env, freshUser.id);
@@ -5254,6 +6081,7 @@ async function handleCallbackQuery(query: any, env: Env) {
         console.error('trackQuestionAnswer error:', trackErr);
       }
       await editMessage(env, chatId, messageId, '⏳ Membuat mini test...');
+      await sendChatAction(env, chatId, 'typing');
       const prompt = `Buat 1 soal TOEFL iBT (pilih acak: grammar/vocabulary/reading comprehension). Format: konteks singkat + 1 soal MCQ (A/B/C/D). Maks 8 baris. Plain text. Akhiri dengan "Jawab?"`;
       const response = await getTutorResponse(env, freshUser, prompt);
       await sendMessage(env, chatId, response);
@@ -5283,7 +6111,7 @@ async function handleCallbackQuery(query: any, env: Env) {
       return;
     }
 
-    // Score Estimator
+    // Score Estimator — test-type-aware scoring
     if (data === 'study_score') {
       const stats = await env.DB.prepare(
         `SELECT section, COUNT(*) as total,
@@ -5304,20 +6132,63 @@ async function handleCallbackQuery(query: any, env: Env) {
         return;
       }
 
-      let msg = 'Estimasi Band Score kamu:\n\n';
+      const testType = freshUser.target_test || 'TOEFL_IBT';
+      let msg = 'Estimasi skor kamu:\n\n';
       let totalAcc = 0;
       let sections = 0;
+
       for (const s of stats.results as any[]) {
         const acc = s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0;
-        const band = Math.min(6, Math.max(1, Math.round((acc / 100) * 6 * 2) / 2));
         const emoji = acc >= 67 ? '🟢' : acc >= 50 ? '🟡' : '🔴';
-        msg += `${emoji} ${s.section}: Band ${band} (${acc}% dari ${s.total} soal)\n`;
+
+        let sectionLabel = '';
+        if (testType === 'IELTS') {
+          const band = Math.min(9, Math.max(1, Math.round((acc / 100) * 9 * 2) / 2));
+          sectionLabel = `Band ${band}`;
+        } else if (testType === 'TOEFL_ITP') {
+          const score = Math.round(310 + (acc / 100) * (677 - 310));
+          sectionLabel = `${score}`;
+        } else if (testType === 'TOEIC') {
+          const score = Math.round((acc / 100) * 990 / 5) * 5;
+          sectionLabel = `${score}`;
+        } else {
+          const band = Math.min(6, Math.max(1, Math.round((acc / 100) * 6 * 2) / 2));
+          sectionLabel = `Band ${band}`;
+        }
+
+        msg += `${emoji} ${s.section}: ${sectionLabel} (${acc}% dari ${s.total} soal)\n`;
         totalAcc += acc;
         sections++;
       }
-      const avgBand = Math.min(6, Math.max(1, Math.round((totalAcc / sections / 100) * 6 * 2) / 2));
-      msg += `\nEstimasi total: Band ${avgBand}\nTarget: Band 4\n`;
-      msg += avgBand >= 4 ? '\nKamu sudah di jalur yang benar!' : `\nPerlu naik ${4 - avgBand} band lagi. Fokus di section merah.`;
+
+      const avgAcc = totalAcc / sections;
+      let totalLabel = '';
+      let targetLabel = '';
+      let gapMsg = '';
+
+      if (testType === 'IELTS') {
+        const avgBand = Math.min(9, Math.max(1, Math.round((avgAcc / 100) * 9 * 2) / 2));
+        totalLabel = `Band ${avgBand}`;
+        targetLabel = 'Band 6.0';
+        gapMsg = avgBand >= 6 ? '\nKamu sudah di jalur yang benar!' : `\nPerlu naik ${6 - avgBand} band lagi. Fokus di section merah.`;
+      } else if (testType === 'TOEFL_ITP') {
+        const avgScore = Math.round(310 + (avgAcc / 100) * (677 - 310));
+        totalLabel = `${avgScore}`;
+        targetLabel = '500';
+        gapMsg = avgScore >= 500 ? '\nKamu sudah di jalur yang benar!' : `\nPerlu naik ${500 - avgScore} poin lagi. Fokus di section merah.`;
+      } else if (testType === 'TOEIC') {
+        const avgScore = Math.round((avgAcc / 100) * 990 / 5) * 5;
+        totalLabel = `${avgScore}`;
+        targetLabel = '600';
+        gapMsg = avgScore >= 600 ? '\nKamu sudah di jalur yang benar!' : `\nPerlu naik ${600 - avgScore} poin lagi. Fokus di section merah.`;
+      } else {
+        const avgBand = Math.min(6, Math.max(1, Math.round((avgAcc / 100) * 6 * 2) / 2));
+        totalLabel = `Band ${avgBand}`;
+        targetLabel = 'Band 4';
+        gapMsg = avgBand >= 4 ? '\nKamu sudah di jalur yang benar!' : `\nPerlu naik ${4 - avgBand} band lagi. Fokus di section merah.`;
+      }
+
+      msg += `\nEstimasi total: ${totalLabel}\nTarget: ${targetLabel}${gapMsg}`;
 
       await editMessage(env, chatId, messageId, msg);
       return;
@@ -5330,9 +6201,7 @@ async function handleCallbackQuery(query: any, env: Env) {
         const { trackQuestionAnswer, checkTestAccess } = await import('../services/premium');
         const access = await checkTestAccess(env, freshUser.id);
         if (!access.allowed) {
-          await editMessage(env, chatId, messageId,
-            `⚠️ Kuota harian habis (${access.used_today}/${access.daily_limit} soal).\n\n` +
-            `Reset besok jam 00:00 WIB.\nKetik /premium untuk unlimited akses.`);
+          await editMessage(env, chatId, messageId, quotaExceededMsg(access.used_today, access.daily_limit));
           return;
         }
         await trackQuestionAnswer(env, freshUser.id);
@@ -5353,6 +6222,18 @@ async function handleCallbackQuery(query: any, env: Env) {
   const skillMatch = data.match(/^skill_(.+)$/);
   if (skillMatch) {
     const exerciseType = skillMatch[1];
+    try {
+      // Quota check for free users
+      const { checkTestAccess, trackQuestionAnswer } = await import('../services/premium');
+      const access = await checkTestAccess(env, user.id);
+      if (!access.allowed) {
+        await editMessage(env, chatId, messageId, quotaExceededMsg(access.used_today, access.daily_limit));
+        return;
+      }
+      await trackQuestionAnswer(env, user.id);
+    } catch (e) {
+      console.error('Quota check error in skill exercise:', e);
+    }
     try {
       const { generateLesson, createLessonMeta, getStepDisplay, getStepInputType, getTotalSteps } = await import('../services/exercise-engine');
 
@@ -5436,6 +6317,17 @@ async function handleCallbackQuery(query: any, env: Env) {
           await env.DB.prepare(
             'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
           ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), sessionId).run();
+
+          // Celebration for high scorers
+          if (avgScore >= 80) {
+            try {
+              await sendAnimation(env, chatId,
+                'https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif',
+                `🎉 Keren! Skor ${avgScore}%! Keep it up!`
+              );
+            } catch {}
+          }
+
           await editMessage(env, chatId, messageId, summary.text, summary.keyboard);
           return;
         }
@@ -5451,7 +6343,7 @@ async function handleCallbackQuery(query: any, env: Env) {
         const display = getStepDisplay(exerciseType, meta.lesson, meta.step, sessionId);
         if (display.scene) {
           await editMessage(env, chatId, messageId, '📸 Memuat gambar...');
-          await sendStepDisplay(env, chatId, display);
+          await sendStepDisplay(env, chatId, display, messageId);
         } else {
           await editMessage(env, chatId, messageId, display.text, display.keyboard);
         }
@@ -5548,6 +6440,16 @@ async function handleCallbackQuery(query: any, env: Env) {
           await env.DB.prepare(
             'UPDATE exercise_sessions SET status = ?, score = ?, metadata = ?, completed_at = ? WHERE id = ?'
           ).bind('completed', avgScore, JSON.stringify(meta), new Date().toISOString(), sessionId).run();
+
+          // Celebration for high scorers
+          if (avgScore >= 80) {
+            try {
+              await sendAnimation(env, chatId,
+                'https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif',
+                `🎉 Keren! Skor ${avgScore}%! Keep it up!`
+              );
+            } catch {}
+          }
 
           await editMessage(env, chatId, messageId, feedback);
           const summary = renderSummary(exerciseType, meta.lesson, meta.scores, meta.hints);
@@ -5880,10 +6782,10 @@ try {
       }
 
       const planMap: Record<string, { months: number; stars: number; label: string }> = {
-        'teacher_sub_1': { months: 1, stars: 50000, label: '1 Bulan' },
-        'teacher_sub_2': { months: 3, stars: 150000, label: '3 Bulan' },
-        'teacher_sub_3': { months: 6, stars: 300000, label: '6 Bulan' },
-        'teacher_sub_4': { months: 12, stars: 600000, label: '12 Bulan' },
+        'teacher_sub_1': { months: 1, stars: 500, label: '1 Bulan' },
+        'teacher_sub_2': { months: 3, stars: 1400, label: '3 Bulan' },
+        'teacher_sub_3': { months: 6, stars: 2500, label: '6 Bulan' },
+        'teacher_sub_4': { months: 12, stars: 4500, label: '12 Bulan' },
       };
       const plan = planMap[data];
       if (!plan) return;

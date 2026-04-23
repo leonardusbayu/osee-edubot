@@ -481,7 +481,7 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
         // notification to their chat is the right channel (it'll pop up
         // regardless of what screen they're on). Guarded to only fire on
         // level_up or badge unlock so we don't spam every correct answer.
-        if ((xpResult.level_up || xpResult.new_badges.length > 0) && c.env.TELEGRAM_BOT_TOKEN) {
+        if ((xpResult.level_up || xpResult.new_badges.length > 0 || xpResult.streak_freeze_awarded) && c.env.TELEGRAM_BOT_TOKEN) {
           c.executionCtx?.waitUntil((async () => {
             try {
               const userRow = await c.env.DB.prepare(
@@ -500,6 +500,9 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
                   .map((b) => `${b.icon} ${b.name}`)
                   .join(', ');
                 parts.push(`🏅 Badge baru: ${badgeLine}`);
+              }
+              if (xpResult.streak_freeze_awarded) {
+                parts.push(`🔥 7 hari streak! Kamu dapat *Streak Freeze* — otomatis melindungi streak jika skip 1 hari.`);
               }
               const text = parts.join('\n');
               await fetch(
@@ -535,6 +538,21 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
             isCorrect === true,
           );
         } catch (e) { console.error('Spaced repetition error:', e); }
+
+        // Concept-level spaced repetition: aggregate question signals to concepts
+        try {
+          const { updateConceptFromQuestion } = await import('../services/concept-sr');
+          // Fetch skill_tags for this question
+          if (content_id) {
+            const qRow = await c.env.DB.prepare(
+              'SELECT skill_tags FROM test_contents WHERE id = ?'
+            ).bind(content_id).first() as any;
+            const tags = qRow?.skill_tags ? JSON.parse(qRow.skill_tags) : [];
+            if (tags.length > 0) {
+              await updateConceptFromQuestion(c.env, userId, tags, isCorrect === true);
+            }
+          }
+        } catch (e) { console.error('Concept SR error:', e); }
       }
 
       // Update skill score for this section
