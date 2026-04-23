@@ -382,6 +382,14 @@ export async function getPrivateTutorResponse(
     }
   } catch {}
 
+  // 2d. Learning style detection
+  let learningStyleContext = '';
+  try {
+    const { updateStyleScores, buildLearningStyleContext } = await import('./learning-style-detector');
+    const style = await updateStyleScores(env, user.id, message);
+    learningStyleContext = buildLearningStyleContext(style);
+  } catch {}
+
   // 3. Handle meta-commands
   if (intent.type === 'topic_request') {
     await updateTutorState(env, user.id, {
@@ -451,6 +459,11 @@ export async function getPrivateTutorResponse(
   // Inject difficulty context (for exercise mode)
   if (difficultyContext) {
     messages.push({ role: 'system', content: difficultyContext });
+  }
+
+  // Inject learning style context
+  if (learningStyleContext) {
+    messages.push({ role: 'system', content: learningStyleContext });
   }
 
   messages.push({ role: 'user', content: message });

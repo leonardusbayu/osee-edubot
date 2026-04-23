@@ -84,7 +84,17 @@ export async function awardXp(
 
   // Check if first activity today → 2x multiplier
   const isFirstToday = lastDate !== today;
-  const multiplier = isFirstToday ? 2.0 : 1.0;
+  let multiplier = isFirstToday ? 2.0 : 1.0;
+
+  // Apply seasonal event bonus multiplier
+  try {
+    const { getSeasonalBonusMultiplier } = await import('./seasonal-events');
+    const seasonalMultiplier = getSeasonalBonusMultiplier(source);
+    if (seasonalMultiplier > 1.0) {
+      multiplier = Math.max(multiplier, seasonalMultiplier);
+    }
+  } catch {}
+
   const xpEarned = Math.round(baseAmount * multiplier);
 
   // Update streak
