@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "bug-hunt": "node scripts/bug_hunt.mjs",
+    "content:dedupe": "node scripts/content_dedupe_plan.mjs"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}
