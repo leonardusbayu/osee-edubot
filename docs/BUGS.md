@@ -38,6 +38,7 @@ ships, move it from Open → Fixed with the commit hash.
 | F36 | `69fa11b` | general | Test runner improvements, analytics, classes, TTS caching |
 | F37 | `af52045` | general | Migrations, analytics service, private-tutor, student-profile |
 | F38 | `6d265ca` | payment | Manual GoPay payment self-approve bug — /paid set status='paid' without grantPremium, breaking /confirm and /pendingpayments |
+| F39 | `705e80a` | payment | Simplify manual GoPay payment flow — replace command-based (/requestpayment + /paid) with inline button flow; add photo proof handler; update all UI entrypoints |
 
 ---
 

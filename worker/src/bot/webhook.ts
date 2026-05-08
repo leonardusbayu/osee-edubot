@@ -769,9 +769,71 @@ export async function handleWebhook(update: any, env: Env) {
         return;
       }
 
-      // Handle photos/images — currently not supported, let user know
+      // Handle photos/images
       if (update.message.photo) {
         const chatId = update.message.chat.id;
+        const tgUser = update.message.from;
+        if (!tgUser) return;
+
+        const user = await getOrCreateUser(env, tgUser);
+
+        // Check if user has a pending payment request — treat photo as payment proof
+        const pending = await env.DB.prepare(
+          "SELECT id, amount, days FROM payment_requests WHERE user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1"
+        ).bind(user.id).first() as any;
+
+        if (pending) {
+          const photo = update.message.photo[update.message.photo.length - 1];
+          const fileId = photo.file_id;
+
+          // Update payment_proof with file_id so admin can retrieve the image
+          await env.DB.prepare(
+            'UPDATE payment_requests SET payment_proof = ? WHERE id = ? AND status = ?'
+          ).bind(`photo:${fileId}`, pending.id, 'pending').run();
+
+          // Notify admin
+          const admins = await env.DB.prepare("SELECT telegram_id FROM users WHERE role = 'admin'").all() as any;
+          for (const admin of admins.results || []) {
+            const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
+            if (tgId) {
+              await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: tgId,
+                  text: `💰 *Bukti Transfer Baru!*\n\n` +
+                    `User: @${user.username || user.name}\n` +
+                    `Amount: Rp ${pending.amount.toLocaleString('id-ID')}\n` +
+                    `Days: ${pending.days}\n\n` +
+                    `Request #${pending.id}\n` +
+                    `Ketik /confirm ${pending.id} untuk konfirmasi`,
+                  parse_mode: 'Markdown',
+                }),
+              });
+              // Send the photo to admin
+              await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: tgId,
+                  photo: fileId,
+                  caption: `Bukti transfer untuk Payment #${pending.id}`,
+                }),
+              });
+            }
+          }
+
+          await sendMessage(env, chatId,
+            `✅ *Bukti Transfer Diterima!*\n\n` +
+            `📋 Request #${pending.id}\n` +
+            `💰 Rp ${pending.amount.toLocaleString('id-ID')}\n\n` +
+            `Admin akan cek dan konfirmasi dalam 1x24 jam.\n` +
+            `Sabar ya! 🙏`
+          );
+          return;
+        }
+
+        // No pending payment — show default message
         await sendMessage(env, chatId,
           `📷 Fitur analisis gambar belum tersedia.\n\n` +
           `Saat ini aku bisa bantu dengan:\n` +
@@ -1463,7 +1525,7 @@ async function handleMessage(message: any, env: Env) {
           {
             inline_keyboard: [
               [{ text: '💳 Beli dengan Telegram Stars', callback_data: 'buy_stars' }],
-              [{ text: '🏦 Bayar via QRIS / Transfer Bank', callback_data: 'buy_tripay' }],
+              [{ text: '🏦 Transfer GoPay', callback_data: 'buy_manual' }],
             ],
           }
         );
@@ -1707,17 +1769,17 @@ async function handleMessage(message: any, env: Env) {
           `   • 7 hari = 375 ⭐\n` +
           `   • 30 hari = 1.238 ⭐\n` +
           `   • 90 hari = 3.375 ⭐\n\n` +
-          `2️⃣ *GoPay / Transfer* (Manual)\n` +
-          `   • Transfer ke rekening kami\n` +
+          `2️⃣ *Transfer GoPay* (Manual)\n` +
+          `   • Transfer ke GoPay kami\n` +
           `   • Konfirmasi manual oleh admin\n\n` +
           `3️⃣ *WhatsApp*\n` +
           `   • Chat kami untuk metode lain\n` +
           `   • wa.me/628112467784\n\n` +
-          `Kirim angka (1/2/3) untuk pilih metode atau ketik /premium untuk detail lengkap.`,
+          `Klik tombol di bawah untuk pilih metode.`,
           {
             inline_keyboard: [
               [{ text: '1️⃣ Beli via Stars', callback_data: 'buy_stars' }],
-              [{ text: '2️⃣ Bayar via QRIS / Transfer Bank', callback_data: 'buy_tripay' }],
+              [{ text: '2️⃣ Transfer GoPay', callback_data: 'buy_manual' }],
               [{ text: '3️⃣ Hubungi WhatsApp', url: 'https://wa.me/628112467784' }],
             ],
           }
@@ -2022,7 +2084,7 @@ async function handleMessage(message: any, env: Env) {
             {
               inline_keyboard: [
                 [{ text: '⭐ Upgrade Premium', callback_data: 'buy_stars' }],
-                [{ text: '🏦 via QRIS / Transfer Bank', callback_data: 'buy_tripay' }],
+                [{ text: '🏦 Transfer GoPay', callback_data: 'buy_manual' }],
                 [{ text: '🎁 Dapat Bonus — Undang Teman', callback_data: 'copy_referral' }],
               ],
             }
@@ -5705,6 +5767,168 @@ async function handleCallbackQuery(query: any, env: Env) {
       return;
     }
 
+    // Manual GoPay payment — step 1: choose plan
+    if (data === 'buy_manual') {
+      await editMessage(env, chatId, messageId,
+        `🏦 *Transfer GoPay*\n\n` +
+        `Pilih paket premium:\n\n` +
+        `• 7 hari — Rp 30.000\n` +
+        `• 30 hari — Rp 99.000\n` +
+        `• 90 hari — Rp 270.000\n` +
+        `• 180 hari — Rp 500.000\n` +
+        `• 365 hari — Rp 950.000`,
+        {
+          inline_keyboard: [
+            [{ text: '7 Hari — Rp 30rb', callback_data: 'manual_plan_7' }, { text: '30 Hari — Rp 99rb', callback_data: 'manual_plan_30' }],
+            [{ text: '90 Hari — Rp 270rb', callback_data: 'manual_plan_90' }, { text: '180 Hari — Rp 500rb', callback_data: 'manual_plan_180' }],
+            [{ text: '365 Hari — Rp 950rb', callback_data: 'manual_plan_365' }],
+            [{ text: '◀️ Kembali', callback_data: 'back_premium' }],
+          ],
+        }
+      );
+      return;
+    }
+
+    // Manual GoPay — step 2: show payment details & create request
+    if (data.startsWith('manual_plan_')) {
+      const planDays = parseInt(data.replace('manual_plan_', ''));
+      const planMap: Record<number, { amount: number; label: string }> = {
+        7: { amount: 30000, label: '7 Hari' },
+        30: { amount: 99000, label: '30 Hari' },
+        90: { amount: 270000, label: '90 Hari' },
+        180: { amount: 500000, label: '180 Hari' },
+        365: { amount: 950000, label: '365 Hari' },
+      };
+      const plan = planMap[planDays];
+      if (!plan) {
+        await editMessage(env, chatId, messageId, '❌ Paket tidak valid.');
+        return;
+      }
+
+      // Check if user already has a pending manual payment
+      const existing = await env.DB.prepare(
+        "SELECT id FROM payment_requests WHERE user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1"
+      ).bind(user.id).first() as any;
+
+      let requestId: number;
+      if (existing) {
+        requestId = existing.id;
+      } else {
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + 1);
+        await env.DB.prepare(
+          'INSERT INTO payment_requests (user_id, amount, days, status, expires_at) VALUES (?, ?, ?, ?, ?)'
+        ).bind(user.id, plan.amount, planDays, 'pending', expiresAt.toISOString()).run();
+        const created = await env.DB.prepare(
+          'SELECT id FROM payment_requests WHERE user_id = ? ORDER BY id DESC LIMIT 1'
+        ).bind(user.id).first() as any;
+        requestId = created.id;
+      }
+
+      await editMessage(env, chatId, messageId,
+        `🏦 *Pembayaran GoPay — ${plan.label}*\n\n` +
+        `📋 Request #${requestId}\n` +
+        `💰 *Nominal:* Rp ${plan.amount.toLocaleString('id-ID')}\n\n` +
+        `📱 *Transfer ke GoPay:*\n` +
+        `🟢 085643597072\n` +
+        `   a.n. Leonardus Bayu Ari P\n\n` +
+        `⏰ *Batas transfer:* 24 jam\n\n` +
+        `Setelah transfer, klik tombol di bawah atau kirim foto bukti transfer ke sini.`,
+        {
+          inline_keyboard: [
+            [{ text: '✅ Sudah Transfer', callback_data: `manual_paid_${requestId}` }],
+            [{ text: '❌ Batal', callback_data: `manual_cancel_${requestId}` }],
+            [{ text: '◀️ Kembali', callback_data: 'buy_manual' }],
+          ],
+        }
+      );
+      return;
+    }
+
+    // Manual GoPay — step 3: user confirms transfer
+    if (data.startsWith('manual_paid_')) {
+      const requestId = parseInt(data.replace('manual_paid_', ''));
+      const pending = await env.DB.prepare(
+        'SELECT id, amount, days, user_id FROM payment_requests WHERE id = ? AND status = ?'
+      ).bind(requestId, 'pending').first() as any;
+
+      if (!pending) {
+        await editMessage(env, chatId, messageId, '❌ Payment tidak ditemukan atau sudah diproses.');
+        return;
+      }
+
+      if (pending.user_id !== user.id) {
+        await editMessage(env, chatId, messageId, '⛔ Ini bukan payment kamu.');
+        return;
+      }
+
+      // Update payment_proof
+      await env.DB.prepare(
+        'UPDATE payment_requests SET payment_proof = ? WHERE id = ? AND status = ?'
+      ).bind('User confirmed transfer via button', requestId, 'pending').run();
+
+      // Notify admin
+      const admins = await env.DB.prepare("SELECT telegram_id FROM users WHERE role = 'admin'").all() as any;
+      for (const admin of admins.results || []) {
+        const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
+        if (tgId) {
+          await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: tgId,
+              text: `💰 *Payment Baru Menunggu Konfirmasi!*\n\n` +
+                `User: @${user.username || user.name}\n` +
+                `Nominal: Rp ${pending.amount.toLocaleString('id-ID')}\n` +
+                `Durasi: ${pending.days} hari\n\n` +
+                `Request #${requestId}\n` +
+                `Ketik /confirm ${requestId} untuk konfirmasi`,
+              parse_mode: 'Markdown',
+            }),
+          });
+        }
+      }
+
+      await editMessage(env, chatId, messageId,
+        `✅ *Bukti Pembayaran Terkirim!*\n\n` +
+        `📋 Request #${requestId}\n` +
+        `💰 Rp ${pending.amount.toLocaleString('id-ID')}\n\n` +
+        `Admin akan memverifikasi dalam 1x24 jam.\n` +
+        `Kamu akan mendapat notifikasi saat premium aktif.\n\n` +
+        `Sabar ya! 🙏`
+      );
+      return;
+    }
+
+    // Manual GoPay — cancel payment
+    if (data.startsWith('manual_cancel_')) {
+      const requestId = parseInt(data.replace('manual_cancel_', ''));
+      const pending = await env.DB.prepare(
+        'SELECT user_id FROM payment_requests WHERE id = ? AND status = ?'
+      ).bind(requestId, 'pending').first() as any;
+
+      if (!pending) {
+        await editMessage(env, chatId, messageId, '❌ Payment tidak ditemukan atau sudah diproses.');
+        return;
+      }
+
+      if (pending.user_id !== user.id) {
+        await editMessage(env, chatId, messageId, '⛔ Ini bukan payment kamu.');
+        return;
+      }
+
+      await env.DB.prepare(
+        "UPDATE payment_requests SET status = 'cancelled' WHERE id = ?"
+      ).bind(requestId).run();
+
+      await editMessage(env, chatId, messageId,
+        `❌ *Pembayaran Dibatalkan*\n\n` +
+        `Request #${requestId} telah dibatalkan.\n` +
+        `Ketik /buy untuk membuat payment baru.`
+      );
+      return;
+    }
+
     // Tripay — step 2: choose payment method
     if (data.startsWith('tp_plan_')) {
       const planDays = data.replace('tp_plan_', '');
@@ -5835,7 +6059,7 @@ async function handleCallbackQuery(query: any, env: Env) {
           {
             inline_keyboard: [
               [{ text: '⭐ via Telegram Stars', callback_data: 'buy_stars' }],
-              [{ text: '🏦 via QRIS / Transfer Bank', callback_data: 'buy_tripay' }],
+              [{ text: '🏦 Transfer GoPay', callback_data: 'buy_manual' }],
             ],
           }
         );
@@ -5872,6 +6096,7 @@ async function handleCallbackQuery(query: any, env: Env) {
       await editMessage(env, chatId, messageId,
         `⭐ *Premium & Referral*\n\n` +
         `/premium — Cek status atau upgrade\n` +
+        `/buy — Beli premium (Stars / GoPay)\n` +
         `/referral — Lihat kode & link referral\n\n` +
         `🎁 Ajak teman = dapat gratis!`,
         { inline_keyboard: [[{ text: '◀️ Kembali', callback_data: 'help_main' }]] }
