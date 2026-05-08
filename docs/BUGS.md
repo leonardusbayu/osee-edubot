@@ -37,6 +37,7 @@ ships, move it from Open → Fixed with the commit hash.
 | F35 | `74e3942` | weakness | Student weakness analysis system - 3-source profile |
 | F36 | `69fa11b` | general | Test runner improvements, analytics, classes, TTS caching |
 | F37 | `af52045` | general | Migrations, analytics service, private-tutor, student-profile |
+| F38 | `6d265ca` | payment | Manual GoPay payment self-approve bug — /paid set status='paid' without grantPremium, breaking /confirm and /pendingpayments |
 
 ---
 

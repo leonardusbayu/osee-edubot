@@ -912,10 +912,11 @@ async function handleWeeklyCron(env: Env) {
 async function handlePaymentExpiryCron(env: Env) {
   try {
     // Cancel pending payments that have expired
+    // Skip payments where the user already submitted proof (payment_proof IS NOT NULL)
     const result = await env.DB.prepare(
       `UPDATE payment_requests
        SET status = 'expired'
-       WHERE status = 'pending' AND expires_at < datetime('now')`
+       WHERE status = 'pending' AND payment_proof IS NULL AND expires_at < datetime('now')`
     ).run();
 
     if (result.meta?.changes > 0) {

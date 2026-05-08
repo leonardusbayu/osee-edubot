@@ -1098,13 +1098,13 @@ adminApiRoutes.get('/premium/overview', async (c) => {
     ).first(),
     c.env.DB.prepare(
       `SELECT SUM(amount) as total_stars, COUNT(*) as transactions
-       FROM payment_requests WHERE status = 'completed'`
+       FROM payment_requests WHERE status = 'paid'`
     ).first(),
     c.env.DB.prepare(
       `SELECT pr.*, u.name as user_name
        FROM payment_requests pr
        JOIN users u ON pr.user_id = u.id
-       WHERE pr.status = 'completed'
+       WHERE pr.status = 'paid'
        ORDER BY pr.confirmed_at DESC LIMIT 20`
     ).all(),
     c.env.DB.prepare(

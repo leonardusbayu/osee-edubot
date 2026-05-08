@@ -2791,10 +2791,10 @@ async function handleMessage(message: any, env: Env) {
           return;
         }
         const payments = await env.DB.prepare(
-          `SELECT pr.id, pr.user_id, u.name as user_name, pr.amount, pr.days, pr.method, pr.status, pr.created_at
+          `SELECT pr.id, pr.user_id, u.name as user_name, pr.amount, pr.days, pr.method, pr.status, pr.created_at, pr.payment_proof
            FROM payment_requests pr
            JOIN users u ON pr.user_id = u.id
-           WHERE pr.status = 'pending'
+           WHERE pr.status = 'pending' AND pr.payment_proof IS NOT NULL
            ORDER BY pr.created_at DESC
            LIMIT 10`
         ).all() as any;
@@ -2809,9 +2809,11 @@ async function handleMessage(message: any, env: Env) {
           const date = new Date(p.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
           msg += `*#${p.id}* - ${p.user_name}\n`;
           msg += `💰 Rp ${p.amount.toLocaleString('id-ID')} (${p.days} hari)\n`;
-          msg += `📅 ${date}\n\n`;
+          msg += `📅 ${date}\n`;
+          if (p.payment_proof) msg += `📝 Bukti: ${p.payment_proof}\n`;
+          msg += `\n`;
         }
-        msg += `Ketik /confirm [ID] untuk konfirmasi\n atau /reject [ID] untuk tolak`;
+        msg += `Ketik /confirm [ID] untuk konfirmasi\natau /reject [ID] untuk tolak`;
 
         await sendMessage(env, chatId, msg);
         return;
@@ -3018,9 +3020,10 @@ async function handleMessage(message: any, env: Env) {
           return;
         }
 
+        // Only update payment_proof — status stays 'pending' until admin /confirm
         await env.DB.prepare(
-          'UPDATE payment_requests SET payment_proof = ?, status = ? WHERE id = ?'
-        ).bind(proof, 'paid', pending.id).run();
+          'UPDATE payment_requests SET payment_proof = ? WHERE id = ? AND status = ?'
+        ).bind(proof, pending.id, 'pending').run();
 
         // Notify admin
         const admins = await env.DB.prepare("SELECT telegram_id FROM users WHERE role = 'admin'").all() as any;
