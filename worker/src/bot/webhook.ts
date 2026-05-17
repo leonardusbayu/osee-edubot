@@ -133,6 +133,173 @@ function cleanForTelegram(text: string): string {
     .trim();
 }
 
+type ReviewQuality = 'again' | 'hard' | 'good' | 'easy';
+
+type ReviewDisplay = {
+  section: string;
+  prompt: string;
+  studentAnswer: string;
+  correctAnswer: string;
+};
+
+function parseReviewObject(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw !== 'string' || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function looksLikeJsonContainer(value: string): boolean {
+  const trimmed = value.trim();
+  return (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+}
+
+function reviewPromptText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === '[object Object]') return '';
+  return looksLikeJsonContainer(trimmed) ? '' : trimmed;
+}
+
+function reviewAnswerText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === '[object Object]') return '';
+    if (looksLikeJsonContainer(trimmed)) {
+      try {
+        return reviewAnswerText(JSON.parse(trimmed));
+      } catch {
+        return '';
+      }
+    }
+    return trimmed;
+  }
+  if (Array.isArray(value)) return value.map(reviewAnswerText).filter(Boolean).join(', ');
+  if (typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const key = reviewAnswerText(source.key);
+    const text = reviewAnswerText(source.text || source.label || source.name);
+    if (key && text && key !== text) return `${key}. ${text}`;
+    for (const answerKey of ['selected', 'student_answer', 'correct_answer', 'answer', 'value', 'text', 'key', 'label', 'name']) {
+      const formatted = reviewAnswerText(source[answerKey]);
+      if (formatted) return formatted;
+    }
+  }
+  return '';
+}
+
+function firstReviewString(source: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = reviewPromptText(source[key]);
+    if (value) return value;
+  }
+  return '';
+}
+
+function firstReviewAnswerString(source: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = reviewAnswerText(source[key]);
+    if (value) return value;
+  }
+  return '';
+}
+
+function firstReviewArrayString(value: unknown): string {
+  return Array.isArray(value) ? reviewAnswerText(value[0]) : '';
+}
+
+function firstNestedReviewQuestion(content: Record<string, unknown>): Record<string, unknown> {
+  const direct = content.questions;
+  if (Array.isArray(direct) && direct[0] && typeof direct[0] === 'object' && !Array.isArray(direct[0])) {
+    return direct[0] as Record<string, unknown>;
+  }
+  const grouped = content.grouped_reading;
+  if (grouped && typeof grouped === 'object' && !Array.isArray(grouped)) {
+    const questions = (grouped as Record<string, unknown>).questions;
+    if (Array.isArray(questions) && questions[0] && typeof questions[0] === 'object' && !Array.isArray(questions[0])) {
+      return questions[0] as Record<string, unknown>;
+    }
+  }
+  return {};
+}
+
+function buildReviewPromptText(content: Record<string, unknown>): string {
+  const nested = firstNestedReviewQuestion(content);
+  const questionText = firstReviewString(content, ['question_text', 'prompt', 'script'])
+    || firstReviewString(nested, ['question_text', 'prompt', 'script'])
+    || firstReviewString(content, ['passage_text', 'passage']);
+  const grouped = content.grouped_reading;
+  const passage = grouped && typeof grouped === 'object' && !Array.isArray(grouped)
+    ? firstReviewString(grouped as Record<string, unknown>, ['passage'])
+    : '';
+  const context = passage || firstReviewString(content, ['passage', 'passage_text', 'context']);
+  if (questionText && context && questionText !== context) {
+    const trimmedContext = context.length > 320 ? `${context.slice(0, 317)}...` : context;
+    return `${questionText}\n\nKonteks: ${trimmedContext}`;
+  }
+  if (questionText) return questionText;
+  if (context) return context.length > 320 ? `${context.slice(0, 317)}...` : context;
+  return '';
+}
+
+async function formatReviewDisplay(env: Env, item: Record<string, unknown>): Promise<ReviewDisplay> {
+  const stored = parseReviewObject(item.question_data);
+  let content = stored;
+  const contentId = Number(item.content_id || 0);
+  if (contentId > 0) {
+    try {
+      const row = await env.DB.prepare('SELECT content FROM test_contents WHERE id = ? LIMIT 1').bind(contentId).first<{ content?: string }>();
+      if (row?.content) {
+        const canonical = parseReviewObject(row.content);
+        if (Object.keys(canonical).length > 0) content = canonical;
+      }
+    } catch {}
+  }
+  const nested = firstNestedReviewQuestion(content);
+  return {
+    section: String(item.section || 'general'),
+    prompt: buildReviewPromptText(content) || 'Soal review ini belum punya teks yang lengkap.',
+    studentAnswer: reviewAnswerText(item.student_answer)
+      || firstReviewAnswerString(stored, ['selected', 'answer', 'text', 'student_answer'])
+      || '—',
+    correctAnswer: reviewAnswerText(item.correct_answer)
+      || firstReviewAnswerString(content, ['correct_answer', 'answer'])
+      || firstReviewArrayString(content.answers)
+      || firstReviewAnswerString(nested, ['correct_answer', 'answer'])
+      || firstReviewArrayString(nested.answers)
+      || firstReviewAnswerString(stored, ['correct_answer', 'answer'])
+      || '—',
+  };
+}
+
+function parseReviewQuality(input: string): ReviewQuality | null {
+  const lower = input.toLowerCase().trim();
+  if (['again', 'belum', 'lupa', 'n', 'no'].includes(lower)) return 'again';
+  if (['hard', 'susah', 'sulit'].includes(lower)) return 'hard';
+  if (['good', 'ya', 'y', 'paham'].includes(lower)) return 'good';
+  if (['easy', 'mudah', 'gampang'].includes(lower)) return 'easy';
+  return null;
+}
+
+function qualityUnderstood(quality: ReviewQuality): boolean {
+  return quality !== 'again';
+}
+
+function buildReviewReminder(review: ReviewDisplay): string {
+  const promptPreview = review.prompt && review.prompt !== 'Soal review ini belum punya teks yang lengkap.'
+    ? `\nSoalnya: "${review.prompt.length > 120 ? `${review.prompt.slice(0, 117)}...` : review.prompt}"`
+    : '';
+  return `\n\nBtw, review ${review.section} kamu masih kebuka.${promptPreview}\nKalau mau lanjut, balas lupa/susah/paham/gampang. Kalau mau stop, ketik /cancel.`;
+}
+
 export async function sendMessage(env: Env, chatId: number, text: string, replyMarkup?: any) {
   const cleaned = cleanForTelegram(text);
   await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -2005,25 +2172,20 @@ async function handleMessage(message: any, env: Env) {
               'INSERT OR REPLACE INTO review_sessions (user_id, current_review_id) VALUES (?, ?)'
             ).bind(user.id, item.id).run();
             const remaining = stats.due > 1 ? `\n\nMasih ada ${stats.due - 1} soal lagi setelah ini.` : '';
-            await sendMessage(env, chatId, `Yuk review! 📝\n\nSoal ${item.section}:\n"${item.question_data}"\n\nJawaban kamu sebelumnya: ${item.student_answer}\nJawaban yang benar: ${item.correct_answer}\n\nUdah paham sekarang kenapa? Ketik "ya" atau "belum" — kalau belum, aku jelaskan.${remaining}\n\nKetik /cancel review untuk keluar.`);
+            const review = await formatReviewDisplay(env, item);
+            await sendMessage(env, chatId, `Yuk review! 📝\n\nSoal ${review.section}:\n"${review.prompt}"\n\nJawaban kamu sebelumnya: ${review.studentAnswer}\nJawaban yang benar: ${review.correctAnswer}\n\nSekarang rasanya gimana? Balas: lupa, susah, paham, atau gampang.${remaining}\n\nKetik /cancel untuk keluar.`);
           }
         }
         return;
       }
 
       case '/cancel': {
-        // Check if it's a review cancellation
-        if (text.toLowerCase().includes('review')) {
-          const session = await env.DB.prepare('SELECT id FROM review_sessions WHERE user_id = ?').bind(user.id).first();
-          if (session) {
-            await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
-            await sendMessage(env, chatId, '✅ Review dibatalkan.\n\nKetik /review untuk mulai lagi kapan saja.');
-          } else {
-            await sendMessage(env, chatId, 'Tidak ada sesi review yang aktif.');
-          }
+        const session = await env.DB.prepare('SELECT id FROM review_sessions WHERE user_id = ?').bind(user.id).first();
+        if (session) {
+          await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
+          await sendMessage(env, chatId, '✅ Review dibatalkan.\n\nKetik /review untuk mulai lagi kapan saja.');
           return;
         }
-        // Generic cancel — not in review mode
         await sendMessage(env, chatId, 'Tidak ada sesi yang bisa dibatalkan.');
         return;
       }
@@ -3292,8 +3454,25 @@ async function handleMessage(message: any, env: Env) {
     const item = await env.DB.prepare('SELECT * FROM spaced_repetition WHERE id = ?').bind(reviewSession.current_review_id).first() as any;
 
     if (item) {
-      const understood = text.toLowerCase() === 'ya' || text.toLowerCase() === 'y';
-      await markReviewed(env, item.id, understood);
+      const review = await formatReviewDisplay(env, item);
+      const quality = parseReviewQuality(text);
+      if (!quality) {
+        let tutorReply = '';
+        try {
+          const result = await getPrivateTutorResponse(env, user, text);
+          tutorReply = result.text;
+        } catch (e: any) {
+          console.error('[review-session tutor] FAILED — falling back to generic tutor:', e?.message || e);
+          tutorReply = await getTutorResponse(env, user, text);
+          await saveToHistory(env, user.id, text, tutorReply);
+        }
+
+        await sendMessage(env, chatId, `${tutorReply}${buildReviewReminder(review)}`);
+        return;
+      }
+
+      const understood = qualityUnderstood(quality);
+      await markReviewed(env, item.id, understood, quality);
 
       // Clean up session
       await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
@@ -3309,7 +3488,8 @@ async function handleMessage(message: any, env: Env) {
             'INSERT OR REPLACE INTO review_sessions (user_id, current_review_id) VALUES (?, ?)'
           ).bind(user.id, nextItem.id).run();
           const remaining = stats.due > 1 ? `\n\nMasih ada ${stats.due - 1} soal lagi setelah ini.` : '';
-          await sendMessage(env, chatId, `${understood ? '👍' : '📚'} ${understood ? 'Oke, next!' : 'Oke, aku jelaskan ya...'}\n\nSoal ${nextItem.section}:\n"${nextItem.question_data}"\n\nJawaban kamu sebelumnya: ${nextItem.student_answer}\nJawaban yang benar: ${nextItem.correct_answer}\n\nKetik "ya" atau "belum".${remaining}\n\nKetik /cancel review untuk keluar.`);
+          const nextReview = await formatReviewDisplay(env, nextItem);
+          await sendMessage(env, chatId, `${understood ? '👍 Oke, lanjut!' : '📚 Oke, kita ulangi lagi nanti.'}\n\nSoal ${nextReview.section}:\n"${nextReview.prompt}"\n\nJawaban kamu sebelumnya: ${nextReview.studentAnswer}\nJawaban yang benar: ${nextReview.correctAnswer}\n\nBalas: lupa, susah, paham, atau gampang.${remaining}\n\nKetik /cancel untuk keluar.`);
           return;
         }
       }
