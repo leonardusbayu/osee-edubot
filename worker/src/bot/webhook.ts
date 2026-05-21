@@ -1,6 +1,7 @@
 import type { Env, User } from '../types';
 import { getTutorResponse } from '../services/ai';
 import { getPrivateTutorResponse } from '../services/private-tutor';
+import { getDailyFocusLesson, renderDailyFocusLesson, renderStudyMenuIntro } from '../services/daily-lesson';
 import {
   startOnboarding,
   onTapStart,
@@ -705,6 +706,7 @@ function studyTopicKeyboard(targetTest?: string | null) {
   return {
     inline_keyboard: [
       [{ text: `${emoji} Target: ${tt.replace(/_/g, ' ')}  [Ganti →]`, callback_data: 'switch_test' }],
+      [{ text: '🔥 Lesson Hari Ini', callback_data: 'study_lesson' }],
       [
         { text: '📖 Reading', callback_data: 'cat_reading' },
         { text: '🎧 Listening', callback_data: 'cat_listening' },
@@ -719,6 +721,9 @@ function studyTopicKeyboard(targetTest?: string | null) {
       ],
       [
         { text: '🏋️ Latihan', callback_data: 'cat_practice' },
+        { text: '🎯 Skills & Strategy', callback_data: 'cat_skills' },
+      ],
+      [
         { text: '❓ Tanya Bebas', callback_data: 'study_ask' },
       ],
     ],
@@ -1996,7 +2001,7 @@ async function handleMessage(message: any, env: Env) {
         return;
 
       case '/study':
-        await sendMessage(env, chatId, '📚 *Menu Belajar*\n\nPilih skill yang mau dilatih:', studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
+        await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
         return;
 
       // ═══════════════════════════════════════════════════════
@@ -5185,7 +5190,7 @@ async function handleCallbackQuery(query: any, env: Env) {
     return;
   }
   if (data === 'back_study') {
-    await editMessage(env, chatId, messageId, '📚 *Menu Belajar*\n\nPilih skill yang mau dilatih:', studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
+    await editMessage(env, chatId, messageId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
     return;
   }
   if (data === 'back_target') {
@@ -5455,7 +5460,7 @@ async function handleCallbackQuery(query: any, env: Env) {
       return;
     }
 
-    // General study session
+    // Scroll-stopping daily focus lesson
     if (data === 'study_lesson' || data === 'study_start') {
       // Track daily quota for free users
       try {
@@ -5475,10 +5480,25 @@ async function handleCallbackQuery(query: any, env: Env) {
       } catch (e) {
         console.error('Quota tracking error in study_lesson:', e);
       }
-      await editMessage(env, chatId, messageId, '⏳ Menyiapkan pelajaran...');
-      const prompt = `Pilih 1 topik (articles/tenses/prepositions/sv-agreement/passive-voice/conditionals). Kasih perbandingan Bahasa vs English (2 baris), 3 contoh kalimat, lalu 1 soal. Maks 8 baris. Plain text.`;
-      const response = await getTutorResponse(env, freshUser, prompt);
-      await sendMessage(env, chatId, response);
+      await editMessage(env, chatId, messageId, '⏳ Menyiapkan lesson hari ini...');
+      const lesson = getDailyFocusLesson(freshUser.target_test);
+      try {
+        const { getOrGenerateSceneImage } = await import('../services/scene-image');
+        const img = await getOrGenerateSceneImage(env, lesson.scene, lesson.sceneVocab);
+        if (img) {
+          await sendPhoto(env, chatId, img.bytes, undefined, 'daily-lesson.png', img.mime_type);
+        }
+      } catch (e) {
+        console.error('[daily-lesson image] send failed:', (e as any)?.message || e);
+      }
+      const response = renderDailyFocusLesson(lesson, freshUser.name);
+      await sendMessage(env, chatId, response, {
+        inline_keyboard: [
+          [{ text: '🚀 Latih fokus ini', callback_data: lesson.focusCallback }],
+          [{ text: '📚 Menu belajar', callback_data: 'study_menu' }],
+        ],
+      });
+      await saveToHistory(env, freshUser.id, `Daily lesson: ${lesson.label}`, response);
       return;
     }
 
@@ -5837,7 +5857,7 @@ async function handleCallbackQuery(query: any, env: Env) {
 
   // study_menu callback (back to main study menu)
   if (data === 'study_menu') {
-    await editMessage(env, chatId, messageId, '📚 *Menu Belajar*\n\nPilih skill yang mau dilatih:', studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
+    await editMessage(env, chatId, messageId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
     return;
   }
 
