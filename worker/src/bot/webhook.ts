@@ -2545,7 +2545,11 @@ async function handleMessage(message: any, env: Env) {
           const fallback = await getFallbackPractice(env, user.id);
           let suggestLine = '\n\nMau tetap produktif? Coba /today (pelajaran hari ini) atau /lesson (pelajaran personal).';
           if (fallback) {
-            suggestLine = `\n\n💡 Aku saranin latihan ${fallback.section} — itu yang paling perlu kamu perkuat sekarang.\nKetik /study buat mulai.`;
+            if (fallback.mode === 'section') {
+              suggestLine = `\n\n💡 Aku saranin latihan ${(fallback as any).section} — itu yang paling perlu kamu perkuat sekarang.\nKetik /study buat mulai.`;
+            } else {
+              suggestLine = `\n\n💡 Aku saranin latihan "${fallback.concept}" — ${fallback.reason}.\nKetik /study buat mulai.`;
+            }
           }
 
           const nudge = await maybeAppendNudge(env, user.id);
@@ -2566,6 +2570,53 @@ async function handleMessage(message: any, env: Env) {
             ],
           });
           }
+        }
+        return;
+      }
+
+      case '/vocab': {
+        // Vocabulary trainer — main menu
+        try {
+          const { getVocabStats, getRandomVocab, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+          const stats = await getVocabStats(env, user.id);
+          const cefrLevel = user.proficiency_level || 'B1';
+          const levelEmoji: Record<string, string> = { A1: '🅰️', A2: '🅰️', B1: '🅱️', B2: '🅱️', C1: '🇨', C2: '🇨' };
+          const emoji = levelEmoji[cefrLevel] || '📖';
+
+          // Check if user typed a word to search
+          const searchWord = text.split(' ').slice(1).join(' ').trim();
+          if (searchWord) {
+            // Search mode
+            const { searchVocab } = await import('../services/vocabulary');
+            const results = await searchVocab(env, user.id, searchWord);
+            if (results.length === 0) {
+              await sendMessage(env, chatId,
+                `🔍 Tidak nemu kata "${searchWord}" dalam database.\n\n` +
+                `Coba kata lain atau ketik /vocab untuk menu utama.`
+              );
+              return;
+            }
+            const vocab = results[0];
+            const msg = `🔍 *Hasil Pencarian*\n\n` + formatVocabCard(vocab, true) +
+              `\n\n_Rate how well you know this word:_`;
+            const sent = await sendMessage(env, chatId, msg, formatVocabReviewKeyboard(vocab.id));
+            return;
+          }
+
+          // Main menu
+          const vocab = await getRandomVocab(env, user.id);
+          let intro = `📚 *Vocabulary Trainer*\n\n` +
+            `${emoji} Level: *${cefrLevel}*\n` +
+            `📚 Total dipelajari: *${stats.total}* kata\n` +
+            `✅ Dikuasai: *${stats.learned}* kata\n` +
+            `⏰ Due review: *${stats.dueToday}* kata\n` +
+            `🎯 Akurasi: *${stats.accuracy}%*\n\n` +
+            `Pilih mode latihan:`;
+
+          await sendMessage(env, chatId, intro, vocabTrainerKeyboard());
+        } catch (e) {
+          console.error('/vocab error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat vocabulary. Coba lagi ya.');
         }
         return;
       }
@@ -5676,8 +5727,9 @@ async function handleCallbackQuery(query: any, env: Env) {
     const correct = data === 'onb_try_correct';
     const tgUser = (query.from || {}) as any;
     const firstName = tgUser.first_name || user.name || 'kamu';
+    const skipped = false;
     const { answerText, doneText, doneKeyboard } = await onTrySubmit(
-      env, user, correct, firstName,
+      env, user, skipped, correct, firstName,
     );
     // Replace the question with the reaction (Correct! / Hampir…)
     await editMessage(env, chatId, messageId, answerText);
@@ -6808,9 +6860,320 @@ try {
       }
       return;
     }
+
+    // ═══════════════════════════════════════════════════════
+    // VOCABULARY TRAINER CALLBACKS
+    //   vc:drill:N     — start drill with N random vocab cards
+    //   vc:review     — review due vocab cards
+    //   vc:level:X    — drill by level (A=A1-A2, B=B1-B2, C=C1-C2)
+    //   vc:search     — search for a word
+    //   vc:stats      — show user's vocab progress
+    //   vc:1/2/3/4:ID — rate a vocab card (again/hard/good/easy)
+    //   vc:show:ID    — show full vocab card details
+    //   vc:skip:ID    — skip this card
+    //   vc:start      — start a drill session
+    //   vocab:menu    — return to main vocab menu
+    //   lesson_word_of_day — daily vocab card
+    // ═══════════════════════════════════════════════════════
+
+    // lesson_word_of_day — dedicated daily vocab card
+    if (data === 'lesson_word_of_day') {
+      try {
+        const { getRandomVocab, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        const vocab = await getRandomVocab(env, user.id);
+        if (!vocab) {
+          await editMessage(env, chatId, messageId, '📚 Belum ada vocabulary card. Tambahkan kata dengan /vocab search [kata].');
+          return;
+        }
+        const msg = formatVocabCard(vocab) +
+          '\n\n_How well do you know this word?_';
+        await editMessage(env, chatId, messageId, msg, formatVocabReviewKeyboard(vocab.id));
+      } catch (e) {
+        console.error('lesson_word_of_day error:', e);
+        await editMessage(env, chatId, messageId, '⚠️ Gagal mengambil kata. Coba lagi.');
+      }
+      return;
+    }
+
+    // vc:search — prompt user to type a word
+    if (data === 'vc:search') {
+      await editMessage(env, chatId, messageId,
+        '🔍 *Cari Kata*\n\nKetik kata yang ingin kamu cari. Contoh: `photosynthesis`\n\nAtau ketik `/vocab` untuk kembali ke menu utama.'
+      );
+      return;
+    }
+
+    // vc:stats — show user's vocab progress
+    if (data === 'vc:stats') {
+      try {
+        const { getVocabStats } = await import('../services/vocabulary');
+        const stats = await getVocabStats(env, user.id);
+        const cefrLevel = user.proficiency_level || 'B1';
+        const levelEmoji: Record<string, string> = { A1: '🅰️', A2: '🅰️', B1: '🅱️', B2: '🅱️', C1: '🇨', C2: '🇨' };
+        const emoji = levelEmoji[cefrLevel] || '📖';
+        const accBar = '🟩'.repeat(Math.round(stats.accuracy / 10)) + '⬜'.repeat(10 - Math.round(stats.accuracy / 10));
+        await editMessage(env, chatId, messageId,
+          `📊 *Vocabulary Progress*\n\n` +
+          `${emoji} Level: *${cefrLevel}*\n` +
+          `📚 Total dipelajari: *${stats.total}* kata\n` +
+          `✅ Dikuasai: *${stats.learned}* kata\n` +
+          `⏰ Due review: *${stats.dueToday}* kata\n` +
+          `🎯 Akurasi: *${stats.accuracy}%\n` +
+          `${accBar}\n` +
+          `🔥 Streak: *${stats.streak}* kata berturut-turut\n\n` +
+          `_Semakin banyak vocab yang kamu review, semakin akurat jadwal FSRS-nya._`,
+          vocabTrainerKeyboard()
+        );
+      } catch (e) {
+        console.error('vc:stats error:', e);
+        await editMessage(env, chatId, messageId, '⚠️ Gagal memuat stats. Coba lagi.');
+      }
+      return;
+    }
+
+    // vc:level — show level selection
+    if (data === 'vc:level') {
+      await editMessage(env, chatId, messageId, '🎯 *Pilih Level:*', vocabLevelKeyboard());
+      return;
+    }
+
+    // vc:drill:N — start a drill with N random vocab cards
+    if (data.startsWith('vc:drill:')) {
+      const count = parseInt(data.replace('vc:drill:', ''), 10) || 5;
+      await editMessage(env, chatId, messageId, `📝 Menyiapkan drill ${count} kata...`);
+      await sendChatAction(env, chatId, 'typing');
+      try {
+        const { getRandomVocab, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        const vocab = await getRandomVocab(env, user.id);
+        if (!vocab) {
+          await sendMessage(env, chatId, '📚 Belum ada vocabulary card di database. Coba lagi nanti!');
+          return;
+        }
+        const msg = formatVocabCard(vocab) +
+          `\n\n📝 *Drill (${count} kata)* — 1/${count}\n` +
+          `_Rate how well you know this word._`;
+        await sendMessage(env, chatId, msg, formatVocabReviewKeyboard(vocab.id));
+      } catch (e) {
+        console.error('vc:drill error:', e);
+        await sendMessage(env, chatId, '⚠️ Gagal memulai drill. Coba lagi.');
+      }
+      return;
+    }
+
+    // vc:review — start review session for due vocab
+    if (data === 'vc:review') {
+      try {
+        const { getDueVocabReviews, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        const due = await getDueVocabReviews(env, user.id, 5);
+        if (due.length === 0) {
+          await editMessage(env, chatId, messageId,
+            '🎉 *Tidak ada vocab untuk direview!*\n\nSemua vocabulary kamu sudah di-review. Coba drill baru dengan `/vocab`.',
+            vocabTrainerKeyboard()
+          );
+          return;
+        }
+        const first = due[0];
+        const msg = `⏰ *Review Time!*\n\nAda *${due.length}* vocab untuk direview.\n\n` +
+          formatVocabCard(first) +
+          `\n\n_Rate your recall:_`;
+        await editMessage(env, chatId, messageId, msg, formatVocabReviewKeyboard(first.id));
+      } catch (e) {
+        console.error('vc:review error:', e);
+        await editMessage(env, chatId, messageId, '⚠️ Gagal memuat review. Coba lagi.');
+      }
+      return;
+    }
+
+    // vc:start — same as vc:drill:5
+    if (data === 'vc:start') {
+      try {
+        const { getRandomVocab, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        const vocab = await getRandomVocab(env, user.id);
+        if (!vocab) {
+          await sendMessage(env, chatId, '📚 Vocabulary card tidak ditemukan. Coba lagi nanti!');
+          return;
+        }
+        const msg = `📝 *Vocabulary Drill*\n\n` + formatVocabCard(vocab);
+        await sendMessage(env, chatId, msg, formatVocabReviewKeyboard(vocab.id));
+      } catch (e) {
+        console.error('vc:start error:', e);
+        await sendMessage(env, chatId, '⚠️ Gagal memulai. Coba lagi.');
+      }
+      return;
+    }
+
+    // vc:level:A|B|C — drill by level group
+    if (data.startsWith('vc:level:')) {
+      const levelGroup = data.replace('vc:level:', '');
+      const levelMap: Record<string, string[]> = {
+        A: ['A1', 'A2'],
+        B: ['B1', 'B2'],
+        C: ['C1', 'C2'],
+      };
+      const levels = levelMap[levelGroup] || ['B1'];
+      await editMessage(env, chatId, messageId, `🎯 Menyiapkan drill level ${levelGroup}...`);
+      await sendChatAction(env, chatId, 'typing');
+      try {
+        const { getRandomVocab, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        for (const lvl of levels) {
+          const vocab = await getRandomVocab(env, user.id, lvl);
+          if (vocab) {
+            const msg = `📝 *Drill Level ${lvl}*\n\n` + formatVocabCard(vocab);
+            await sendMessage(env, chatId, msg, formatVocabReviewKeyboard(vocab.id));
+            return;
+          }
+        }
+        await sendMessage(env, chatId, `📚 Belum ada vocabulary card untuk level ini. Coba level lain!`);
+      } catch (e) {
+        console.error('vc:level error:', e);
+        await sendMessage(env, chatId, '⚠️ Gagal memulai drill. Coba lagi.');
+      }
+      return;
+    }
+
+    // vocab:menu — return to main vocab menu
+    if (data === 'vocab:menu') {
+      try {
+        const { getVocabStats, getRandomVocab, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        const stats = await getVocabStats(env, user.id);
+        const cefrLevel = user.proficiency_level || 'B1';
+        const levelEmoji: Record<string, string> = { A1: '🅰️', A2: '🅰️', B1: '🅱️', B2: '🅱️', C1: '🇨', C2: '🇨' };
+        const emoji = levelEmoji[cefrLevel] || '📖';
+        await editMessage(env, chatId, messageId,
+          `📚 *Vocabulary Trainer*\n\n` +
+          `${emoji} Level: *${cefrLevel}*\n` +
+          `📚 Total dipelajari: *${stats.total}* kata\n` +
+          `✅ Dikuasai: *${stats.learned}* kata\n` +
+          `⏰ Due: *${stats.dueToday}* | 🎯 Akurasi: *${stats.accuracy}%\n\n` +
+          `Pilih mode latihan:`,
+          vocabTrainerKeyboard()
+        );
+      } catch (e) {
+        console.error('vocab:menu error:', e);
+        await editMessage(env, chatId, messageId, '⚠️ Gagal memuat menu. Coba lagi.');
+      }
+      return;
+    }
+
+    // vc:skip:ID — skip this card
+    if (data.startsWith('vc:skip:')) {
+      const vocabId = parseInt(data.replace('vc:skip:', ''), 10);
+      if (!vocabId) return;
+      try {
+        const { getRandomVocab, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        const vocab = await getRandomVocab(env, user.id);
+        if (!vocab) {
+          await sendMessage(env, chatId, '📚 Tidak ada vocab card lagi. Nice work! 💪\nCoba `/vocab review` untuk mereview yang due, atau `/vocab` untuk menu utama.');
+          return;
+        }
+        const msg = `📝 *Next Card*\n\n` + formatVocabCard(vocab);
+        await sendMessage(env, chatId, msg, formatVocabReviewKeyboard(vocab.id));
+      } catch (e) {
+        console.error('vc:skip error:', e);
+        await sendMessage(env, chatId, '⚠️ Gagal skip. Coba lagi.');
+      }
+      return;
+    }
+
+    // vc:show:ID — show full card details
+    if (data.startsWith('vc:show:')) {
+      const vocabId = parseInt(data.replace('vc:show:', ''), 10);
+      if (!vocabId) return;
+      try {
+        const { getVocabById, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        const vocab = await getVocabById(env, vocabId);
+        if (!vocab) {
+          await sendMessage(env, chatId, 'Kata tidak ditemukan.');
+          return;
+        }
+        const msg = `📖 *Detail Kata*\n\n` + formatVocabCard(vocab, true);
+        await sendMessage(env, chatId, msg, formatVocabReviewKeyboard(vocabId));
+      } catch (e) {
+        console.error('vc:show error:', e);
+        await sendMessage(env, chatId, '⚠️ Gagal memuat detail. Coba lagi.');
+      }
+      return;
+    }
+
+    // vc:1/2/3/4:ID — rate a vocab card (again/hard/good/easy)
+    if (data.startsWith('vc:') && /^vc:[1-4]:\d+$/.test(data)) {
+      const parts = data.split(':');
+      const rating = parseInt(parts[1], 10) as 1 | 2 | 3 | 4;
+      const vocabId = parseInt(parts[2], 10);
+      if (!vocabId || !rating) return;
+
+      try {
+        const { recordVocabReview, ratingLabel, getRandomVocab, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        const result = await recordVocabReview(env, user.id, vocabId, rating);
+
+        const nextCard = await getRandomVocab(env, user.id);
+        let feedback = `📝 Kamu rated: *${ratingLabel(rating)}*\n`;
+        if (result.isLearned) feedback += `✅ "${vocabId}" udah dikuasai! (streak tinggi)\n`;
+        feedback += `⏰ Next review: ${new Date(result.nextReview).toLocaleDateString('id-ID')}`;
+
+        if (nextCard) {
+          const msg = feedback + `\n\n📝 *Next Card*\n\n` + formatVocabCard(nextCard);
+          await sendMessage(env, chatId, msg, formatVocabReviewKeyboard(nextCard.id));
+        } else {
+          await sendMessage(env, chatId,
+            feedback + '\n\n🎉 Semua vocab sudah di-review! Nice work.\n\nKetik /vocab untuk menu utama atau /vocab review untuk mereview yang due.',
+            vocabTrainerKeyboard()
+          );
+        }
+      } catch (e) {
+        console.error('vc:rate error:', e);
+        await sendMessage(env, chatId, '⚠️ Gagal menyimpan rating. Coba lagi.');
+      }
+      return;
+    }
   }
 
 // Old exercise handlers removed — now using exercise-engine.ts for multi-step lessons
+
+// ═══════════════════════════════════════════════════════
+// VOCABULARY TRAINER KEYBOARDS
+// ═══════════════════════════════════════════════════════
+
+function vocabTrainerKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: '📝 Drill 5 Kata', callback_data: 'vc:drill:5' },
+        { text: '📝 Drill 10 Kata', callback_data: 'vc:drill:10' },
+      ],
+      [
+        { text: '🔄 Review Due', callback_data: 'vc:review' },
+        { text: '🎯 Level Selection', callback_data: 'vc:level' },
+      ],
+      [
+        { text: '🔍 Cari Kata', callback_data: 'vc:search' },
+        { text: '📊 Stats', callback_data: 'vc:stats' },
+      ],
+      [
+        { text: '🔙 Menu Utama', callback_data: 'vocab:menu' },
+      ],
+    ],
+  };
+}
+
+function vocabLevelKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: '🅰️ Level A (A1-A2)', callback_data: 'vc:level:A' },
+      ],
+      [
+        { text: '🅱️ Level B (B1-B2)', callback_data: 'vc:level:B' },
+      ],
+      [
+        { text: '🇨 Level C (C1-C2)', callback_data: 'vc:level:C' },
+      ],
+      [
+        { text: '🔙 Menu Vocab', callback_data: 'vocab:menu' },
+      ],
+    ],
+  };
+}
 
 async function editMessage(env: Env, chatId: number, messageId: number, text: string, replyMarkup?: any) {
   await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {

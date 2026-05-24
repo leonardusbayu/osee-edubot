@@ -11,6 +11,10 @@
 import { createEmptyCard, fsrs, generatorParameters, Rating, type Card, type Grade } from 'ts-fsrs';
 import type { Env } from '../types';
 
+export type ReviewFallbackPractice =
+  | { mode: 'concept'; concept: string; reason: string }
+  | { mode: 'section'; section: string; reason: string };
+
 // Create FSRS instance with optimized parameters for language learning
 const params = generatorParameters({
   maximum_interval: 180,       // Cap at 6 months (exam prep, not lifetime learning)
@@ -63,6 +67,14 @@ function stateToCard(state: FSRSCardState): Card {
   } as Card;
 }
 
+async function invalidateRetentionCache(env: Env, userId: number): Promise<void> {
+  try {
+    await env.DB.prepare('DELETE FROM fsrs_retention_cache WHERE user_id = ?').bind(userId).run();
+  } catch {
+    // Cache table may not exist in older environments; stats still work.
+  }
+}
+
 // ═══════════════════════════════════════════════════════
 // PUBLIC API — Drop-in replacement for spaced-repetition.ts
 // ═══════════════════════════════════════════════════════
@@ -111,6 +123,7 @@ export async function addToReview(
     questionData, correctAnswer, studentAnswer,
     nextReview, JSON.stringify(cardState),
   ).run();
+  await invalidateRetentionCache(env, userId);
 }
 
 /**
@@ -144,8 +157,18 @@ export async function markReviewed(
   // Reconstruct FSRS card from stored state, or create new one for legacy items
   let card: Card;
   if (item.fsrs_state) {
-    const state = typeof item.fsrs_state === 'string' ? JSON.parse(item.fsrs_state) : item.fsrs_state;
-    card = stateToCard(state);
+    let state: any;
+    try {
+      state = typeof item.fsrs_state === 'string' ? JSON.parse(item.fsrs_state) : item.fsrs_state;
+    } catch {
+      console.warn('[fsrs] Corrupted fsrs_state for item:', item.id, '— resetting');
+      state = null;
+    }
+    if (state) {
+      card = stateToCard(state);
+    } else {
+      card = createEmptyCard();
+    }
   } else {
     // Legacy item without FSRS state — create card from review_level
     card = createEmptyCard();
@@ -167,6 +190,10 @@ export async function markReviewed(
       'easy': Rating.Easy,
     };
     rating = ratingMap[quality];
+    if (!rating) {
+      console.warn('[fsrs] Invalid quality value:', quality, '— defaulting to Good');
+      rating = Rating.Good;
+    }
   } else {
     // Infer from correct/incorrect
     rating = correct ? Rating.Good : Rating.Again;
@@ -198,6 +225,7 @@ export async function markReviewed(
     JSON.stringify(cardState),
     reviewId,
   ).run();
+  await invalidateRetentionCache(env, item.user_id);
 }
 
 /**
@@ -257,9 +285,10 @@ export async function getNextUpcomingReview(env: Env, userId: number): Promise<{
  * doesn't hit a dead-end. Strategy:
  *   1. Pull the user's top weakness from mental_model (concepts with low understanding).
  *   2. If none, fall back to the section where their recent accuracy is lowest.
- *   3. Returns { section, question_type } so the caller can launch a practice drill.
+ *   3. Returns an explicit concept or section fallback so callers can launch
+ *      the correct flow without overloading one field with two meanings.
  */
-export async function getFallbackPractice(env: Env, userId: number): Promise<{ section: string; reason: string } | null> {
+export async function getFallbackPractice(env: Env, userId: number): Promise<ReviewFallbackPractice | null> {
   // 1. Weakest concept from mental model
   try {
     const weak = await env.DB.prepare(
@@ -268,7 +297,7 @@ export async function getFallbackPractice(env: Env, userId: number): Promise<{ s
        ORDER BY understanding_score ASC, updated_at DESC LIMIT 1`
     ).bind(userId).first() as any;
     if (weak?.concept) {
-      return { section: weak.concept, reason: 'weakest_concept' };
+      return { mode: 'concept', concept: weak.concept, reason: 'weakest_concept' };
     }
   } catch {}
 
@@ -283,7 +312,7 @@ export async function getFallbackPractice(env: Env, userId: number): Promise<{ s
        ORDER BY acc ASC LIMIT 1`
     ).bind(userId).first() as any;
     if (section?.section) {
-      return { section: section.section, reason: 'lowest_accuracy_section' };
+      return { mode: 'section', section: section.section, reason: 'lowest_accuracy_section' };
     }
   } catch {}
 
@@ -322,6 +351,16 @@ export async function getReviewForecast(env: Env, userId: number, days: number =
  * Calculate average retention across all active items.
  */
 async function getAverageRetention(env: Env, userId: number): Promise<number> {
+  try {
+    const cached = await env.DB.prepare(
+      `SELECT avg_retention FROM fsrs_retention_cache
+       WHERE user_id = ? AND computed_at >= datetime('now', '-15 minutes')`
+    ).bind(userId).first() as any;
+    if (cached?.avg_retention != null) return Number(cached.avg_retention) || 0;
+  } catch {
+    // Cache table may not exist yet; compute directly.
+  }
+
   const items = await env.DB.prepare(
     `SELECT fsrs_state FROM spaced_repetition WHERE user_id = ? AND fsrs_state IS NOT NULL`
   ).bind(userId).all();
@@ -348,7 +387,20 @@ async function getAverageRetention(env: Env, userId: number): Promise<number> {
     } catch {}
   }
 
-  return count > 0 ? totalRetention / count : 0;
+  const avg = count > 0 ? totalRetention / count : 0;
+
+  try {
+    await env.DB.prepare(
+      `INSERT INTO fsrs_retention_cache (user_id, avg_retention, item_count, computed_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(user_id) DO UPDATE SET
+         avg_retention = excluded.avg_retention,
+         item_count = excluded.item_count,
+         computed_at = excluded.computed_at`
+    ).bind(userId, avg, count).run();
+  } catch {}
+
+  return avg;
 }
 
 /**
