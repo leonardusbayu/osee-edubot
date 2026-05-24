@@ -705,15 +705,123 @@ function buildProgressBarInline(percent: number): string {
 // SKILL-BASED LEARNING PATHS KEYBOARDS
 // ═══════════════════════════════════════════════════════
 
-function studyTopicKeyboard(targetTest?: string | null) {
+// ═══════════════════════════════════════════════════════
+// LEVEL-GATED STUDY PATHS
+// Maps each topic callback to a CEFR level (A1-C2)
+// Used to show level badges on topics and optionally gate content
+// ═══════════════════════════════════════════════════════
+
+const LEVEL_ORDER: Record<string, number> = {
+  'A1': 0, 'A2': 1, 'B1': 2, 'B2': 3, 'C1': 4, 'C2': 5,
+};
+
+const LEVEL_EMOJI: Record<string, string> = {
+  A1: '🅰️', A2: '🅰️', B1: '🅱️', B2: '🅱️', C1: '🇨', C2: '🇨',
+};
+
+function getLevelEmoji(level: string): string {
+  return LEVEL_EMOJI[level] || '📖';
+}
+
+/** Returns true if topic level > user level (topic is "gated" / too advanced) */
+function isTopicAboveUserLevel(topicLevel: string, userLevel: string): boolean {
+  const topicOrder = LEVEL_ORDER[topicLevel] ?? 2;
+  const userOrder = LEVEL_ORDER[userLevel] ?? 2;
+  return topicOrder > userOrder + 1; // Allow 1 level above
+}
+
+/** CEFR level map for all study topic callbacks */
+const TOPIC_CEFR_MAP: Record<string, string> = {
+  // Grammar (foundation → advanced)
+  lesson_articles: 'A1',
+  lesson_sv_agreement: 'A1',
+  lesson_prepositions: 'A2',
+  lesson_tenses: 'A2',
+  lesson_passive_voice: 'B1',
+  lesson_conditionals: 'B1',
+  lesson_relative_clauses: 'B1',
+  lesson_word_formation: 'B1',
+  lesson_linking_words: 'B1',
+  // Vocabulary
+  lesson_word_of_day: 'B1',
+  lesson_academic_words: 'B2',
+  lesson_collocations: 'B2',
+  lesson_paraphrasing: 'B2',
+  // Skills
+  lesson_reading_strategy: 'B1',
+  lesson_listening_strategy: 'B1',
+  lesson_speaking_templates: 'B2',
+  lesson_writing_templates: 'B2',
+  lesson_pronunciation: 'C1',
+  lesson_listening_practice: 'B1',
+  // Speaking skills
+  skill_describe_pic: 'A2',
+  skill_opinion: 'B1',
+  skill_roleplay: 'B2',
+  skill_shadow: 'A2',
+  // Reading skills
+  skill_speed_read: 'A2',
+  skill_scan_find: 'A2',
+  skill_vocab_context: 'B1',
+  skill_summarize: 'B2',
+  skill_tfng: 'B2',
+  skill_matching_headings: 'B2',
+  skill_insert_sentence: 'B2',
+  skill_biz_reading: 'C1',
+  skill_structure_we: 'B2',
+  skill_sentence_completion: 'B2',
+  // Listening skills
+  skill_dictation: 'A2',
+  skill_note_take: 'B1',
+  skill_catch_detail: 'A2',
+  skill_speed_listen: 'B1',
+  skill_photo_desc: 'B1',
+  skill_quick_response: 'B1',
+  // Speaking skills
+  skill_cue_card: 'B2',
+  skill_integrated_speak: 'C1',
+  // Writing skills
+  skill_fix_sentence: 'A2',
+  skill_paraphrase: 'B1',
+  skill_describe_chart: 'B1',
+  skill_email_write: 'B1',
+  skill_essay_build: 'C1',
+  skill_integrated_write: 'C1',
+  // Practice
+  study_drill: 'A2',
+  pronun_random: 'B1',
+  study_minitest: 'B1',
+  study_challenge: 'B2',
+  study_score: 'B1',
+};
+
+/** Returns CEFR level for a topic callback */
+function getTopicLevel(topic: string): string {
+  return TOPIC_CEFR_MAP[topic] || 'B1';
+}
+
+/** Formats a topic button with optional level badge and lock icon */
+function levelBadge(topic: string, label: string, userLevel: string): string {
+  const lvl = getTopicLevel(topic);
+  const emoji = getLevelEmoji(lvl);
+  if (isTopicAboveUserLevel(lvl, userLevel)) {
+    return `${label} 🔒`;
+  }
+  return `${label} ${emoji}${lvl}`;
+}
+
+function studyTopicKeyboard(targetTest?: string | null, userLevel?: string) {
   const testEmoji: Record<string, string> = {
     'TOEFL_IBT': '🇺🇸', 'IELTS': '🇬🇧', 'TOEFL_ITP': '📚', 'TOEIC': '🏢',
   };
   const tt = targetTest || 'TOEFL_IBT';
   const emoji = testEmoji[tt] || '📝';
+  const level = userLevel || 'B1';
+  const levelLbl = `${getLevelEmoji(level)}${level}`;
   return {
     inline_keyboard: [
       [{ text: `${emoji} Target: ${tt.replace(/_/g, ' ')}  [Ganti →]`, callback_data: 'switch_test' }],
+      [{ text: `${levelLbl} Level Kamu   [Ganti →]`, callback_data: 'switch_level' }],
       [{ text: '🔥 Lesson Hari Ini', callback_data: 'study_lesson' }],
       [
         { text: '📖 Reading', callback_data: 'cat_reading' },
@@ -738,155 +846,163 @@ function studyTopicKeyboard(targetTest?: string | null) {
   };
 }
 
-function readingKeyboard(targetTest: string = '') {
+function readingKeyboard(targetTest: string = '', userLevel?: string) {
+  const lvl = userLevel || 'B1';
   const rows: any[][] = [
-    [{ text: '⚡ Speed Reading', callback_data: 'skill_speed_read' }],
-    [{ text: '🔍 Scan & Find', callback_data: 'skill_scan_find' }],
-    [{ text: '📖 Vocab in Context', callback_data: 'skill_vocab_context' }],
-    [{ text: '📝 Summarize This', callback_data: 'skill_summarize' }],
+    [{ text: levelBadge('skill_speed_read', '⚡ Speed Reading', lvl), callback_data: 'skill_speed_read' }],
+    [{ text: levelBadge('skill_scan_find', '🔍 Scan & Find', lvl), callback_data: 'skill_scan_find' }],
+    [{ text: levelBadge('skill_vocab_context', '📖 Vocab in Context', lvl), callback_data: 'skill_vocab_context' }],
+    [{ text: levelBadge('skill_summarize', '📝 Summarize This', lvl), callback_data: 'skill_summarize' }],
   ];
   // Test-specific reading exercises
   if (targetTest === 'IELTS') {
-    rows.push([{ text: '✅❌❓ True/False/Not Given', callback_data: 'skill_tfng' }]);
-    rows.push([{ text: '🔤 Matching Headings', callback_data: 'skill_matching_headings' }]);
+    rows.push([{ text: levelBadge('skill_tfng', '✅❌❓ True/False/Not Given', lvl), callback_data: 'skill_tfng' }]);
+    rows.push([{ text: levelBadge('skill_matching_headings', '🔤 Matching Headings', lvl), callback_data: 'skill_matching_headings' }]);
   }
   if (targetTest === 'TOEFL_IBT') {
-    rows.push([{ text: '📌 Insert Sentence', callback_data: 'skill_insert_sentence' }]);
+    rows.push([{ text: levelBadge('skill_insert_sentence', '📌 Insert Sentence', lvl), callback_data: 'skill_insert_sentence' }]);
   }
   if (targetTest === 'TOEIC') {
-    rows.push([{ text: '📧 Business Reading', callback_data: 'skill_biz_reading' }]);
+    rows.push([{ text: levelBadge('skill_biz_reading', '📧 Business Reading', lvl), callback_data: 'skill_biz_reading' }]);
   }
   if (targetTest === 'TOEFL_ITP') {
-    rows.push([{ text: '🔧 Structure & Written Expression', callback_data: 'skill_structure_we' }]);
-    rows.push([{ text: '✏️ Sentence Completion', callback_data: 'skill_sentence_completion' }]);
+    rows.push([{ text: levelBadge('skill_structure_we', '🔧 Structure & Written Expression', lvl), callback_data: 'skill_structure_we' }]);
+    rows.push([{ text: levelBadge('skill_sentence_completion', '✏️ Sentence Completion', lvl), callback_data: 'skill_sentence_completion' }]);
   }
-  rows.push([{ text: '💡 Strategy Tips', callback_data: 'lesson_reading_strategy' }]);
+  rows.push([{ text: levelBadge('lesson_reading_strategy', '💡 Strategy Tips', lvl), callback_data: 'lesson_reading_strategy' }]);
   rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
   return { inline_keyboard: rows };
 }
 
-function listeningKeyboard(targetTest: string = '') {
+function listeningKeyboard(targetTest: string = '', userLevel?: string) {
+  const lvl = userLevel || 'B1';
   const rows: any[][] = [
-    [{ text: '✍️ Dictation', callback_data: 'skill_dictation' }],
-    [{ text: '📝 Note-Taking', callback_data: 'skill_note_take' }],
-    [{ text: '🎯 Catch the Detail', callback_data: 'skill_catch_detail' }],
-    [{ text: '🔥 Speed Listening', callback_data: 'skill_speed_listen' }],
+    [{ text: levelBadge('skill_dictation', '✍️ Dictation', lvl), callback_data: 'skill_dictation' }],
+    [{ text: levelBadge('skill_note_take', '📝 Note-Taking', lvl), callback_data: 'skill_note_take' }],
+    [{ text: levelBadge('skill_catch_detail', '🎯 Catch the Detail', lvl), callback_data: 'skill_catch_detail' }],
+    [{ text: levelBadge('skill_speed_listen', '🔥 Speed Listening', lvl), callback_data: 'skill_speed_listen' }],
   ];
   // Test-specific listening exercises
   if (targetTest === 'TOEIC') {
-    rows.push([{ text: '📸 Photo Description', callback_data: 'skill_photo_desc' }]);
-    rows.push([{ text: '💬 Quick Response', callback_data: 'skill_quick_response' }]);
+    rows.push([{ text: levelBadge('skill_photo_desc', '📸 Photo Description', lvl), callback_data: 'skill_photo_desc' }]);
+    rows.push([{ text: levelBadge('skill_quick_response', '💬 Quick Response', lvl), callback_data: 'skill_quick_response' }]);
   }
-  rows.push([{ text: '🔗 Pronunciation Drill', callback_data: 'pronun_random' }]);
+  rows.push([{ text: levelBadge('pronun_random', '🔗 Pronunciation Drill', lvl), callback_data: 'pronun_random' }]);
   rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
   return { inline_keyboard: rows };
 }
 
-function speakingKeyboard(targetTest: string = '') {
+function speakingKeyboard(targetTest: string = '', userLevel?: string) {
+  const lvl = userLevel || 'B1';
   const rows: any[][] = [
-    [{ text: '📸 Describe Picture', callback_data: 'skill_describe_pic' }],
-    [{ text: '💭 Express Opinion', callback_data: 'skill_opinion' }],
-    [{ text: '🎭 Role Play', callback_data: 'skill_roleplay' }],
-    [{ text: '🎤 Shadowing', callback_data: 'skill_shadow' }],
+    [{ text: levelBadge('skill_describe_pic', '📸 Describe Picture', lvl), callback_data: 'skill_describe_pic' }],
+    [{ text: levelBadge('skill_opinion', '💭 Express Opinion', lvl), callback_data: 'skill_opinion' }],
+    [{ text: levelBadge('skill_roleplay', '🎭 Role Play', lvl), callback_data: 'skill_roleplay' }],
+    [{ text: levelBadge('skill_shadow', '🎤 Shadowing', lvl), callback_data: 'skill_shadow' }],
   ];
   // Test-specific speaking exercises
   if (targetTest === 'IELTS') {
-    rows.push([{ text: '🎴 Cue Card (Part 2)', callback_data: 'skill_cue_card' }]);
+    rows.push([{ text: levelBadge('skill_cue_card', '🎴 Cue Card (Part 2)', lvl), callback_data: 'skill_cue_card' }]);
   }
   if (targetTest === 'TOEFL_IBT') {
-    rows.push([{ text: '🔗 Integrated Speaking', callback_data: 'skill_integrated_speak' }]);
+    rows.push([{ text: levelBadge('skill_integrated_speak', '🔗 Integrated Speaking', lvl), callback_data: 'skill_integrated_speak' }]);
   }
-  rows.push([{ text: '📋 Templates', callback_data: 'lesson_speaking_templates' }]);
+  rows.push([{ text: levelBadge('lesson_speaking_templates', '📋 Templates', lvl), callback_data: 'lesson_speaking_templates' }]);
   rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
   return { inline_keyboard: rows };
 }
 
-function writingKeyboard(targetTest: string = '') {
+function writingKeyboard(targetTest: string = '', userLevel?: string) {
+  const lvl = userLevel || 'B1';
   const rows: any[][] = [
-    [{ text: '✏️ Fix Sentence', callback_data: 'skill_fix_sentence' }],
-    [{ text: '🔄 Paraphrase', callback_data: 'skill_paraphrase' }],
-    [{ text: '📊 Describe Chart', callback_data: 'skill_describe_chart' }],
-    [{ text: '📧 Email Response', callback_data: 'skill_email_write' }],
-    [{ text: '📄 Essay Builder', callback_data: 'skill_essay_build' }],
+    [{ text: levelBadge('skill_fix_sentence', '✏️ Fix Sentence', lvl), callback_data: 'skill_fix_sentence' }],
+    [{ text: levelBadge('skill_paraphrase', '🔄 Paraphrase', lvl), callback_data: 'skill_paraphrase' }],
+    [{ text: levelBadge('skill_describe_chart', '📊 Describe Chart', lvl), callback_data: 'skill_describe_chart' }],
+    [{ text: levelBadge('skill_email_write', '📧 Email Response', lvl), callback_data: 'skill_email_write' }],
+    [{ text: levelBadge('skill_essay_build', '📄 Essay Builder', lvl), callback_data: 'skill_essay_build' }],
   ];
   // Test-specific writing exercises
   if (targetTest === 'TOEFL_IBT') {
-    rows.push([{ text: '🔗 Integrated Writing', callback_data: 'skill_integrated_write' }]);
+    rows.push([{ text: levelBadge('skill_integrated_write', '🔗 Integrated Writing', lvl), callback_data: 'skill_integrated_write' }]);
   }
-  rows.push([{ text: '📋 Templates', callback_data: 'lesson_writing_templates' }]);
+  rows.push([{ text: levelBadge('lesson_writing_templates', '📋 Templates', lvl), callback_data: 'lesson_writing_templates' }]);
   rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
   return { inline_keyboard: rows };
 }
 
-function grammarKeyboard() {
+function grammarKeyboard(userLevel?: string) {
+  const lvl = userLevel || 'B1';
   return {
     inline_keyboard: [
       [
-        { text: '📝 Articles', callback_data: 'lesson_articles' },
-        { text: '⏰ Tenses', callback_data: 'lesson_tenses' },
+        { text: levelBadge('lesson_articles', '📝 Articles', lvl), callback_data: 'lesson_articles' },
+        { text: levelBadge('lesson_tenses', '⏰ Tenses', lvl), callback_data: 'lesson_tenses' },
       ],
       [
-        { text: '🔗 Prepositions', callback_data: 'lesson_prepositions' },
-        { text: '✅ S-V Agreement', callback_data: 'lesson_sv_agreement' },
+        { text: levelBadge('lesson_prepositions', '🔗 Prepositions', lvl), callback_data: 'lesson_prepositions' },
+        { text: levelBadge('lesson_sv_agreement', '✅ S-V Agreement', lvl), callback_data: 'lesson_sv_agreement' },
       ],
       [
-        { text: '🔄 Passive Voice', callback_data: 'lesson_passive_voice' },
-        { text: '❓ Conditionals', callback_data: 'lesson_conditionals' },
+        { text: levelBadge('lesson_passive_voice', '🔄 Passive Voice', lvl), callback_data: 'lesson_passive_voice' },
+        { text: levelBadge('lesson_conditionals', '❓ Conditionals', lvl), callback_data: 'lesson_conditionals' },
       ],
       [
-        { text: '👥 Relative Clause', callback_data: 'lesson_relative_clauses' },
-        { text: '🧩 Word Formation', callback_data: 'lesson_word_formation' },
+        { text: levelBadge('lesson_relative_clauses', '👥 Relative Clause', lvl), callback_data: 'lesson_relative_clauses' },
+        { text: levelBadge('lesson_word_formation', '🧩 Word Formation', lvl), callback_data: 'lesson_word_formation' },
       ],
       [{ text: '⬅️ Kembali', callback_data: 'back_study' }],
     ],
   };
 }
 
-function vocabKeyboard() {
+function vocabKeyboard(userLevel?: string) {
+  const lvl = userLevel || 'B1';
   return {
     inline_keyboard: [
       [
-        { text: '📚 Kata Hari Ini', callback_data: 'lesson_word_of_day' },
-        { text: '🎯 Academic Words', callback_data: 'lesson_academic_words' },
+        { text: levelBadge('lesson_word_of_day', '📚 Kata Hari Ini', lvl), callback_data: 'lesson_word_of_day' },
+        { text: levelBadge('lesson_academic_words', '🎯 Academic Words', lvl), callback_data: 'lesson_academic_words' },
       ],
       [
-        { text: '🤝 Collocations', callback_data: 'lesson_collocations' },
-        { text: '♻️ Paraphrasing', callback_data: 'lesson_paraphrasing' },
+        { text: levelBadge('lesson_collocations', '🤝 Collocations', lvl), callback_data: 'lesson_collocations' },
+        { text: levelBadge('lesson_paraphrasing', '♻️ Paraphrasing', lvl), callback_data: 'lesson_paraphrasing' },
       ],
       [{ text: '⬅️ Kembali', callback_data: 'back_study' }],
     ],
   };
 }
 
-function skillsKeyboard() {
+function skillsKeyboard(userLevel?: string) {
+  const lvl = userLevel || 'B1';
   return {
     inline_keyboard: [
-      [{ text: '🎧 Listening Practice (Audio)', callback_data: 'lesson_listening_practice' }],
+      [{ text: levelBadge('lesson_listening_practice', '🎧 Listening Practice (Audio)', lvl), callback_data: 'lesson_listening_practice' }],
       [
-        { text: '👁 Reading Tips', callback_data: 'lesson_reading_strategy' },
-        { text: '👂 Listening Tips', callback_data: 'lesson_listening_strategy' },
+        { text: levelBadge('lesson_reading_strategy', '👁 Reading Tips', lvl), callback_data: 'lesson_reading_strategy' },
+        { text: levelBadge('lesson_listening_strategy', '👂 Listening Tips', lvl), callback_data: 'lesson_listening_strategy' },
       ],
       [
-        { text: '🗣 Speaking Template', callback_data: 'lesson_speaking_templates' },
-        { text: '✍️ Writing Template', callback_data: 'lesson_writing_templates' },
+        { text: levelBadge('lesson_speaking_templates', '🗣 Speaking Template', lvl), callback_data: 'lesson_speaking_templates' },
+        { text: levelBadge('lesson_writing_templates', '✍️ Writing Template', lvl), callback_data: 'lesson_writing_templates' },
       ],
       [
-        { text: '🔊 Pronunciation', callback_data: 'lesson_pronunciation' },
-        { text: '🔗 Linking Words', callback_data: 'lesson_linking_words' },
+        { text: levelBadge('lesson_pronunciation', '🔊 Pronunciation', lvl), callback_data: 'lesson_pronunciation' },
+        { text: levelBadge('lesson_linking_words', '🔗 Linking Words', lvl), callback_data: 'lesson_linking_words' },
       ],
       [{ text: '⬅️ Kembali', callback_data: 'back_study' }],
     ],
   };
 }
 
-function practiceKeyboard() {
+function practiceKeyboard(userLevel?: string) {
+  const lvl = userLevel || 'B1';
   return {
     inline_keyboard: [
-      [{ text: '🏋️ Drill Grammar', callback_data: 'study_drill' }],
-      [{ text: '🔊 Pronunciation Drill', callback_data: 'pronun_random' }],
-      [{ text: '🧠 Mini Test', callback_data: 'study_minitest' }],
-      [{ text: '🎯 Daily Challenge', callback_data: 'study_challenge' }],
-      [{ text: '📊 Score Estimator', callback_data: 'study_score' }],
+      [{ text: levelBadge('study_drill', '🏋️ Drill Grammar', lvl), callback_data: 'study_drill' }],
+      [{ text: levelBadge('pronun_random', '🔊 Pronunciation Drill', lvl), callback_data: 'pronun_random' }],
+      [{ text: levelBadge('study_minitest', '🧠 Mini Test', lvl), callback_data: 'study_minitest' }],
+      [{ text: levelBadge('study_challenge', '🎯 Daily Challenge', lvl), callback_data: 'study_challenge' }],
+      [{ text: levelBadge('study_score', '📊 Score Estimator', lvl), callback_data: 'study_score' }],
       [{ text: '⬅️ Kembali', callback_data: 'back_study' }],
     ],
   };
@@ -2009,7 +2125,7 @@ async function handleMessage(message: any, env: Env) {
         return;
 
       case '/study':
-        await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
+await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT', user.proficiency_level || 'B1'));
         return;
 
       // ═══════════════════════════════════════════════════════
@@ -3768,7 +3884,7 @@ async function handleMessage(message: any, env: Env) {
   }
 
   if (text === '📖 Belajar') {
-    await sendMessage(env, chatId, 'Mau belajar apa nih? Pilih kategori di bawah, atau langsung ketik aja, misal "belajar grammar" 👇', studyTopicKeyboard(user.target_test));
+    await sendMessage(env, chatId, 'Mau belajar apa nih? Pilih kategori di bawah, atau langsung ketik aja, misal "belajar grammar" 👇', studyTopicKeyboard(user.target_test, user.proficiency_level || 'B1'));
     return;
   }
 
@@ -4783,7 +4899,47 @@ async function handleCallbackQuery(query: any, env: Env) {
     const tt = test;
     await editMessage(env, chatId, messageId,
       `✅ Target tes diubah ke *${tt.replace(/_/g, ' ')}*!\n\nMau belajar apa nih? Pilih kategori di bawah 👇`,
-      studyTopicKeyboard(tt),
+      studyTopicKeyboard(tt, user.proficiency_level || 'B1'),
+    );
+    return;
+  }
+
+  // switch_level — change user's CEFR proficiency level
+  if (data === 'switch_level') {
+    const currentLevel = user.proficiency_level || 'B1';
+    const levelOptions = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+    const levelLabels: Record<string, string> = {
+      A1: '🅰️ A1 — Pemula (Beginner)',
+      A2: '🅰️ A2 — Dasar (Elementary)',
+      B1: '🅱️ B1 — Menengah (Intermediate)',
+      B2: '🅱️ B2 — Atas (Upper-Intermediate)',
+      C1: '🇨 C1 — Lanjutan (Advanced)',
+      C2: '🇨 C2 — Mahir (Proficient)',
+    };
+    const buttons = levelOptions.map(lvl => ({
+      text: lvl === currentLevel ? `✅ ${levelLabels[lvl]}` : levelLabels[lvl],
+      callback_data: `set_level_${lvl}`,
+    }));
+    const rows: any[][] = [];
+    for (let i = 0; i < buttons.length; i += 2) {
+      rows.push(buttons[i] ? [buttons[i], buttons[i + 1] || { text: '', callback_data: 'noop' }] : []);
+    }
+    await editMessage(env, chatId, messageId,
+      `🎯 *Level Kamu: ${currentLevel}*\n\nPilih level proficiency kamu. Ini mempengaruhi badge yang muncul di tiap topik latihan.\n\n🅰️ = Pemula  🅱️ = Menengah  🇨 = Lanjutan`,
+      { inline_keyboard: [...rows, [{ text: '⬅️ Kembali ke Belajar', callback_data: 'back_study' }]] },
+    );
+    return;
+  }
+
+  if (data.startsWith('set_level_')) {
+    const level = data.replace('set_level_', '');
+    const VALID_LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+    if (!VALID_LEVELS.includes(level)) return;
+    await env.DB.prepare('UPDATE users SET proficiency_level = ? WHERE id = ?').bind(level, user.id).run();
+    const tt = user.target_test || 'TOEFL_IBT';
+    await editMessage(env, chatId, messageId,
+      `✅ Level diubah ke *${level}*!\n\nLevel badge akan muncul di setiap topik latihan. Topics 1 level di atas level kamu akan显示 🔒.\n\nMau belajar apa nih? Pilih kategori di bawah 👇`,
+      studyTopicKeyboard(tt, level),
     );
     return;
   }
@@ -5212,44 +5368,48 @@ async function handleCallbackQuery(query: any, env: Env) {
   // NEW SKILL-BASED CATEGORIES
   if (data === 'cat_reading') {
     const tt = user.target_test || 'TOEFL_IBT';
-    await editMessage(env, chatId, messageId, `📖 *Reading Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, readingKeyboard(tt));
+    const lvl = user.proficiency_level || 'B1';
+    await editMessage(env, chatId, messageId, `📖 *Reading Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, readingKeyboard(tt, lvl));
     return;
   }
   if (data === 'cat_listening') {
     const tt = user.target_test || 'TOEFL_IBT';
-    await editMessage(env, chatId, messageId, `🎧 *Listening Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, listeningKeyboard(tt));
+    const lvl = user.proficiency_level || 'B1';
+    await editMessage(env, chatId, messageId, `🎧 *Listening Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, listeningKeyboard(tt, lvl));
     return;
   }
   if (data === 'cat_speaking') {
     const tt = user.target_test || 'TOEFL_IBT';
-    await editMessage(env, chatId, messageId, `🗣 *Speaking Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, speakingKeyboard(tt));
+    const lvl = user.proficiency_level || 'B1';
+    await editMessage(env, chatId, messageId, `🗣 *Speaking Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, speakingKeyboard(tt, lvl));
     return;
   }
   if (data === 'cat_writing') {
     const tt = user.target_test || 'TOEFL_IBT';
-    await editMessage(env, chatId, messageId, `✍️ *Writing Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, writingKeyboard(tt));
+    const lvl = user.proficiency_level || 'B1';
+    await editMessage(env, chatId, messageId, `✍️ *Writing Skills* (${tt.replace('_', ' ')}) — Pilih latihan:`, writingKeyboard(tt, lvl));
     return;
   }
 
   // TRADITIONAL CATEGORIES
   if (data === 'cat_grammar') {
-    await editMessage(env, chatId, messageId, 'Grammar — pilih topik:', grammarKeyboard());
+    await editMessage(env, chatId, messageId, 'Grammar — pilih topik:', grammarKeyboard(user.proficiency_level || 'B1'));
     return;
   }
   if (data === 'cat_vocab') {
-    await editMessage(env, chatId, messageId, 'Vocabulary — pilih topik:', vocabKeyboard());
+    await editMessage(env, chatId, messageId, 'Vocabulary — pilih topik:', vocabKeyboard(user.proficiency_level || 'B1'));
     return;
   }
   if (data === 'cat_skills') {
-    await editMessage(env, chatId, messageId, 'Skills & Strategy — pilih topik:', skillsKeyboard());
+    await editMessage(env, chatId, messageId, 'Skills & Strategy — pilih topik:', skillsKeyboard(user.proficiency_level || 'B1'));
     return;
   }
   if (data === 'cat_practice') {
-    await editMessage(env, chatId, messageId, 'Latihan — mau ngapain?', practiceKeyboard());
+    await editMessage(env, chatId, messageId, 'Latihan — mau ngapain?', practiceKeyboard(user.proficiency_level || 'B1'));
     return;
   }
   if (data === 'back_study') {
-    await editMessage(env, chatId, messageId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
+    await editMessage(env, chatId, messageId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT', user.proficiency_level || 'B1'));
     return;
   }
   if (data === 'back_target') {
@@ -5603,7 +5763,7 @@ async function handleCallbackQuery(query: any, env: Env) {
       } else {
         msg = `Challenge hari ini: jawab ${target} soal.\n\nProgress: ${count}/${target} ${'🟩'.repeat(Math.min(count, target))}${'⬜'.repeat(Math.max(0, target - count))}\n\nTinggal ${target - count} lagi! Pilih topik:`;
       }
-      await editMessage(env, chatId, messageId, msg, studyTopicKeyboard(user.target_test));
+      await editMessage(env, chatId, messageId, msg, studyTopicKeyboard(user.target_test, user.proficiency_level || 'B1'));
       return;
     }
 
@@ -5916,7 +6076,7 @@ async function handleCallbackQuery(query: any, env: Env) {
 
   // study_menu callback (back to main study menu)
   if (data === 'study_menu') {
-    await editMessage(env, chatId, messageId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT'));
+    await editMessage(env, chatId, messageId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT', user.proficiency_level || 'B1'));
     return;
   }
 
