@@ -19,6 +19,9 @@ export interface Env {
   NOTION_WEEKLY_DB?: string;
   NOTION_DASHBOARD_PAGE?: string;
   ENVIRONMENT?: string;
+  TRIPAY_API_KEY?: string;
+  TRIPAY_PRIVATE_KEY?: string;
+  TRIPAY_MERCHANT_CODE?: string;
 }
 
 export interface User {

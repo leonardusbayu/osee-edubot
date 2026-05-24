@@ -18,6 +18,7 @@ import { certificateRoutes } from './routes/certificates';
 import { analyticsRoutes } from './routes/analytics';
 import { channelAnalyticsRoutes } from './routes/channel-analytics';
 import { premiumRoutes } from './routes/premium';
+import { paymentRoutes } from './routes/payment';
 import { handbookRoutes } from './routes/handbook';
 import { weaknessRoutes } from './routes/weakness';
 import { adminApiRoutes } from './routes/admin-api';
@@ -37,6 +38,7 @@ import { runSloSnapshot } from './services/op-slo';
 import { handleNotionSync, handleNotionWeeklySync } from './services/notion-sync';
 import { resolveWeeklyLeagues, notifyLeagueChanges } from './services/leagues';
 import { recalibrateItems } from './services/irt-engine';
+import { dailyLessonKeyboard, getDailyFocusLesson, renderDailyFocusLesson } from './services/daily-lesson';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -370,6 +372,7 @@ app.route('/api/analytics', analyticsRoutes);
 app.route('/api/channel-analytics', channelAnalyticsRoutes);
 app.route('/api/weakness', weaknessRoutes);
 app.route('/api/premium', premiumRoutes);
+app.route('/api/payment', paymentRoutes);
 app.route('/api/handbook', handbookRoutes);
 app.route('/api/tutor', tutorRoutes);
 app.route('/api/v1/admin', adminApiRoutes);
@@ -653,6 +656,81 @@ async function safeSendMessage(
   }
 }
 
+async function safeSendPhoto(
+  env: Env,
+  chatId: number,
+  photoBytes: ArrayBuffer,
+  caption?: string,
+  replyMarkup?: Record<string, unknown>,
+  filename = 'daily-lesson.png',
+  mimeType = 'image/png',
+): Promise<boolean> {
+  try {
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('photo', new File([photoBytes], filename, { type: mimeType }));
+    if (caption) form.append('caption', caption);
+    if (replyMarkup) form.append('reply_markup', JSON.stringify(replyMarkup));
+    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const status = res.status;
+      if (status !== 403 && status !== 400) {
+        console.warn(`[cron] sendPhoto failed to ${chatId}: ${status}`);
+      }
+      return false;
+    }
+    return true;
+  } catch (e: any) {
+    console.warn(`[cron] sendPhoto error to ${chatId}: ${e?.message || e}`);
+    return false;
+  }
+}
+
+async function handleDailyFocusLessonCron(env: Env) {
+  try {
+    const users = await env.DB.prepare(
+      `SELECT id, telegram_id, name, target_test
+       FROM users
+       WHERE onboarding_complete = 1
+       AND telegram_id IS NOT NULL
+       AND COALESCE(tips_enabled, 1) != 0
+       ORDER BY last_study_date DESC, id DESC
+       LIMIT 300`
+    ).all();
+
+    for (const user of users.results as any[]) {
+      const tgId = parseInt(String(user.telegram_id).replace('.0', ''));
+      if (!Number.isFinite(tgId) || tgId <= 0) continue;
+
+      const lesson = getDailyFocusLesson(user.target_test);
+      const text = renderDailyFocusLesson(lesson, user.name);
+      const keyboard = dailyLessonKeyboard(lesson);
+      let sentImage = false;
+
+      try {
+        const { getOrGenerateSceneImage } = await import('./services/scene-image');
+        const image = await getOrGenerateSceneImage(env, lesson.scene, lesson.sceneVocab);
+        if (image) {
+          sentImage = await safeSendPhoto(env, tgId, image.bytes, undefined, undefined, 'daily-lesson.png', image.mime_type);
+        }
+      } catch (e) {
+        console.error('[daily-lesson-cron] image failed:', (e as any)?.message || e);
+      }
+
+      await safeSendMessage(env, tgId, {
+        text: sentImage ? text : `🖼️ Bayangkan visual ini: ${lesson.scene}\n\n${text}`,
+        reply_markup: keyboard,
+        parse_mode: 'Markdown',
+      });
+    }
+  } catch (e) {
+    console.error('Daily focus lesson cron error:', e);
+  }
+}
+
 // Cron handler for daily notifications
 async function handleCron(env: Env) {
   try {
@@ -910,10 +988,11 @@ async function handleWeeklyCron(env: Env) {
 async function handlePaymentExpiryCron(env: Env) {
   try {
     // Cancel pending payments that have expired
+    // Skip payments where the user already submitted proof (payment_proof IS NOT NULL)
     const result = await env.DB.prepare(
       `UPDATE payment_requests
        SET status = 'expired'
-       WHERE status = 'pending' AND expires_at < datetime('now')`
+       WHERE status = 'pending' AND payment_proof IS NULL AND expires_at < datetime('now')`
     ).run();
 
     if (result.meta?.changes > 0) {
@@ -1560,6 +1639,8 @@ export default {
     if (event.cron === '3 1 * * *') {
       // Morning cron (8:03 AM WIB) — study reminders + daily quiz + channel posts
       ctx.waitUntil(safeTask('morning', () => handleCron(env)));
+      // Daily scroll-stopping lesson, personalized by target test.
+      ctx.waitUntil(safeTask('daily-focus-lesson', () => handleDailyFocusLessonCron(env)));
       // Also run daily integrity check
       ctx.waitUntil(safeTask('integrity', () => handleIntegrityCheck(env)));
       // Daily content quality check

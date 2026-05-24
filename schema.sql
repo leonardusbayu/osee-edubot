@@ -1320,3 +1320,33 @@ CREATE INDEX idx_writing_criteria_user
   ON writing_criterion_scores(user_id, test_type, created_at DESC);
 CREATE INDEX idx_xp_log_user_date
   ON xp_log(user_id, created_at DESC);
+
+-- ═══════════════════════════════════════════════════════
+-- TRIPAY PAYMENT TRANSACTIONS
+-- ═══════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS payment_transactions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  merchant_ref TEXT NOT NULL UNIQUE,
+  tripay_reference TEXT,
+  payment_method TEXT NOT NULL,
+  payment_name TEXT,
+  amount INTEGER NOT NULL,
+  fee_merchant INTEGER DEFAULT 0,
+  fee_customer INTEGER DEFAULT 0,
+  status TEXT DEFAULT 'UNPAID',
+  plan_days INTEGER NOT NULL,
+  pay_code TEXT,
+  checkout_url TEXT,
+  expired_at TEXT,
+  paid_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_user
+  ON payment_transactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_status
+  ON payment_transactions(status);
+CREATE INDEX IF NOT EXISTS idx_payment_transactions_merchant_ref
+  ON payment_transactions(merchant_ref);
