@@ -135,8 +135,17 @@ export async function generatePersonalizedPlan(
   const orderedSkills = topologicalSort(targetSkills);
 
   // Use report's suggested difficulty, or compute from depth level
-  const baseDifficulty = report?.recommendations.suggested_difficulty
+  // Also factor in user's CEFR proficiency level (A1..C2) for adaptive difficulty
+  let baseDifficulty: number = report?.recommendations.suggested_difficulty
     ?? depthToBaseDifficulty(await getStudentDepthLevel(env, user.id));
+  if (user.proficiency_level) {
+    // Blend CEFR with depth — CEFR narrows the band, depth adjusts within
+    const cefrScore = cefrToDifficulty(user.proficiency_level);
+    // If CEFR and depth differ significantly, bias toward CEFR (it's the user's stated level)
+    if (Math.abs(cefrScore - baseDifficulty) > 1) {
+      baseDifficulty = Math.round((cefrScore * 0.6 + baseDifficulty * 0.4));
+    }
+  }
 
   // Generate lesson steps — enriched with report context
   const lessons = generateLessonSteps(orderedSkills, profile, baseDifficulty, masteries, report);
@@ -672,6 +681,17 @@ function depthToBaseDifficulty(depth: string): number {
     expert: 5,
   };
   return map[depth] || 3;
+}
+
+/**
+ * Map CEFR proficiency level to numeric difficulty (1-5).
+ * A1=1, A2=2, B1=3, B2=4, C1=5, C2=5
+ */
+export function cefrToDifficulty(cefr: string): number {
+  const map: Record<string, number> = {
+    A1: 1, A2: 2, B1: 3, B2: 4, C1: 5, C2: 5,
+  };
+  return map[cefr] || 3;
 }
 
 function buildPlanDescription(skills: string[], profile: StudentProfile): string {

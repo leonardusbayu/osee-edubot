@@ -312,3 +312,133 @@ async function sendToGroup(env: Env, groupChatId: string, text: string) {
     body: JSON.stringify({ chat_id: groupChatId, text }),
   });
 }
+
+// ═══════════════════════════════════════════════════════
+// CLASS DIFFERENTIATION
+// ═══════════════════════════════════════════════════════
+
+export interface ClassLevelStats {
+  total: number;
+  beginner: number;   // A1-A2
+  intermediate: number; // B1-B2
+  advanced: number;   // C1-C2
+  averageLevel: string;
+}
+
+/**
+ * Get aggregate level distribution for a class.
+ * Used to send differentiated content to teacher groups.
+ */
+export async function getClassLevelStats(env: Env, classId: number): Promise<ClassLevelStats> {
+  const rows = await env.DB.prepare(
+    `SELECT u.proficiency_level, COUNT(*) as count
+     FROM class_members cm
+     JOIN users u ON u.id = cm.user_id
+     WHERE cm.class_id = ? AND cm.status = 'active'
+     GROUP BY u.proficiency_level`
+  ).bind(classId).all<{ proficiency_level: string; count: number }>();
+
+  const stats: ClassLevelStats = { total: 0, beginner: 0, intermediate: 0, advanced: 0, averageLevel: 'B1' };
+  let weighted = 0;
+  const order: Record<string, number> = { A1: 1, A2: 2, B1: 3, B2: 4, C1: 5, C2: 6 };
+  for (const r of (rows.results || [])) {
+    const lvl = (r.proficiency_level || 'B1') as string;
+    const count = r.count;
+    stats.total += count;
+    if (['A1', 'A2'].includes(lvl)) stats.beginner += count;
+    else if (['B1', 'B2'].includes(lvl)) stats.intermediate += count;
+    else if (['C1', 'C2'].includes(lvl)) stats.advanced += count;
+    weighted += (order[lvl] || 3) * count;
+  }
+  if (stats.total > 0) {
+    const avg = weighted / stats.total;
+    if (avg < 2.5) stats.averageLevel = 'A2';
+    else if (avg < 3.5) stats.averageLevel = 'B1';
+    else if (avg < 4.5) stats.averageLevel = 'B2';
+    else stats.averageLevel = 'C1';
+  }
+  return stats;
+}
+
+/**
+ * Pick a quiz question whose topic matches the class's dominant level.
+ * Without this, all students get the same questions regardless of ability.
+ */
+export async function postDifferentiatedDailyQuiz(env: Env): Promise<number> {
+  // Find all classes with group_chat_id
+  const classes = await env.DB.prepare(
+    'SELECT id, group_chat_id FROM classes WHERE group_chat_id IS NOT NULL AND is_active = 1'
+  ).all();
+  let sentCount = 0;
+  for (const cls of classes.results as any[]) {
+    const groupId = cls.group_chat_id;
+    if (!groupId) continue;
+
+    const stats = await getClassLevelStats(env, cls.id);
+    if (stats.total === 0) continue;
+
+    // Pick a question topic based on class level
+    // Beginner classes get articles/present tenses; intermediate gets tenses/passive; advanced gets subjunctives
+    const level = stats.averageLevel;
+    let preferredTopics: string[] = [];
+    if (level === 'A1' || level === 'A2') preferredTopics = ['articles', 'prepositions', 'sv_agreement'];
+    else if (level === 'B1' || level === 'B2') preferredTopics = ['tenses', 'passive', 'modals'];
+    else preferredTopics = ['conditionals', 'reported_speech', 'subjunctive'];
+
+    const matching = QUIZ_QUESTIONS.filter(q => preferredTopics.includes((q as any).topic));
+    const q = (matching.length > 0 ? matching : QUIZ_QUESTIONS)[Math.floor(Math.random() * Math.max(1, matching.length || QUIZ_QUESTIONS.length))];
+
+    // Save quiz
+    await env.DB.prepare(
+      `INSERT INTO classroom_daily_quizzes (class_id, group_chat_id, question, correct_answer, posted_at)
+       VALUES (?, ?, ?, ?, datetime('now'))`
+    ).bind(cls.id, groupId, (q as any).q, (q as any).a).run();
+
+    // Send to group with level context
+    const distribution = `${stats.beginner}A ${stats.intermediate}B ${stats.advanced}C`;
+    const levelEmoji = level.startsWith('A') ? '🟢' : level.startsWith('B') ? '🟡' : '🔴';
+    const text = `📚 *Daily Quiz* ${levelEmoji} Class avg: ${level} (${distribution})\n\n${(q as any).q}\n\nReply with the letter (a/b/c/d) for your answer!`;
+    await sendToGroup(env, groupId, text);
+    sentCount++;
+  }
+  return sentCount;
+}
+
+/**
+ * Send personalized content to individual students in a class based on their level.
+ * Returns the number of students messaged.
+ */
+export async function postDifferentiatedStudentContent(env: Env, classId: number, contentByLevel: {
+  beginner: string;
+  intermediate: string;
+  advanced: string;
+}): Promise<number> {
+  const members = await env.DB.prepare(
+    `SELECT cm.user_id, u.proficiency_level, u.telegram_id
+     FROM class_members cm
+     JOIN users u ON u.id = cm.user_id
+     WHERE cm.class_id = ? AND cm.status = 'active'`
+  ).bind(classId).all<{ user_id: number; proficiency_level: string; telegram_id: string }>();
+
+  let sent = 0;
+  for (const m of (members.results || [])) {
+    const lvl = m.proficiency_level || 'B1';
+    let text: string;
+    if (lvl.startsWith('A')) text = contentByLevel.beginner;
+    else if (lvl.startsWith('B')) text = contentByLevel.intermediate;
+    else text = contentByLevel.advanced;
+
+    // Send to student's private chat
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: m.telegram_id, text, parse_mode: 'Markdown' }),
+      });
+      if (r.ok) sent++;
+    } catch (e) {
+      console.error('Differentiated DM error for user', m.user_id, e);
+    }
+  }
+  return sent;
+}

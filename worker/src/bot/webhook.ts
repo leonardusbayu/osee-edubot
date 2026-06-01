@@ -1219,8 +1219,65 @@ async function handleVoiceMessage(message: any, env: Env) {
       ).bind(user.id, 'active').first() as any;
 
       if (session) {
-        // Handle IELTS 3-part multi-step flow
+        // Handle speaking drill mode (listen-and-repeat with prosody scoring)
         const sessionMeta = session.feedback ? (() => { try { return JSON.parse(session.feedback); } catch { return null; } })() : null;
+        if (sessionMeta?.mode === 'drill') {
+          try {
+            const { scoreDrillAttempt, formatDrillFeedback, saveDrillAttempt } = await import('../services/speaking-drill');
+            const { pickDrill } = await import('../services/speaking-drill');
+            const drillId = sessionMeta.drill_id;
+            const expectedPhrase = sessionMeta.expected_phrase;
+            // Fetch drill
+            const drill = await env.DB.prepare(
+              'SELECT * FROM speaking_drills WHERE id = ?'
+            ).bind(drillId).first<any>();
+            if (!drill) {
+              await env.DB.prepare(
+                `UPDATE speaking_sessions SET status = 'cancelled' WHERE id = ?`
+              ).bind(session.id).run();
+              await sendMessage(env, chatId, 'Drill tidak ditemukan. Memulai ulang... /drill');
+              return;
+            }
+            const score = scoreDrillAttempt(expectedPhrase, transcription, {
+              wpm: Math.round(prosodyMetrics.words_per_minute || 0),
+              pause_ratio: prosodyMetrics.pause_ratio || 0,
+              fluency_score: prosodyMetrics.fluency_score || 0,
+              rhythm_score: prosodyMetrics.rhythm_score || 0,
+            });
+            const audioSecs = (voice.duration || 0);
+            const feedback = formatDrillFeedback(drill, score, transcription);
+            await saveDrillAttempt({
+              env, userId: user.id, drillId, transcription, score, feedback, audioSeconds: audioSecs,
+              prosody: {
+                wpm: Math.round(prosodyMetrics.words_per_minute || 0),
+                pause_ratio: prosodyMetrics.pause_ratio || 0,
+                fluency_score: prosodyMetrics.fluency_score || 0,
+                rhythm_score: prosodyMetrics.rhythm_score || 0,
+              },
+            });
+            // Mark session completed
+            await env.DB.prepare(
+              `UPDATE speaking_sessions SET status = 'completed' WHERE id = ?`
+            ).bind(session.id).run();
+
+            // Build follow-up keyboard
+            const category = drill.category;
+            const buttons = [
+              [
+                { text: '🔄 Drill Lain (sama)', callback_data: `drill_cat_${category}` },
+                { text: '🎲 Drill Acak', callback_data: 'drill_random' },
+              ],
+              [{ text: '📋 Menu', callback_data: 'drill_back' }],
+            ];
+            await sendMessage(env, chatId, feedback, { inline_keyboard: buttons });
+            return;
+          } catch (e: any) {
+            console.error('Drill evaluation error:', e);
+            // Don't kill the whole handler — let the rest continue
+          }
+        }
+
+        // Handle IELTS 3-part multi-step flow
         if (sessionMeta?.mode === 'ielts_3part') {
           try {
             const part = sessionMeta.current_part || 1;
@@ -1711,7 +1768,12 @@ async function handleMessage(message: any, env: Env) {
           `/today — Pelajaran hari ini\n` +
           `/review — Review soal (FSRS adaptive)\n` +
           `/speak — Latihan speaking (voice message)\n` +
+          `/drill — Speaking drill listen-and-repeat + prosody scoring\n` +
           `/pronounce — Drill pronunciation 254 kata\n` +
+          `/listen — Listening library (TTS + comprehension)\n` +
+          `/template — Writing templates (IELTS, TOEFL, TOEIC)\n` +
+          `/video — Video comprehension (TED + lectures + Q&A)\n` +
+          `/phase — Cek study phase kamu + rekomendasi\n` +
           `/challenge @user — Duel 5 soal\n\n` +
           `💡 *Tips:* Kirim voice message untuk tutor 24/7!`;
 
@@ -2221,10 +2283,17 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
             const plan = await generatePersonalizedPlan(env, user);
             const skills = plan.target_skills.map(s => formatTopicName(s)).join(', ');
 
+            // CEFR level info for adaptive lessons
+            const cefrLevel = user.proficiency_level || 'B1';
+            const cefrEmoji: Record<string, string> = { A1: '🅰️', A2: '🅰️', B1: '🅱️', B2: '🅱️', C1: '🇨', C2: '🇨' };
+            const diffLabels = ['', '🌱 Beginner', '📗 Elementary', '📘 Intermediate', '📙 Advanced', '📕 Expert'];
+            const diffLabel = diffLabels[plan.difficulty_level] || diffLabels[3];
+
             let msg = `📖 *Lesson Plan Baru!*\n\n`;
             msg += `*${plan.title}*\n`;
             msg += `${plan.description}\n\n`;
             msg += `📚 Skills: ${skills}\n`;
+            msg += `${cefrEmoji[cefrLevel] || '📊'} Level: *${cefrLevel}* (adapted to: ${diffLabel})\n`;
             msg += `⏱️ Estimasi: ${plan.estimated_minutes} menit\n`;
             msg += `📝 ${plan.total_steps} steps\n\n`;
             msg += `Ketik /lesson lagi untuk mulai!`;
@@ -2544,6 +2613,132 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           `🎯 Disesuaikan untuk TOEFL, IELTS, TOEIC`,
           { inline_keyboard: pronunRows }
         );
+        return;
+      }
+
+      case '/drill': {
+        // Speaking Drill Engine — listen-and-repeat with prosody scoring
+        try {
+          const { getDrillStats, drillMenuKeyboard } = await import('../services/speaking-drill');
+          const stats = await getDrillStats(env, user.id);
+          const cefrLevel = user.proficiency_level || 'B1';
+
+          // Check active session
+          const active = await env.DB.prepare(
+            `SELECT id FROM speaking_sessions WHERE user_id = ? AND status = 'active'
+             AND json_extract(feedback, '$.mode') = 'drill' LIMIT 1`
+          ).bind(user.id).first();
+
+          const lines: string[] = [];
+          lines.push(`🎤 *Speaking Drill Engine*\n`);
+          lines.push(`Latihan listen-and-repeat dengan scoring prosodi otomatis.\n`);
+          lines.push(`📊 Level kamu: *${cefrLevel}*`);
+          lines.push(`📈 Total percobaan: *${stats.total}*`);
+          lines.push(`🌟 Skor terbaik: *${stats.bestScore}/100*`);
+          lines.push(`📅 Hari ini: *${stats.attemptsToday}* drill`);
+          if (stats.total > 0) {
+            lines.push(`📊 Rata-rata: *${stats.averageScore}/100*`);
+          }
+          lines.push(`\nPilih kategori:`);
+
+          await sendMessage(env, chatId, lines.join('\n'), drillMenuKeyboard(!!active));
+        } catch (e) {
+          console.error('/drill error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat drill. Coba lagi ya.');
+        }
+        return;
+      }
+
+      case '/template': {
+        // Writing Templates — high-band templates for IELTS/TOEFL/TOEIC
+        try {
+          const { templatesMenuKeyboard } = await import('../services/writing-templates');
+          const cefrLevel = user.proficiency_level || 'B1';
+          await sendMessage(env, chatId,
+            `📝 *Writing Templates*\n\n` +
+            `Koleksi 12+ template esai untuk IELTS Task 1/2, TOEFL Independent/Integrated, dan TOEIC Email.\n` +
+            `Tiap template punya struktur, contoh, dan key phrases.\n\n` +
+            `📊 Level kamu: *${cefrLevel}*\n\n` +
+            `Pilih kategori:`,
+            templatesMenuKeyboard()
+          );
+        } catch (e) {
+          console.error('/template error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat templates. Coba lagi ya.');
+        }
+        return;
+      }
+
+      case '/listen': {
+        try {
+          const { getListeningStats, listeningMenuKeyboard } = await import('../services/listening-library');
+          const stats = await getListeningStats(env, user.id);
+          const cefrLevel = user.proficiency_level || 'B1';
+
+          const lines: string[] = [];
+          lines.push(`🎧 *Listening Library*\n`);
+          lines.push(`Koleksi 15+ passage dengan TTS audio + comprehension check.\n`);
+          lines.push(`📊 Level: *${cefrLevel}*`);
+          lines.push(`📈 Total percobaan: *${stats.total}*`);
+          if (stats.total > 0) {
+            lines.push(`🌟 Skor terbaik: *${stats.bestScore}%*`);
+            lines.push(`📊 Rata-rata: *${stats.averageScore}%*`);
+            lines.push(`📅 Hari ini: *${stats.attemptsToday}* passage`);
+          }
+          lines.push(`\nPilih kategori:`);
+
+          await sendMessage(env, chatId, lines.join('\n'), listeningMenuKeyboard());
+        } catch (e) {
+          console.error('/listen error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat listening library. Coba lagi ya.');
+        }
+        return;
+      }
+
+      case '/phase': {
+        // Study Phase Tracking — detect where student is in their journey
+        try {
+          const { detectPhase, formatPhaseInfo, savePhaseSnapshot } = await import('../services/study-phase');
+          const info = await detectPhase(env, user.id);
+          // Save snapshot for history
+          try {
+            await savePhaseSnapshot(env, user.id, info.phase, JSON.stringify({
+              days: info.daysSinceStart,
+              tests: info.testsCompleted,
+              avg: info.averageScore,
+              streak: info.streakDays,
+              weak: info.weakTopicsCount,
+            }));
+          } catch (e) { /* non-fatal */ }
+          await sendMessage(env, chatId, formatPhaseInfo(info));
+        } catch (e) {
+          console.error('/phase error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal deteksi phase. Coba lagi ya.');
+        }
+        return;
+      }
+
+      case '/video': {
+        // Video Comprehension — curated YouTube library with key vocab + Q&A
+        try {
+          const { getVideoStats, videoMenuKeyboard } = await import('../services/video-lessons');
+          const stats = await getVideoStats(env, user.id);
+          const cefrLevel = user.proficiency_level || 'B1';
+
+          const lines: string[] = [];
+          lines.push(`🎬 *Video Comprehension*\n`);
+          lines.push(`Koleksi 12+ video TED/Lecture/Documentary dengan vocabulary + comprehension check.\n`);
+          lines.push(`📊 Level: *${cefrLevel}*`);
+          if (stats.total > 0) {
+            lines.push(`📈 Total: *${stats.total}* | 🌟 Best: *${stats.bestScore}%* | 📊 Avg: *${stats.averageScore}%*`);
+          }
+          lines.push(`\nPilih kategori:`);
+
+          await sendMessage(env, chatId, lines.join('\n'), videoMenuKeyboard());
+        } catch (e) {
+          console.error('/video error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat video library. Coba lagi ya.');
+        }
         return;
       }
 
@@ -5419,6 +5614,458 @@ async function handleCallbackQuery(query: any, env: Env) {
       `Kamu mau persiapan tes yang mana?`,
       testTypeKeyboard,
     );
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // WRITING TEMPLATE CALLBACKS
+  // ═══════════════════════════════════════════════════════
+
+  if (data === 'wt_random' || data.startsWith('wt_')) {
+    const { listTemplates, getTemplate, formatTemplate, recordTemplateUse } = await import('../services/writing-templates');
+    const userLevel = user.proficiency_level || 'B1';
+
+    let template: any = null;
+    if (data === 'wt_random') {
+      const all = await listTemplates(env, { userLevel });
+      if (all.length === 0) {
+        await editMessage(env, chatId, messageId, 'Belum ada template.');
+        return;
+      }
+      template = all[Math.floor(Math.random() * all.length)];
+    } else {
+      // wt_<test>_<task> — derive from callback
+      const rest = data.replace('wt_', '');
+      let testType = '';
+      let taskType = '';
+      if (rest.startsWith('toefl_independent')) { testType = 'TOEFL_IBT'; taskType = 'independent'; }
+      else if (rest.startsWith('toefl_integrated')) { testType = 'TOEFL_IBT'; taskType = 'integrated'; }
+      else if (rest.startsWith('ielts_task1')) { testType = 'IELTS'; taskType = 'task1'; }
+      else if (rest.startsWith('ielts_task2')) { testType = 'IELTS'; taskType = 'task2'; }
+      else if (rest.startsWith('toeic_email')) { testType = 'TOEIC'; taskType = 'email'; }
+      else if (rest.startsWith('toeic_review')) { testType = 'TOEIC'; taskType = 'review'; }
+      const list = await listTemplates(env, { test_type: testType, task_type: taskType, userLevel });
+      if (list.length === 0) {
+        await editMessage(env, chatId, messageId, `Belum ada template untuk ${testType} ${taskType} di level kamu.`);
+        return;
+      }
+      template = list[0]; // first matching
+    }
+    if (!template) {
+      await editMessage(env, chatId, messageId, 'Template tidak ditemukan.');
+      return;
+    }
+    await recordTemplateUse(env, user.id, template.id);
+    const card = formatTemplate(template, true);
+    const buttons: { text: string; callback_data: string }[][] = [
+      [{ text: '📖 Lihat Structure', callback_data: `wt_view_struct_${template.id}` }],
+      [{ text: '🎲 Template Lain', callback_data: 'wt_random' }],
+      [{ text: '📋 Menu', callback_data: 'wt_back' }],
+    ];
+    await editMessage(env, chatId, messageId, card, { inline_keyboard: buttons });
+    return;
+  }
+
+  if (data.startsWith('wt_view_struct_')) {
+    const id = parseInt(data.replace('wt_view_struct_', ''));
+    const { getTemplate, formatTemplate } = await import('../services/writing-templates');
+    const t = await getTemplate(env, id);
+    if (!t) {
+      await editMessage(env, chatId, messageId, 'Template tidak ditemukan.');
+      return;
+    }
+    const card = formatTemplate(t, false);
+    const buttons: { text: string; callback_data: string }[][] = [
+      [{ text: '📖 Lihat Example', callback_data: `wt_view_ex_${id}` }],
+      [{ text: '🎲 Template Lain', callback_data: 'wt_random' }],
+      [{ text: '📋 Menu', callback_data: 'wt_back' }],
+    ];
+    await editMessage(env, chatId, messageId, card, { inline_keyboard: buttons });
+    return;
+  }
+
+  if (data.startsWith('wt_view_ex_')) {
+    const id = parseInt(data.replace('wt_view_ex_', ''));
+    const { getTemplate, formatTemplate } = await import('../services/writing-templates');
+    const t = await getTemplate(env, id);
+    if (!t) {
+      await editMessage(env, chatId, messageId, 'Template tidak ditemukan.');
+      return;
+    }
+    const card = formatTemplate(t, true);
+    const buttons: { text: string; callback_data: string }[][] = [
+      [{ text: '🏗️ Lihat Structure', callback_data: `wt_view_struct_${id}` }],
+      [{ text: '🎲 Template Lain', callback_data: 'wt_random' }],
+      [{ text: '📋 Menu', callback_data: 'wt_back' }],
+    ];
+    await editMessage(env, chatId, messageId, card, { inline_keyboard: buttons });
+    return;
+  }
+
+  if (data === 'wt_back') {
+    const { templatesMenuKeyboard } = await import('../services/writing-templates');
+    await editMessage(env, chatId, messageId,
+      `📝 *Writing Templates*\n\nPilih kategori:`,
+      templatesMenuKeyboard()
+    );
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // LISTENING LIBRARY CALLBACKS
+  // ═══════════════════════════════════════════════════════
+
+  if (data === 'listen_random' || data.startsWith('listen_cat_')) {
+    const { pickListeningPassage, getCategoryLabel, getDifficultyEmoji } = await import('../services/listening-library');
+    const userLevel = user.proficiency_level || 'B1';
+    const category = data.startsWith('listen_cat_') ? data.replace('listen_cat_', '') : undefined;
+    const passage = await pickListeningPassage(env, { category, userLevel });
+    if (!passage) {
+      await editMessage(env, chatId, messageId, 'Belum ada passage di kategori ini. Coba kategori lain!');
+      return;
+    }
+
+    // Show passage info card; first send the TTS audio, then instructions for comprehension
+    let card = `🎧 *${passage.title}*\n\n` +
+      `${getCategoryLabel(passage.category)}\n` +
+      `${getDifficultyEmoji(passage.difficulty)} ${passage.difficulty} — ${passage.cefr_level}\n` +
+      `⏱️ ~${passage.duration_seconds}s\n\n` +
+      `🔊 *Mendengarkan audio...* lalu jawab pertanyaan.\n` +
+      `💡 Tips: baca pertanyaannya dulu, baru dengarkan audio.`;
+
+    const buttons: { text: string; callback_data: string }[][] = [
+      [{ text: '▶️ Mulai Comprehension Check', callback_data: `listen_check_${passage.id}` }],
+      [{ text: '🔄 Passage Lain', callback_data: category ? `listen_cat_${category}` : 'listen_random' }],
+      [{ text: '📋 Kategori', callback_data: 'listen_back' }],
+    ];
+
+    try {
+      await sendChatAction(env, chatId, 'typing');
+      await sendTTSAudio(env, chatId, passage.passage);
+    } catch (ttsErr) {
+      console.error('Listening TTS error:', ttsErr);
+    }
+    await editMessage(env, chatId, messageId, card, { inline_keyboard: buttons });
+    return;
+  }
+
+  if (data === 'listen_back') {
+    const { getListeningStats, listeningMenuKeyboard } = await import('../services/listening-library');
+    try {
+      const stats = await getListeningStats(env, user.id);
+      const lines: string[] = [];
+      lines.push(`🎧 *Listening Library*\n`);
+      lines.push(`📈 Total: *${stats.total}* | 🌟 Best: *${stats.bestScore}%* | 📊 Avg: *${stats.averageScore}%*\n`);
+      lines.push(`Pilih kategori:`);
+      await editMessage(env, chatId, messageId, lines.join('\n'), listeningMenuKeyboard());
+    } catch (e) {
+      await editMessage(env, chatId, messageId, 'Pilih kategori:', listeningMenuKeyboard());
+    }
+    return;
+  }
+
+  if (data.startsWith('listen_check_')) {
+    const passageId = parseInt(data.replace('listen_check_', ''));
+    const { getListeningPassage, parseQuestions } = await import('../services/listening-library');
+    const passage = await getListeningPassage(env, passageId);
+    if (!passage) {
+      await editMessage(env, chatId, messageId, 'Passage tidak ditemukan.');
+      return;
+    }
+    const questions = parseQuestions(passage.comprehension_questions);
+    if (questions.length === 0) {
+      await editMessage(env, chatId, messageId, 'Passage ini belum ada pertanyaan.');
+      return;
+    }
+    // Show first question with options
+    const q = questions[0];
+    const lines: string[] = [];
+    lines.push(`🎧 *Comprehension Check*\n`);
+    lines.push(`❓ Q1/${questions.length}: ${q.q}\n`);
+    const buttons: { text: string; callback_data: string }[][] = q.options.map((opt, i) =>
+      [{ text: `${String.fromCharCode(65 + i)}. ${opt}`, callback_data: `listen_ans_${passageId}_0_${i}` }]
+    );
+    await editMessage(env, chatId, messageId, lines.join('\n'), { inline_keyboard: buttons });
+    return;
+  }
+
+  if (data.startsWith('listen_ans_')) {
+    // listen_ans_<passage_id>_<q_idx>_<selected_idx>
+    const parts = data.replace('listen_ans_', '').split('_');
+    const passageId = parseInt(parts[0]);
+    const qIdx = parseInt(parts[1]);
+    const selectedIdx = parseInt(parts[2]);
+
+    const { getListeningPassage, parseQuestions, saveListeningAttempt } = await import('../services/listening-library');
+    const passage = await getListeningPassage(env, passageId);
+    if (!passage) {
+      await editMessage(env, chatId, messageId, 'Passage tidak ditemukan.');
+      return;
+    }
+    const questions = parseQuestions(passage.comprehension_questions);
+    const q = questions[qIdx];
+    if (!q) {
+      await editMessage(env, chatId, messageId, 'Pertanyaan tidak valid.');
+      return;
+    }
+    const correct = selectedIdx === q.answer_idx;
+
+    // For multi-question flow: collect answers via session in speaking_sessions
+    // For simplicity, we'll just show the answer and ask the next question
+    const feedbackLines: string[] = [];
+    if (correct) {
+      feedbackLines.push(`✅ *Benar!*\n${q.explanation ? `💡 ${q.explanation}\n` : ''}`);
+    } else {
+      feedbackLines.push(`❌ *Kurang tepat.*\nJawaban: ${String.fromCharCode(65 + q.answer_idx)}. ${q.options[q.answer_idx]}\n${q.explanation ? `💡 ${q.explanation}\n` : ''}`);
+    }
+
+    if (qIdx + 1 < questions.length) {
+      // Next question
+      const nextQ = questions[qIdx + 1];
+      feedbackLines.push(`\n❓ Q${qIdx + 2}/${questions.length}: ${nextQ.q}`);
+      const buttons = nextQ.options.map((opt, i) =>
+        [{ text: `${String.fromCharCode(65 + i)}. ${opt}`, callback_data: `listen_ans_${passageId}_${qIdx + 1}_${i}` }]
+      );
+      await editMessage(env, chatId, messageId, feedbackLines.join('\n'), { inline_keyboard: buttons });
+      return;
+    } else {
+      // Last question — show summary
+      // For tracking, save the single answer we have (in a full flow, we'd collect all)
+      await saveListeningAttempt(env, user.id, passageId, [
+        { q_idx: qIdx, selected: selectedIdx, correct },
+      ]);
+      feedbackLines.push(`\n🎉 *Selesai!*\n\nCoba passage lain atau kembali ke menu.`);
+      const buttons: { text: string; callback_data: string }[][] = [
+        [
+          { text: '🔄 Passage Lain', callback_data: `listen_cat_${passage.category}` },
+          { text: '🎲 Random', callback_data: 'listen_random' },
+        ],
+        [{ text: '📋 Menu', callback_data: 'listen_back' }],
+      ];
+      await editMessage(env, chatId, messageId, feedbackLines.join('\n'), { inline_keyboard: buttons });
+      return;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // VIDEO LESSONS CALLBACKS
+  // ═══════════════════════════════════════════════════════
+
+  if (data === 'video_random' || data.startsWith('video_cat_')) {
+    const { pickVideo, getVideoCategoryLabel, getDifficultyEmoji, parseVideoVocab } = await import('../services/video-lessons');
+    const userLevel = user.proficiency_level || 'B1';
+    const category = data.startsWith('video_cat_') ? data.replace('video_cat_', '') : undefined;
+    const video = await pickVideo(env, { category, userLevel });
+    if (!video) {
+      await editMessage(env, chatId, messageId, 'Belum ada video di kategori ini. Coba kategori lain!');
+      return;
+    }
+    const vocab = parseVideoVocab(video.key_vocabulary);
+    const lines: string[] = [];
+    lines.push(`🎬 *${video.title}*\n`);
+    lines.push(`${getVideoCategoryLabel(video.category)}`);
+    if (video.channel) lines.push(`📺 ${video.channel}`);
+    lines.push(`${getDifficultyEmoji(video.difficulty)} ${video.difficulty} — ${video.cefr_level}`);
+    lines.push(`⏱️ ~${Math.round(video.duration_seconds / 60)} menit`);
+    if (video.topic) lines.push(`🏷️ Topik: ${video.topic}`);
+    lines.push(`\n🔗 https://youtu.be/${video.youtube_id}`);
+
+    if (vocab.length > 0) {
+      lines.push(`\n📚 *Key Vocabulary:*`);
+      for (const v of vocab.slice(0, 6)) {
+        lines.push(`• *${v.word}* — ${v.definition}`);
+      }
+    }
+
+    lines.push(`\n👀 Tonton video, lalu kembali untuk *comprehension check*.`);
+
+    const buttons: { text: string; callback_data: string }[][] = [
+      [{ text: '▶️ Comprehension Check', callback_data: `video_check_${video.id}` }],
+      [{ text: '🔄 Video Lain', callback_data: category ? `video_cat_${category}` : 'video_random' }],
+      [{ text: '📋 Menu', callback_data: 'video_back' }],
+    ];
+    await editMessage(env, chatId, messageId, lines.join('\n'), { inline_keyboard: buttons });
+    return;
+  }
+
+  if (data === 'video_back') {
+    const { videoMenuKeyboard, getVideoStats } = await import('../services/video-lessons');
+    try {
+      const stats = await getVideoStats(env, user.id);
+      const lines = [`🎬 *Video Comprehension*\n`];
+      if (stats.total > 0) {
+        lines.push(`📈 Total: *${stats.total}* | 🌟 Best: *${stats.bestScore}%* | 📊 Avg: *${stats.averageScore}%*`);
+      }
+      lines.push(`\nPilih kategori:`);
+      await editMessage(env, chatId, messageId, lines.join('\n'), videoMenuKeyboard());
+    } catch (e) {
+      await editMessage(env, chatId, messageId, 'Pilih kategori:', videoMenuKeyboard());
+    }
+    return;
+  }
+
+  if (data.startsWith('video_check_')) {
+    const videoId = parseInt(data.replace('video_check_', ''));
+    const { getVideo, parseVideoQuestions } = await import('../services/video-lessons');
+    const video = await getVideo(env, videoId);
+    if (!video) {
+      await editMessage(env, chatId, messageId, 'Video tidak ditemukan.');
+      return;
+    }
+    const questions = parseVideoQuestions(video.comprehension_questions);
+    if (questions.length === 0) {
+      await editMessage(env, chatId, messageId, 'Video ini belum ada pertanyaan.');
+      return;
+    }
+    const q = questions[0];
+    const lines: string[] = [`🎬 *Comprehension Check*\n`];
+    lines.push(`❓ Q1/${questions.length}: ${q.q}\n`);
+    const buttons: { text: string; callback_data: string }[][] = q.options.map((opt, i) =>
+      [{ text: `${String.fromCharCode(65 + i)}. ${opt}`, callback_data: `video_ans_${videoId}_0_${i}` }]
+    );
+    await editMessage(env, chatId, messageId, lines.join('\n'), { inline_keyboard: buttons });
+    return;
+  }
+
+  if (data.startsWith('video_ans_')) {
+    const parts = data.replace('video_ans_', '').split('_');
+    const videoId = parseInt(parts[0]);
+    const qIdx = parseInt(parts[1]);
+    const selectedIdx = parseInt(parts[2]);
+    const { getVideo, parseVideoQuestions, saveVideoAttempt } = await import('../services/video-lessons');
+    const video = await getVideo(env, videoId);
+    if (!video) {
+      await editMessage(env, chatId, messageId, 'Video tidak ditemukan.');
+      return;
+    }
+    const questions = parseVideoQuestions(video.comprehension_questions);
+    const q = questions[qIdx];
+    if (!q) {
+      await editMessage(env, chatId, messageId, 'Pertanyaan tidak valid.');
+      return;
+    }
+    const correct = selectedIdx === q.answer_idx;
+    const feedback: string[] = [];
+    if (correct) {
+      feedback.push(`✅ *Benar!*\n${q.explanation ? `💡 ${q.explanation}\n` : ''}`);
+    } else {
+      feedback.push(`❌ *Kurang tepat.*\nJawaban: ${String.fromCharCode(65 + q.answer_idx)}. ${q.options[q.answer_idx]}\n${q.explanation ? `💡 ${q.explanation}\n` : ''}`);
+    }
+    if (qIdx + 1 < questions.length) {
+      const nextQ = questions[qIdx + 1];
+      feedback.push(`\n❓ Q${qIdx + 2}/${questions.length}: ${nextQ.q}`);
+      const buttons = nextQ.options.map((opt, i) =>
+        [{ text: `${String.fromCharCode(65 + i)}. ${opt}`, callback_data: `video_ans_${videoId}_${qIdx + 1}_${i}` }]
+      );
+      await editMessage(env, chatId, messageId, feedback.join('\n'), { inline_keyboard: buttons });
+      return;
+    } else {
+      await saveVideoAttempt(env, user.id, videoId, [{ q_idx: qIdx, selected: selectedIdx, correct }]);
+      feedback.push(`\n🎉 *Selesai!*\n\nTonton video lain atau kembali ke menu.`);
+      const buttons: { text: string; callback_data: string }[][] = [
+        [
+          { text: '🔄 Video Lain', callback_data: `video_cat_${video.category}` },
+          { text: '🎲 Random', callback_data: 'video_random' },
+        ],
+        [{ text: '📋 Menu', callback_data: 'video_back' }],
+      ];
+      await editMessage(env, chatId, messageId, feedback.join('\n'), { inline_keyboard: buttons });
+      return;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // SPEAKING DRILL CALLBACKS
+  // ═══════════════════════════════════════════════════════
+
+  if (data === 'drill_random' || data.startsWith('drill_cat_') || data === 'drill_retry' || data === 'drill_next') {
+    const { pickDrill } = await import('../services/speaking-drill');
+    const userLevel = user.proficiency_level || 'B1';
+    const category = data.startsWith('drill_cat_') ? data.replace('drill_cat_', '') : undefined;
+    const drill = await pickDrill(env, { category, userLevel });
+    if (!drill) {
+      await editMessage(env, chatId, messageId, 'Belum ada drill di kategori ini. Coba kategori lain!');
+      return;
+    }
+    try {
+      // Build display card
+      const catLabels: Record<string, string> = {
+        th_sounds: '🦷 TH Sounds', vowel_pairs: '🔤 Vowel Pairs', word_stress: '🎯 Word Stress',
+        sentence_stress: '🗣️ Sentence Stress', connected_speech: '🔗 Connected Speech',
+        minimal_pairs: '🆚 Minimal Pairs', r_and_l: '🔄 R & L Sounds',
+        academic_vocab: '📚 Academic Vocab', academic_phrases: '📝 Academic Phrases',
+        numbers_dates: '🔢 Numbers & Dates', schwa_sound: '🔊 Schwa Sound',
+      };
+      const diffEmoji: Record<string, string> = { beginner: '🟢', intermediate: '🟡', advanced: '🔴' };
+
+      let card = `🎤 *Speaking Drill*\n\n` +
+        `${catLabels[drill.category] || drill.category}\n` +
+        `${diffEmoji[drill.difficulty] || '🟡'} ${drill.difficulty} — ${drill.cefr_level}\n\n` +
+        `📝 *Target:* \`${drill.phrase}\`\n`;
+      if (drill.ipa) card += `🔤 IPA: \`${drill.ipa}\`\n`;
+      if (drill.target_rhythm) card += `🎵 Rhythm: \`${drill.target_rhythm}\`\n`;
+      if (drill.common_mistake) card += `\n⚠️ ${drill.common_mistake}\n`;
+      if (drill.tip) card += `💡 ${drill.tip}\n`;
+
+      card += `\n🔊 *Mendengarkan audio...* lalu *rekam voice message* mengulangi frasa di atas.\n` +
+        `Bot akan menilai akurasi & prosodimu.`;
+
+      // Persist drill state in speaking_sessions so handleVoiceMessage can find it
+      const sessionMeta = {
+        mode: 'drill',
+        drill_id: drill.id,
+        expected_phrase: drill.phrase,
+        category: drill.category,
+        started_at: Date.now(),
+      };
+      await env.DB.prepare(
+        `INSERT INTO speaking_sessions (user_id, status, feedback, created_at)
+         VALUES (?, 'active', ?, datetime('now'))`
+      ).bind(user.id, JSON.stringify(sessionMeta)).run();
+
+      const buttons = [
+        [{ text: '🔄 Drill Lain', callback_data: category ? `drill_cat_${category}` : 'drill_random' }],
+        [{ text: '📋 Kategori', callback_data: 'drill_back' }],
+      ];
+
+      // Send TTS audio of the phrase, then the card
+      try {
+        await sendChatAction(env, chatId, 'typing');
+        await sendTTSAudio(env, chatId, drill.phrase);
+      } catch (ttsErr) {
+        console.error('Drill TTS error:', ttsErr);
+      }
+      await editMessage(env, chatId, messageId, card, { inline_keyboard: buttons });
+    } catch (e: any) {
+      console.error('Drill error:', e);
+      await editMessage(env, chatId, messageId, 'Terjadi error saat memulai drill. Coba lagi.');
+    }
+    return;
+  }
+
+  if (data === 'drill_back' || data === 'drill_cancel') {
+    // Cancel active drill session
+    if (data === 'drill_cancel') {
+      await env.DB.prepare(
+        `UPDATE speaking_sessions SET status = 'cancelled'
+         WHERE user_id = ? AND status = 'active'
+         AND json_extract(feedback, '$.mode') = 'drill'`
+      ).bind(user.id).run();
+    }
+    // Re-show menu
+    const { getDrillStats, drillMenuKeyboard } = await import('../services/speaking-drill');
+    try {
+      const stats = await getDrillStats(env, user.id);
+      const cefrLevel = user.proficiency_level || 'B1';
+      const lines: string[] = [];
+      lines.push(`🎤 *Speaking Drill Engine*\n`);
+      lines.push(`📊 Level: *${cefrLevel}*`);
+      lines.push(`📈 Total: *${stats.total}* | 🌟 Best: *${stats.bestScore}/100* | 📅 Today: *${stats.attemptsToday}*\n`);
+      lines.push(`Pilih kategori:`);
+      await editMessage(env, chatId, messageId, lines.join('\n'), drillMenuKeyboard(data === 'drill_cancel'));
+    } catch (e) {
+      await editMessage(env, chatId, messageId, 'Pilih kategori:', drillMenuKeyboard(false));
+    }
     return;
   }
 
