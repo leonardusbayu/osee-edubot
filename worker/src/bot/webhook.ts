@@ -873,6 +873,7 @@ function readingKeyboard(targetTest: string = '', userLevel?: string) {
     rows.push([{ text: levelBadge('skill_sentence_completion', '✏️ Sentence Completion', lvl), callback_data: 'skill_sentence_completion' }]);
   }
   rows.push([{ text: levelBadge('lesson_reading_strategy', '💡 Strategy Tips', lvl), callback_data: 'lesson_reading_strategy' }]);
+  rows.push([{ text: '📚 Lesson Topics (TOPIK)', callback_data: 'study_topics_reading' }]);
   rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
   return { inline_keyboard: rows };
 }
@@ -891,6 +892,7 @@ function listeningKeyboard(targetTest: string = '', userLevel?: string) {
     rows.push([{ text: levelBadge('skill_quick_response', '💬 Quick Response', lvl), callback_data: 'skill_quick_response' }]);
   }
   rows.push([{ text: levelBadge('pronun_random', '🔗 Pronunciation Drill', lvl), callback_data: 'pronun_random' }]);
+  rows.push([{ text: '📚 Lesson Topics (TOPIK)', callback_data: 'study_topics_listening' }]);
   rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
   return { inline_keyboard: rows };
 }
@@ -911,6 +913,7 @@ function speakingKeyboard(targetTest: string = '', userLevel?: string) {
     rows.push([{ text: levelBadge('skill_integrated_speak', '🔗 Integrated Speaking', lvl), callback_data: 'skill_integrated_speak' }]);
   }
   rows.push([{ text: levelBadge('lesson_speaking_templates', '📋 Templates', lvl), callback_data: 'lesson_speaking_templates' }]);
+  rows.push([{ text: '📚 Lesson Topics (TOPIK)', callback_data: 'study_topics_speaking' }]);
   rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
   return { inline_keyboard: rows };
 }
@@ -929,11 +932,12 @@ function writingKeyboard(targetTest: string = '', userLevel?: string) {
     rows.push([{ text: levelBadge('skill_integrated_write', '🔗 Integrated Writing', lvl), callback_data: 'skill_integrated_write' }]);
   }
   rows.push([{ text: levelBadge('lesson_writing_templates', '📋 Templates', lvl), callback_data: 'lesson_writing_templates' }]);
+  rows.push([{ text: '📚 Lesson Topics (TOPIK)', callback_data: 'study_topics_writing' }]);
   rows.push([{ text: '⬅️ Kembali', callback_data: 'back_study' }]);
   return { inline_keyboard: rows };
 }
 
-function grammarKeyboard(userLevel?: string) {
+function grammarKeyboard(targetTest: string = 'TOEFL_IBT', userLevel?: string) {
   const lvl = userLevel || 'B1';
   return {
     inline_keyboard: [
@@ -953,12 +957,13 @@ function grammarKeyboard(userLevel?: string) {
         { text: levelBadge('lesson_relative_clauses', '👥 Relative Clause', lvl), callback_data: 'lesson_relative_clauses' },
         { text: levelBadge('lesson_word_formation', '🧩 Word Formation', lvl), callback_data: 'lesson_word_formation' },
       ],
+      [{ text: `📚 Grammar Syllabus Lengkap (78 topik)`, callback_data: `syl_grammar_${targetTest}` }],
       [{ text: '⬅️ Kembali', callback_data: 'back_study' }],
     ],
   };
 }
 
-function vocabKeyboard(userLevel?: string) {
+function vocabKeyboard(targetTest: string = 'TOEFL_IBT', userLevel?: string) {
   const lvl = userLevel || 'B1';
   return {
     inline_keyboard: [
@@ -970,6 +975,7 @@ function vocabKeyboard(userLevel?: string) {
         { text: levelBadge('lesson_collocations', '🤝 Collocations', lvl), callback_data: 'lesson_collocations' },
         { text: levelBadge('lesson_paraphrasing', '♻️ Paraphrasing', lvl), callback_data: 'lesson_paraphrasing' },
       ],
+      [{ text: `📚 Vocabulary Bank Lengkap (445 kata)`, callback_data: `syl_vocab_${targetTest}` }],
       [{ text: '⬅️ Kembali', callback_data: 'back_study' }],
     ],
   };
@@ -5612,11 +5618,13 @@ async function handleCallbackQuery(query: any, env: Env) {
 
   // TRADITIONAL CATEGORIES
   if (data === 'cat_grammar') {
-    await editMessage(env, chatId, messageId, 'Grammar — pilih topik:', grammarKeyboard(user.proficiency_level || 'B1'));
+    const tt = user.target_test || 'TOEFL_IBT';
+    await editMessage(env, chatId, messageId, 'Grammar — pilih topik:', grammarKeyboard(tt, user.proficiency_level || 'B1'));
     return;
   }
   if (data === 'cat_vocab') {
-    await editMessage(env, chatId, messageId, 'Vocabulary — pilih topik:', vocabKeyboard(user.proficiency_level || 'B1'));
+    const tt = user.target_test || 'TOEFL_IBT';
+    await editMessage(env, chatId, messageId, 'Vocabulary — pilih topik:', vocabKeyboard(tt, user.proficiency_level || 'B1'));
     return;
   }
   if (data === 'cat_skills') {
@@ -6244,6 +6252,27 @@ async function handleCallbackQuery(query: any, env: Env) {
 
   // Study topics
   if (data.startsWith('study_') || data.startsWith('lesson_')) {
+    // study_topics_<section> — inline lesson topics from syllabus (wired from /study menus)
+    if (data.startsWith('study_topics_')) {
+      const section = data.replace('study_topics_', '');
+      const testType = user.target_test || 'TOEFL_IBT';
+      try {
+        const { listLessonTopics, syllabusTopicListKeyboard, getTestLabel, getTestEmoji, getSectionLabel } = await import('../services/syllabus');
+        const userLevel = user.proficiency_level || 'B1';
+        const allTopics = await listLessonTopics(env, { test_type: testType, section, userLevel });
+        if (!allTopics.length) {
+          await editMessage(env, chatId, messageId, `📌 Belum ada lesson topic untuk ${section} di level ${userLevel}.`);
+          return;
+        }
+        const summary = `${getTestEmoji(testType)} *${getTestLabel(testType)} — ${getSectionLabel(section)}*\n\n📚 *${allTopics.length} lesson topics* dengan teori + strategi.\n\nPilih topik:`;
+        await editMessage(env, chatId, messageId, summary, syllabusTopicListKeyboard(testType, section, allTopics, 0));
+      } catch (e) {
+        console.error('study_topics_ error:', e);
+        await editMessage(env, chatId, messageId, '⚠️ Gagal memuat lesson topics.');
+      }
+      return;
+    }
+
     const freshUser = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first() as User;
 
     if (data === 'study_ask') {
@@ -7875,9 +7904,11 @@ try {
       }
       return;
     }
-  }
+}
 
 // Old exercise handlers removed — now using exercise-engine.ts for multi-step lessons
+
+
 
 // ═══════════════════════════════════════════════════════
 // VOCABULARY TRAINER KEYBOARDS
