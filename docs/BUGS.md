@@ -25,6 +25,7 @@ ships, move it from Open → Fixed with the commit hash.
 
 | # | Commit | Area | Title |
 |---|--------|------|-------|
+| F43 | `b0f678d` | frontend | Add Quick Test option (5 soal, 5 menit) + delete orphan files |
 | F42 | `d60fce1` | tests | Loosen test abandonment threshold 2h → 24h (BUGS #16) |
 | F41 | `de9c67e` | channel | /start now logs channel_referrals (was 0 rows) |
 | F29 | `adfa25e` | audit | Multi-speaker audio, section scoring, Whisper guard |
