@@ -151,12 +151,16 @@ testRoutes.post('/start', async (c) => {
       }
     }
 
-    // Auto-complete any stale in_progress attempts for this user (older than 2 hours)
+    // Auto-complete any stale in_progress attempts for this user (older than 24 hours)
+    // BUGS #16: was 2h, but full IELTS (170m) + grace exceeds that. Users who paused
+    // for a coffee break or to sleep were losing their attempt. 24h lets them resume
+    // the next day. The hourly cron at index.ts:1389 still catches 0-answer attempts
+    // at 4h as a safety net for clearly-abandoned opens.
     try {
       await c.env.DB.prepare(
         `UPDATE test_attempts SET status = 'abandoned', finished_at = datetime('now')
          WHERE user_id = ? AND status = 'in_progress'
-         AND started_at < datetime('now', '-2 hours')`
+         AND started_at < datetime('now', '-24 hours')`
       ).bind(userId).run();
     } catch {}
 
@@ -1547,12 +1551,12 @@ testRoutes.post('/skill-practice/start', async (c) => {
       }, 403);
     }
 
-    // Auto-complete stale attempts
+    // Auto-complete stale attempts (BUGS #16: 2h → 24h, see comment above tests.ts:154)
     try {
       await c.env.DB.prepare(
         `UPDATE test_attempts SET status = 'abandoned', finished_at = datetime('now')
          WHERE user_id = ? AND status = 'in_progress'
-         AND started_at < datetime('now', '-2 hours')`
+         AND started_at < datetime('now', '-24 hours')`
       ).bind(user.id).run();
     } catch {}
 
