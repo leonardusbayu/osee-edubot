@@ -167,6 +167,52 @@ export default function TestSelection() {
     }
   }
 
+  // Quick Test: 5 mixed questions in ~5 minutes. Uses the existing drill
+  // infrastructure (drill_concept + drill_count) to cap the question count
+  // and let the backend infer the section from a common skill tag. Designed
+  // to fix the 0% completion rate from BUGS #16 by giving students a
+  // 5-min option they can finish in one sitting.
+  async function handleStartQuickTest() {
+    setStarting('quick');
+    setError(null);
+    try {
+      const response = await authedFetch('/api/tests/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          test_type: testType,
+          // 'main_idea' is the most common skill tag (593+ questions across
+          // all test types). The backend will infer section_only = the
+          // lowest-id section that has a 'main_idea' question.
+          drill_concept: 'main_idea',
+          drill_count: 5,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        if (data.code === 'LIMIT_REACHED') {
+          setError('Batas harian tercapai! Upgrade ke premium untuk akses unlimited.');
+          setQuota(data.quota);
+        } else {
+          setError(data.error || 'Gagal memulai quick test');
+        }
+        return;
+      }
+
+      startTest(data.attempt_id, data.test_type, data.sections, data.current_section, data.question_type, {
+        concept: 'main_idea',
+        count: 5,
+      });
+      navigate(`/test/${data.attempt_id}`);
+    } catch {
+      setError('Kesalahan jaringan');
+    } finally {
+      setStarting(null);
+    }
+  }
+
   async function loadData() {
     setLoading(true);
     try {
@@ -577,6 +623,24 @@ export default function TestSelection() {
           className="w-full bg-tg-button text-tg-button-text py-3 rounded-xl font-medium disabled:opacity-50"
         >
           {starting === 'full' ? 'Memulai...' : 'Mulai Tes Lengkap'}
+        </button>
+      </div>
+
+      {/* Quick Test Banner — 5 soal, 5 menit, fix for BUGS #16 (0% completion) */}
+      <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/20 rounded-xl p-4 mb-6">
+        <div className="flex items-center gap-3">
+          <span className="text-3xl">⚡</span>
+          <div className="flex-1">
+            <h2 className="font-semibold">Quick Test</h2>
+            <p className="text-xs text-tg-hint">5 soal acak, ~5 menit — selesai dalam satu sesi</p>
+          </div>
+        </div>
+        <button
+          onClick={handleStartQuickTest}
+          disabled={!!starting}
+          className="w-full mt-3 bg-purple-600 text-white py-2.5 rounded-xl font-medium text-sm disabled:opacity-50"
+        >
+          {starting === 'quick' ? 'Memulai...' : 'Mulai Quick Test (5 soal)'}
         </button>
       </div>
 
