@@ -842,6 +842,9 @@ function studyTopicKeyboard(targetTest?: string | null, userLevel?: string) {
       [
         { text: '❓ Tanya Bebas', callback_data: 'study_ask' },
       ],
+      [
+        { text: '📚 Syllabus Lengkap (78 grammar, 450+ vocab)', callback_data: 'syllabus' },
+      ],
     ],
   };
 }
@@ -1764,6 +1767,7 @@ async function handleMessage(message: any, env: Env) {
         const studentHelp = `📚 *Perintah Belajar*\n\n` +
           `/diagnostic — Tes penempatan dulu\n` +
           `/study — Pilih topik belajar\n` +
+          `/syllabus — Syllabus lengkap semua tes\n` +
           `/lesson — Lesson plan personal (AI)\n` +
           `/today — Pelajaran hari ini\n` +
           `/review — Review soal (FSRS adaptive)\n` +
@@ -2189,6 +2193,26 @@ async function handleMessage(message: any, env: Env) {
       case '/study':
 await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT', user.proficiency_level || 'B1'));
         return;
+
+      case '/syllabus': {
+        // Comprehensive syllabus: lesson topics + grammar + vocabulary + strategies
+        try {
+          const { syllabusTestKeyboard } = await import('../services/syllabus');
+          const intro = `📚 *Syllabus Lengkap*\n\n` +
+            `Akses semua materi belajar untuk tes kamu:\n` +
+            `• *Question types* per tes & section\n` +
+            `• *Teori & strategi* per topik\n` +
+            `• *Grammar syllabus* (78 topik)\n` +
+            `• *Vocabulary bank* (450+ kata)\n` +
+            `• *Test strategies & rubrics*\n\n` +
+            `Pilih tes kamu:`;
+          await sendMessage(env, chatId, intro, syllabusTestKeyboard());
+        } catch (e) {
+          console.error('/syllabus error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat syllabus. Coba lagi ya.');
+        }
+        return;
+      }
 
       // ═══════════════════════════════════════════════════════
       // PERSONALIZED LEARNING COMMANDS
@@ -6724,6 +6748,294 @@ async function handleCallbackQuery(query: any, env: Env) {
   // study_menu callback (back to main study menu)
   if (data === 'study_menu') {
     await editMessage(env, chatId, messageId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT', user.proficiency_level || 'B1'));
+    return;
+  }
+
+  // ============================================================
+  // SYLLABUS CALLBACKS — comprehensive content browser
+  // ============================================================
+
+  // syl_test_<TOEFL_IBT|IELTS|TOEFL_ITP|TOEIC|ALL> — show test's section menu
+  if (data.startsWith('syl_test_')) {
+    const testType = data.replace('syl_test_', '');
+    try {
+      const { syllabusSectionKeyboard, getTestLabel, getTestEmoji, getSyllabusSummary } = await import('../services/syllabus');
+      const userLevel = user.proficiency_level || 'B1';
+      const summary = await getSyllabusSummary(env, testType, userLevel);
+      const lines: string[] = [];
+      lines.push(`${getTestEmoji(testType)} *Syllabus: ${getTestLabel(testType)}*\n`);
+      lines.push(`📌 Level kamu: *${userLevel}*`);
+      lines.push(`📊 *Total: ${summary.sections.reduce((a, s) => a + s.count, 0)} lesson topics*`);
+      if (summary.grammarCategories.length) lines.push(`📝 *${summary.grammarCategories.reduce((a, c) => a + c.count, 0)} grammar topics*`);
+      if (summary.vocabTopics.length) {
+        const totalVocab = summary.vocabTopics.reduce((a, t) => a + t.count, 0);
+        lines.push(`📚 *${totalVocab} vocabulary words*`);
+      }
+      if (summary.strategies.length) {
+        lines.push(`🎯 *${summary.strategies.reduce((a, s) => a + s.count, 0)} test strategies*`);
+      }
+      lines.push(`\nPilih section:`);
+      await editMessage(env, chatId, messageId, lines.join('\n'), syllabusSectionKeyboard(testType));
+    } catch (e) {
+      console.error('syl_test_ error:', e);
+      await sendMessage(env, chatId, '⚠️ Gagal memuat syllabus.');
+    }
+    return;
+  }
+
+  // syllabus (bare) — show test picker (alias for syl_test_)
+  if (data === 'syllabus') {
+    try {
+      const { syllabusTestKeyboard } = await import('../services/syllabus');
+      const intro = `📚 *Syllabus Lengkap*\n\nPilih tes kamu:`;
+      await editMessage(env, chatId, messageId, intro, syllabusTestKeyboard());
+    } catch (e) {
+      console.error('syllabus error:', e);
+    }
+    return;
+  }
+
+  // syl_sec_<TEST>_<reading|listening|speaking|writing> — show topic list for section
+  if (data.startsWith('syl_sec_')) {
+    const parts = data.replace('syl_sec_', '').split('_');
+    const section = parts.pop()!;
+    const testType = parts.join('_');
+    try {
+      const { listLessonTopics, syllabusTopicListKeyboard, getTestLabel, getTestEmoji, getSectionLabel } = await import('../services/syllabus');
+      const userLevel = user.proficiency_level || 'B1';
+      const allTopics = await listLessonTopics(env, { test_type: testType, section, userLevel });
+      if (!allTopics.length) {
+        await sendMessage(env, chatId, `📌 Belum ada topik untuk section ini di level ${userLevel}.`);
+        return;
+      }
+      const summary = `${getTestEmoji(testType)} *${getTestLabel(testType)} — ${getSectionLabel(section)}*\n\n${allTopics.length} topik tersedia. Pilih topik:`;
+      await editMessage(env, chatId, messageId, summary, syllabusTopicListKeyboard(testType, section, allTopics, 0));
+    } catch (e) {
+      console.error('syl_sec_ error:', e);
+      await sendMessage(env, chatId, '⚠️ Gagal memuat section.');
+    }
+    return;
+  }
+
+  // syl_page_<TEST>_<SECTION>_<PAGE> — pagination
+  if (data.startsWith('syl_page_')) {
+    const parts = data.replace('syl_page_', '').split('_');
+    const page = parseInt(parts.pop()!, 10);
+    const section = parts.pop()!;
+    const testType = parts.join('_');
+    try {
+      const { listLessonTopics, syllabusTopicListKeyboard, getTestLabel, getTestEmoji, getSectionLabel } = await import('../services/syllabus');
+      const userLevel = user.proficiency_level || 'B1';
+      const allTopics = await listLessonTopics(env, { test_type: testType, section, userLevel });
+      const summary = `${getTestEmoji(testType)} *${getTestLabel(testType)} — ${getSectionLabel(section)}* (page ${page + 1}/${Math.ceil(allTopics.length / 6)})\n\nPilih topik:`;
+      await editMessage(env, chatId, messageId, summary, syllabusTopicListKeyboard(testType, section, allTopics, page));
+    } catch (e) {
+      console.error('syl_page_ error:', e);
+    }
+    return;
+  }
+
+  // syl_topic_<TOPIC_KEY> — show lesson topic detail
+  if (data.startsWith('syl_topic_')) {
+    const topicKey = data.replace('syl_topic_', '');
+    try {
+      const { getLessonTopic, renderLessonTopic } = await import('../services/syllabus');
+      const topic = await getLessonTopic(env, topicKey);
+      if (!topic) {
+        await sendMessage(env, chatId, '⚠️ Topik tidak ditemukan.');
+        return;
+      }
+      const backKb = {
+        inline_keyboard: [
+          [{ text: '🔙 Kembali ke Section', callback_data: `syl_sec_${topic.test_type}_${topic.section}` }],
+          [{ text: '🔙 Ganti Tes', callback_data: 'syllabus' }],
+        ],
+      };
+      await editMessage(env, chatId, messageId, renderLessonTopic(topic), backKb);
+    } catch (e) {
+      console.error('syl_topic_ error:', e);
+    }
+    return;
+  }
+
+  // syl_grammar_<TEST> — show grammar category picker
+  if (data.startsWith('syl_grammar_')) {
+    const testType = data.replace('syl_grammar_', '');
+    try {
+      const { syllabusGrammarCategoryKeyboard, getTestLabel, getTestEmoji } = await import('../services/syllabus');
+      await editMessage(env, chatId, messageId, `${getTestEmoji(testType)} *Grammar Syllabus — ${getTestLabel(testType)}*\n\nPilih kategori:`, syllabusGrammarCategoryKeyboard(testType));
+    } catch (e) {
+      console.error('syl_grammar_ error:', e);
+    }
+    return;
+  }
+
+  // syl_gcat_<TEST>_<CATEGORY> — show grammar topics in category
+  if (data.startsWith('syl_gcat_')) {
+    const parts = data.replace('syl_gcat_', '').split('_');
+    const category = parts.pop()!;
+    const testType = parts.join('_');
+    try {
+      const { listGrammarTopics, renderGrammarTopic, getTestLabel, getTestEmoji } = await import('../services/syllabus');
+      const userLevel = user.proficiency_level || 'B1';
+      const topics = await listGrammarTopics(env, { category, testType, userLevel });
+      if (!topics.length) {
+        await sendMessage(env, chatId, `📌 Belum ada grammar untuk kategori ini di level ${userLevel}.`);
+        return;
+      }
+      const lines: string[] = [];
+      lines.push(`${getTestEmoji(testType)} *Grammar: ${category}* (${getTestLabel(testType)})\n`);
+      lines.push(`${topics.length} topik di level ${userLevel}. Topik pertama:\n`);
+      lines.push(renderGrammarTopic(topics[0]));
+      if (topics.length > 1) {
+        const kb: any[] = [];
+        for (let i = 0; i < Math.min(topics.length, 6); i++) {
+          const t = topics[i];
+          kb.push([{ text: `📌 ${t.name.substring(0, 38)}`, callback_data: `syl_gtopic_${t.topic_key}` }]);
+        }
+        kb.push([{ text: '🔙 Kembali', callback_data: `syl_grammar_${testType}` }]);
+        await editMessage(env, chatId, messageId, lines.join('\n'), { inline_keyboard: kb });
+      } else {
+        const backKb = { inline_keyboard: [[{ text: '🔙 Kembali', callback_data: `syl_grammar_${testType}` }]] };
+        await editMessage(env, chatId, messageId, lines.join('\n'), backKb);
+      }
+    } catch (e) {
+      console.error('syl_gcat_ error:', e);
+    }
+    return;
+  }
+
+  // syl_gtopic_<TOPIC_KEY> — show grammar topic detail
+  if (data.startsWith('syl_gtopic_')) {
+    const topicKey = data.replace('syl_gtopic_', '');
+    try {
+      const { getGrammarTopic, renderGrammarTopic } = await import('../services/syllabus');
+      const topic = await getGrammarTopic(env, topicKey);
+      if (!topic) {
+        await sendMessage(env, chatId, '⚠️ Grammar tidak ditemukan.');
+        return;
+      }
+      const backKb = {
+        inline_keyboard: [[{ text: '🔙 Kembali', callback_data: `syl_gcat_ALL_${topic.category}` }]],
+      };
+      await editMessage(env, chatId, messageId, renderGrammarTopic(topic), backKb);
+    } catch (e) {
+      console.error('syl_gtopic_ error:', e);
+    }
+    return;
+  }
+
+  // syl_vocab_<TEST> — show vocab topic picker
+  if (data.startsWith('syl_vocab_') && !data.startsWith('syl_vtopic_')) {
+    const testType = data.replace('syl_vocab_', '');
+    try {
+      const { listVocabularyTopicsForTest, syllabusVocabTopicKeyboard, getTestLabel, getTestEmoji } = await import('../services/syllabus');
+      const userLevel = user.proficiency_level || 'B1';
+      const allVocab = await listVocabularyTopicsForTest(env, testType, userLevel);
+      if (!allVocab.length) {
+        await sendMessage(env, chatId, `📌 Belum ada vocab untuk tes ini di level ${userLevel}.`);
+        return;
+      }
+      const total = allVocab.reduce((a: number, t: { count: number }) => a + t.count, 0);
+      await editMessage(env, chatId, messageId, `${getTestEmoji(testType)} *Vocabulary — ${getTestLabel(testType)}*\n\n${total} kata dalam ${allVocab.length} topik. Pilih topik:`, syllabusVocabTopicKeyboard(testType, allVocab));
+    } catch (e) {
+      console.error('syl_vocab_ error:', e);
+    }
+    return;
+  }
+
+  // syl_vtopic_<TEST>_<TOPIC> — show vocab words
+  if (data.startsWith('syl_vtopic_')) {
+    const parts = data.replace('syl_vtopic_', '').split('_');
+    const topic = parts.pop()!;
+    const testType = parts.join('_');
+    try {
+      const { listVocabulary, renderVocabWord, getTestLabel, getTestEmoji } = await import('../services/syllabus');
+      const userLevel = user.proficiency_level || 'B1';
+      const words = await listVocabulary(env, { topic, testType, userLevel, limit: 8 });
+      if (!words.length) {
+        await sendMessage(env, chatId, '📌 Belum ada vocab di topik ini.');
+        return;
+      }
+      const lines: string[] = [];
+      lines.push(`${getTestEmoji(testType)} *${topic}* (${getTestLabel(testType)})\n`);
+      lines.push(`${words.length} kata (level ${userLevel}):\n`);
+      words.forEach((w, i) => {
+        lines.push(renderVocabWord(w, i + 1));
+        lines.push('');
+      });
+      const backKb = { inline_keyboard: [[{ text: '🔙 Kembali', callback_data: `syl_vocab_${testType}` }]] };
+      await editMessage(env, chatId, messageId, lines.join('\n'), backKb);
+    } catch (e) {
+      console.error('syl_vtopic_ error:', e);
+    }
+    return;
+  }
+
+  // syl_strat_<TEST> — show strategy category picker
+  if (data.startsWith('syl_strat_')) {
+    const testType = data.replace('syl_strat_', '');
+    try {
+      const { listTestStrategies, syllabusStrategyCategoryKeyboard, getTestLabel, getTestEmoji } = await import('../services/syllabus');
+      const userLevel = user.proficiency_level || 'B1';
+      const strats = await listTestStrategies(env, { test_type: testType, userLevel });
+      const catCount: Record<string, number> = {};
+      strats.forEach(s => { catCount[s.category] = (catCount[s.category] || 0) + 1; });
+      const arr = Object.keys(catCount).map(c => ({ category: c, count: catCount[c] }));
+      if (!arr.length) {
+        await sendMessage(env, chatId, `📌 Belum ada strategi untuk tes ini di level ${userLevel}.`);
+        return;
+      }
+      await editMessage(env, chatId, messageId, `${getTestEmoji(testType)} *Strategies — ${getTestLabel(testType)}*\n\nPilih kategori:`, syllabusStrategyCategoryKeyboard(testType, arr));
+    } catch (e) {
+      console.error('syl_strat_ error:', e);
+    }
+    return;
+  }
+
+  // syl_scat_<TEST>_<CATEGORY> — show strategies in category
+  if (data.startsWith('syl_scat_')) {
+    const parts = data.replace('syl_scat_', '').split('_');
+    const category = parts.pop()!;
+    const testType = parts.join('_');
+    try {
+      const { listTestStrategies, renderTestStrategy, getTestLabel, getTestEmoji } = await import('../services/syllabus');
+      const userLevel = user.proficiency_level || 'B1';
+      const strats = await listTestStrategies(env, { test_type: testType, category, userLevel });
+      if (!strats.length) {
+        await sendMessage(env, chatId, '📌 Belum ada strategi untuk kategori ini.');
+        return;
+      }
+      const lines: string[] = [];
+      lines.push(`${getTestEmoji(testType)} *${category}* (${getTestLabel(testType)})\n`);
+      lines.push(renderTestStrategy(strats[0]));
+      const kb: any[] = [];
+      for (let i = 0; i < Math.min(strats.length, 5); i++) {
+        kb.push([{ text: `📌 ${strats[i].name.substring(0, 38)}`, callback_data: `syl_s_${strats[i].strategy_key}` }]);
+      }
+      kb.push([{ text: '🔙 Kembali', callback_data: `syl_strat_${testType}` }]);
+      await editMessage(env, chatId, messageId, lines.join('\n'), { inline_keyboard: kb });
+    } catch (e) {
+      console.error('syl_scat_ error:', e);
+    }
+    return;
+  }
+
+  // syl_s_<STRATEGY_KEY> — show strategy detail
+  if (data.startsWith('syl_s_')) {
+    const strategyKey = data.replace('syl_s_', '');
+    try {
+      const { getTestStrategy, renderTestStrategy } = await import('../services/syllabus');
+      const strat = await getTestStrategy(env, strategyKey);
+      if (!strat) {
+        await sendMessage(env, chatId, '⚠️ Strategi tidak ditemukan.');
+        return;
+      }
+      const backKb = { inline_keyboard: [[{ text: '🔙 Kembali', callback_data: `syl_scat_${strat.test_type}_${strat.category}` }]] };
+      await editMessage(env, chatId, messageId, renderTestStrategy(strat), backKb);
+    } catch (e) {
+      console.error('syl_s_ error:', e);
+    }
     return;
   }
 
