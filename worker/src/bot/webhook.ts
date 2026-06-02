@@ -1671,6 +1671,11 @@ async function handleMessage(message: any, env: Env) {
           await env.DB.prepare(
             'INSERT INTO channel_analytics (event_type, post_type, user_id) VALUES (?, ?, ?)'
           ).bind('click', startParam, user.id).run();
+
+          // Log channel referral (B17 fix — channel_referrals was empty)
+          await env.DB.prepare(
+            'INSERT INTO channel_referrals (new_user_id, referrer_code, source_channel, signup_context) VALUES (?, ?, ?, ?)'
+          ).bind(user.id, user.referral_code || null, '@TOEFL_IELTS_Indonesia', startParam).run();
         }
 
         // "Ask AI why" deep link — frontend stored the question server-side,
