@@ -19,8 +19,40 @@ ships, move it from Open → Fixed with the commit hash.
 
 | # | P | Area | Title | Issue | Notes |
 |---|---|------|-------|:-----:|-------|
-| 16 | P2 | frontend | Test completion rate 0% — users start but don't finish tests | — | Needs investigation |
-| 17 | P2 | channel | Channel referral tracking broken — 122 posts but 0 referrals | — | /start handler may not be logging referrals properly |
+| 16 | P2 | frontend | Test completion rate dropped from 25% → 0% (week 15 → 16) | — | See analysis below |
+
+### #16 Analysis (2026-06-02)
+
+**Symptoms:** Weekly completion rate crashed from 25% (week 15: 37/146) to
+0% (weeks 16-21: 3/108). Most "abandoned" attempts have 0 answers
+and sat in_progress for thousands of minutes before cleanup.
+
+**Cleanup thresholds (current):**
+- `/api/tests/start` (tests.ts:157): 2 hours
+- `/api/tests/finish` (tests.ts:1553): 2 hours
+- Hourly cron (index.ts:1389): 4 hours, only 0-answer attempts
+
+**Test durations (TEST_CONFIGS):** TOEFL_IBT 90 min, IELTS 170 min,
+TOEFL_ITP 115 min, TOEIC 120 min. **The 2-hour abandonment threshold
+is below the test duration for IELTS / ITP / TOEIC** — a user can run
+out of clock just by completing all sections. Combined with the
+"no answer" abandonment, this means the threshold is more aggressive
+than the tests themselves.
+
+**Root causes (in order of likelihood):**
+1. **Abandonment threshold too aggressive** — 2h is shorter than the
+   full test duration for 3/4 test types. Users who pause for a
+   coffee break or sleep lose their attempt.
+2. **Long test duration** — TOEFL iBT is 90 min, IELTS is 170 min.
+   Most users won't complete in one sitting.
+3. **No nudge** — no Telegram reminder when an attempt sits
+   in_progress for >30 min.
+
+**Possible fixes** (ask user before implementing):
+- A. Loosen abandonment threshold (2h → 24h) — one-line fix per location
+- B. Send a Telegram nudge after 30 min in_progress
+- C. Add a "Quick Test" option (5-10 questions, 15 min) to test menu
+- D. Mark as deferred (real issue is usage pattern, not code bug)
 
 ---
 
@@ -28,6 +60,7 @@ ships, move it from Open → Fixed with the commit hash.
 
 | # | Commit | Area | Title |
 |---|--------|------|-------|
+| F41 | `de9c67e` | channel | /start now logs channel_referrals (was 0 rows) |
 | F29 | `adfa25e` | audit | Multi-speaker audio, section scoring, Whisper guard |
 | F30 | `4093032` | audit | Critical sales-readiness fixes from content + audio audits |
 | F31 | `8478899` | audio | Remove listening-passage audioPlayed block entirely |
