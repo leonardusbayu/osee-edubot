@@ -720,8 +720,50 @@ async function handleDailyFocusLessonCron(env: Env) {
         console.error('[daily-lesson-cron] image failed:', (e as any)?.message || e);
       }
 
+      // P1 #10: Augment the daily lesson message with the student's actual
+      // state — vocab cards due + top weakness + lesson plan step. The base
+      // renderDailyFocusLesson was generic ("Day 12: Tenses — here's the
+      // theory"). Now we append the personalized hooks so the message
+      // includes what they SHOULD do today, not just generic content.
+      let personalSuffix = '';
+      try {
+        // 1. FSRS-due vocab count
+        const { getVocabStats } = await import('./services/vocabulary');
+        const vocabStats = await getVocabStats(env, user.id);
+        if (vocabStats.dueToday > 0) {
+          personalSuffix += `\n\n📚 *${vocabStats.dueToday} vocab card* menunggu review. /vocab`;
+        }
+
+        // 2. Active lesson plan step
+        try {
+          const { getActivePlan } = await import('./services/lesson-engine');
+          const plan = await getActivePlan(env, user.id);
+          if (plan && plan.current_step < plan.total_steps) {
+            const nextStep = plan.lessons?.[plan.current_step];
+            if (nextStep) {
+              personalSuffix += `\n\n📖 Lesson plan: *${plan.title}* — step ${plan.current_step + 1}/${plan.total_steps} (${nextStep.title || 'lanjutkan'})`;
+            }
+          }
+        } catch { /* lesson engine optional */ }
+
+        // 3. Top weakness
+        try {
+          const { getStudentWeaknessProfile } = await import('./services/weakness-analysis');
+          const profile = await getStudentWeaknessProfile(env, user.id, user.name || 'Kamu');
+          if (profile.weaknesses?.combined?.length > 0) {
+            const top = profile.weaknesses.combined[0];
+            if (top.priority === 'high') {
+              personalSuffix += `\n\n🔴 *Top kelemahan:* ${top.skill.replace(/_/g, ' ')} — /weakness untuk drill`;
+            }
+          }
+        } catch { /* weakness optional */ }
+      } catch (e) {
+        console.error('[daily-lesson-cron] personal suffix error (non-fatal):', (e as any)?.message || e);
+      }
+
+      const finalText = text + personalSuffix;
       await safeSendMessage(env, tgId, {
-        text: sentImage ? text : `🖼️ Bayangkan visual ini: ${lesson.scene}\n\n${text}`,
+        text: sentImage ? finalText : `🖼️ Bayangkan visual ini: ${lesson.scene}\n\n${finalText}`,
         reply_markup: keyboard,
         parse_mode: 'Markdown',
       });

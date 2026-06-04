@@ -41,6 +41,16 @@ export default function TestResults() {
         sessionStorage.removeItem('edubot_growth_msg');
       }
     } catch {}
+
+    // P1 #7: Re-fetch results after 2.5s. The /finish endpoint kicks off
+    // a waitUntil that populates ai_summary + detailed_feedback (concepts
+    // missed, priority order, etc.) from post-test-review.ts. The first
+    // response returns null for both because the waitUntil is async. This
+    // polling picks up the rich data once the worker finishes.
+    const retryTimer = setTimeout(() => {
+      loadResults();
+    }, 2500);
+    return () => clearTimeout(retryTimer);
   }, []);
 
   async function loadResults() {
@@ -240,6 +250,60 @@ export default function TestResults() {
           </div>
         </div>
       )}
+
+      {/* P1 #7: Detailed post-test breakdown — concepts missed, priority order.
+          Populated server-side by post-test-review.ts (analyzeAttempt). Without
+          this, students saw a number and "Review Jawaban" but never the
+          WHY — which concepts they should focus on. Now we render the top
+          triaged concepts with miss counts and a link to /weakness for
+          full drill recommendation. */}
+      {result.detailed_feedback && (() => {
+        const df = result.detailed_feedback as {
+          wrong_count?: number;
+          total_scored?: number;
+          concept_clusters?: Array<{
+            concept: string;
+            miss_count: number;
+            priority_score?: number;
+            humanize?: string;
+          }>;
+          triaged_concepts?: string[];
+        };
+        const clusters = df.concept_clusters || [];
+        if (clusters.length === 0) return null;
+        return (
+          <div className="mb-6">
+            <h2 className="font-semibold mb-3">📊 Konsep yang Perlu Dilatih</h2>
+            <div className="bg-tg-secondary rounded-xl p-4">
+              {df.wrong_count !== undefined && (
+                <p className="text-sm text-tg-hint mb-3">
+                  {df.wrong_count} dari {df.total_scored || '?'} soal salah. Topik yang paling perlu dilatih:
+                </p>
+              )}
+              <ol className="space-y-2">
+                {clusters.map((c, i) => (
+                  <li key={i} className="flex items-center justify-between text-sm">
+                    <span>
+                      <span className="font-medium text-tg-text">{i + 1}. {(c.humanize || c.concept).replace(/_/g, ' ')}</span>
+                      {c.miss_count > 0 && (
+                        <span className="text-tg-hint text-xs ml-2">({c.miss_count}x salah)</span>
+                      )}
+                    </span>
+                    <span className={`text-xs ${i === 0 ? 'text-red-500' : i === 1 ? 'text-orange-500' : 'text-yellow-500'}`}>
+                      {i === 0 ? '🔴 High' : i === 1 ? '🟡 Med' : '🟢 Low'}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              <div className="mt-3 pt-3 border-t border-tg-hint/20">
+                <p className="text-xs text-tg-hint">
+                  💡 Ketik <span className="font-mono">/weakness</span> di bot untuk drill otomatis berdasarkan kelemahan ini.
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Review Answers */}
       {review.length > 0 && (

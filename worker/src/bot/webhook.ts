@@ -822,7 +822,18 @@ function studyTopicKeyboard(targetTest?: string | null, userLevel?: string) {
     inline_keyboard: [
       [{ text: `${emoji} Target: ${tt.replace(/_/g, ' ')}  [Ganti →]`, callback_data: 'switch_test' }],
       [{ text: `${levelLbl} Level Kamu   [Ganti →]`, callback_data: 'switch_level' }],
-      [{ text: '🔥 Lesson Hari Ini', callback_data: 'study_lesson' }],
+      // P1 #8: Top-level personalized actions surface the strongest services
+      // that were previously buried. Quick Test (1-tap, 5 soal), Today's
+      // Lesson (lesson-engine), Spaced Review (FSRS), and Weakness Profile
+      // (3-source analysis). These are the highest-leverage entry points.
+      [
+        { text: '🔥 Lesson Hari Ini', callback_data: 'study_lesson' },
+        { text: '⚡ Quick Test', callback_data: 'study_quicktest' },
+      ],
+      [
+        { text: '🔄 Review (FSRS)', callback_data: 'study_review' },
+        { text: '📊 Kelemahan Saya', callback_data: 'show_weakness' },
+      ],
       [
         { text: '📖 Reading', callback_data: 'cat_reading' },
         { text: '🎧 Listening', callback_data: 'cat_listening' },
@@ -1743,6 +1754,26 @@ async function handleMessage(message: any, env: Env) {
           "UPDATE diagnostic_sessions SET status = 'cancelled' WHERE user_id = ? AND status = 'in_progress'"
         ).bind(user.id).run();
 
+        // P1 #9: Auto-create first lesson plan on /start for returning users.
+        // Previously a student had to type /lesson to discover the feature.
+        // Now we check on /start and create one in the background. The next
+        // /study shows "Lanjut Lesson Step 1/7" automatically.
+        try {
+          const { getActivePlan, generatePersonalizedPlan } = await import('../services/lesson-engine');
+          const existing = await getActivePlan(env, user.id);
+          if (!existing && user.onboarding_complete) {
+            // Background-style: don't block /start. Generate now (it's fast).
+            const freshUser = {
+              ...user,
+              // The plan engine needs User shape; pull from DB to be safe
+            } as any;
+            await generatePersonalizedPlan(env, freshUser).catch((e: any) => {
+              console.error('[start] auto-create lesson plan error (non-fatal):', e?.message || e);
+            });
+          }
+        } catch (autoErr) {
+          console.error('[start] auto-lesson-plan check failed (non-fatal):', autoErr);
+        }
         if (user.onboarding_complete) {
           const testEmoji: Record<string, string> = {
             'TOEFL_IBT': '🇺🇸', 'IELTS': '🇬🇧', 'TOEFL_ITP': '📚', 'TOEIC': '🏢',
@@ -1795,6 +1826,7 @@ async function handleMessage(message: any, env: Env) {
         const progressHelp = `📊 *Progress & Profile*\n\n` +
           `/progress — Lihat semua statistik kamu\n` +
           `/profile — Profil lengkap + mental model\n` +
+          `/weakness — Profil kelemahan (3 sumber: diagnostic + practice + chat)\n` +
           `/plan — Lihat semua lesson plans\n` +
           `/mystyle — Atur gaya belajar & komunikasi\n` +
           `/role — Lihat XP, level, badges\n` +
@@ -2273,12 +2305,101 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
               ],
               [
                 { text: '📝 Mulai Lesson Plan', callback_data: 'start_lesson_plan' },
+                { text: '📊 Lihat Weakness', callback_data: 'show_weakness' },
               ],
             ],
           });
         } catch (e) {
           console.error('Profile command error:', e);
           await sendMessage(env, chatId, 'Gagal memuat profil. Coba lagi nanti.');
+        }
+        return;
+      }
+
+      case '/weakness': {
+        // P0 #2: Surface the 3-source weakness profile in the bot. Previously
+        // only available via the admin API (routes/weakness.ts) — students
+        // never saw it. Combines diagnostic + practice + chat signals into
+        // a single prioritized list with action recommendations.
+        try {
+          const { getStudentWeaknessProfile } = await import('../services/weakness-analysis');
+          const profile = await getStudentWeaknessProfile(env, user.id, user.name || 'Kamu');
+
+          if (!profile.weaknesses?.combined?.length &&
+              !profile.diagnostic.has_diagnostic &&
+              profile.practice.total_questions === 0) {
+            await sendMessage(env, chatId,
+              `📊 *Profil Kelemahan Kamu*\n\n` +
+              `Belum ada cukup data untuk analisis.\n\n` +
+              `Langkah selanjutnya:\n` +
+              `• /diagnostic — Tes penempatan 20 soal\n` +
+              `• /test — Mulai latihan soal\n` +
+              `• /vocab — Mulai belajar vocabulary\n\n` +
+              `Setelah ada data, kami akan analisis kelemahan kamu dan kasih rekomendasi drill.`,
+              {
+                inline_keyboard: [
+                  [{ text: '📝 Mulai Diagnostic', callback_data: 'start_diagnostic' }],
+                ],
+              }
+            );
+            return;
+          }
+
+          let msg = `📊 *Profil Kelemahan Kamu*\n\n`;
+
+          // Show diagnostic summary if available
+          if (profile.diagnostic.has_diagnostic && profile.diagnostic.estimated_band) {
+            msg += `🎯 Estimasi band (dari diagnostic): *${profile.diagnostic.estimated_band}*\n\n`;
+          }
+
+          // Top weaknesses
+          if (profile.weaknesses.combined.length > 0) {
+            const top3 = profile.weaknesses.combined.slice(0, 3);
+            msg += `🔴 *Prioritas:*\n`;
+            for (const w of top3) {
+              const emoji = w.priority === 'high' ? '🔴' : w.priority === 'medium' ? '🟡' : '🟢';
+              msg += `${emoji} ${w.skill.replace(/_/g, ' ')}`;
+              if (w.evidence?.length > 0) {
+                msg += ` — _${w.evidence[0]}_`;
+              }
+              msg += `\n`;
+            }
+            msg += `\n`;
+          }
+
+          // Recommendation
+          if (profile.recommendation) {
+            const prioEmoji: Record<string, string> = {
+              critical: '🚨', high: '🔴', medium: '🟡', low: '🟢',
+            };
+            msg += `${prioEmoji[profile.recommendation.priority] || '💡'} *Rekomendasi:* ${profile.recommendation.action}\n\n`;
+          }
+
+          // Practice breakdown
+          if (profile.practice.total_questions > 0) {
+            msg += `📈 *Akurasi per section:*\n`;
+            for (const sec of ['reading', 'listening', 'speaking', 'writing'] as const) {
+              const s = profile.practice[sec];
+              if (s && s.attempted > 0) {
+                const bar = s.accuracy >= 75 ? '🟢' : s.accuracy >= 50 ? '🟡' : '🔴';
+                msg += `${bar} ${sec}: ${s.accuracy}% (${s.correct}/${s.attempted})\n`;
+              }
+            }
+          }
+
+          await sendMessage(env, chatId, msg, {
+            inline_keyboard: [
+              [
+                { text: '🎯 Drill Kelemahan', callback_data: 'drill_weakness' },
+                { text: '📖 Lihat Lesson Plan', callback_data: 'show_lessons' },
+              ],
+              [{ text: '🔙 Menu Utama', callback_data: 'back_study' }],
+            ],
+          });
+        } catch (e: any) {
+          console.error('/weakness error:', e?.message || e);
+          await sendMessage(env, chatId,
+            `⚠️ Gagal memuat profil kelemahan. Coba lagi nanti.`);
         }
         return;
       }
@@ -2780,7 +2901,50 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
       case '/today': {
         const { getTodayLesson } = await import('../services/studyplan');
         const lesson = await getTodayLesson(env, user.id);
-        const base = lesson || 'Belum ada study plan. Ketik /diagnostic dulu untuk tes penempatan.';
+        let base = lesson || 'Belum ada study plan. Ketik /diagnostic dulu untuk tes penempatan.';
+
+        // P0 #3: Surface FSRS-due vocab reviews in /today. The vocab
+        // trainer tracks per-card state via FSRS (vocabulary.ts) but
+        // students had to remember /vocab to see the due list. Now /today
+        // tells them up front how many cards are waiting.
+        try {
+          const { getVocabStats } = await import('../services/vocabulary');
+          const stats = await getVocabStats(env, user.id);
+          if (stats.dueToday > 0) {
+            base += `\n\n📚 *${stats.dueToday} vocabulary card* menunggu review (FSRS). ` +
+              `Ketik /vocab untuk mulai.`;
+          } else if (stats.total === 0) {
+            base += `\n\n📚 Belum ada vocabulary dipelajari. Ketik /vocab untuk mulai dari kata pertama.`;
+          } else if (stats.total > 0) {
+            base += `\n\n📚 Vocabulary: ${stats.learned}/${stats.total} dikuasai, ${stats.accuracy}% akurasi. ` +
+              `Tambah kartu baru: /vocab`;
+          }
+        } catch (e) {
+          console.error('[today] vocab stats error:', e);
+        }
+
+        // P0 #2: Surface top weakness so the student sees their personal gap.
+        // weakness-analysis.ts combines 3 sources (diagnostic + practice + chat)
+        // and returns a priority-ordered weakness list with actions. The data
+        // exists in D1 but was never visible to the student — fix that here.
+        try {
+          const { getStudentWeaknessProfile } = await import('../services/weakness-analysis');
+          const profile = await getStudentWeaknessProfile(env, user.id, user.name || 'Kamu');
+          if (profile.weaknesses?.combined?.length > 0) {
+            const top = profile.weaknesses.combined[0];
+            const focusAreas = profile.recommendation?.focus_areas?.slice(0, 3) || [];
+            const focusList = focusAreas.length > 0
+              ? `\n🎯 Fokus: ${focusAreas.map(a => a.replace(/_/g, ' ')).join(', ')}`
+              : '';
+            base += `\n\n📊 *Kelemahan utamamu:* ${top.skill.replace(/_/g, ' ')} (${top.priority} priority)\n` +
+              `📝 Bukti: ${top.evidence?.slice(0, 2).join('; ') || 'data belum cukup'}` +
+              focusList +
+              `\n\nKetik /weakness untuk lihat profil lengkap + rekomendasi drill.`;
+          }
+        } catch (e) {
+          console.error('[today] weakness injection error:', e);
+        }
+
         const nudge = await maybeAppendNudge(env, user.id);
         await sendMessage(env, chatId, base + nudge);
         // Track /today usage for analytics
@@ -2958,6 +3122,115 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
         }
         await sendMessage(env, chatId, '🏫 Admin Panel', adminKeyboard(env.WEBAPP_URL, user.telegram_id));
         return;
+
+      case '/alerts': {
+        // P1 #11: teacher-facing alerts. Same data as the dashboard's
+        // "Alerts" tab, but rendered in Telegram so teachers see issues
+        // without opening the webapp. Identifies:
+        //   - churn_risk: students who stopped doing questions in last 7d
+        //   - struggling: high volume but accuracy < 40%
+        //   - plateauing: active but no improvement
+        //   - close_to_goal: near target score
+        if (user.role !== 'teacher' && user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Teachers and admins only.');
+          return;
+        }
+        try {
+          const now = Date.now();
+          const oneDayAgo = new Date(now - 24 * 3600 * 1000).toISOString();
+          const threeDaysAgo = new Date(now - 3 * 24 * 3600 * 1000).toISOString();
+          const sevenDaysAgo = new Date(now - 7 * 24 * 3600 * 1000).toISOString();
+          const fourteenDaysAgo = new Date(now - 14 * 24 * 3600 * 1000).toISOString();
+
+          // 1. Churn risk: was active in last 3 days, then stopped
+          const churnRisk = await env.DB.prepare(
+            `SELECT u.id, u.name, u.target_test
+             FROM users u
+             WHERE u.role IN ('student', 'user')
+             AND u.id IN (
+               SELECT DISTINCT ta.user_id FROM test_attempts ta
+               WHERE ta.started_at >= ? AND ta.started_at < ?
+             )
+             AND u.id NOT IN (
+               SELECT DISTINCT ta.user_id FROM test_attempts ta
+               WHERE ta.started_at >= ?
+             )
+             LIMIT 10`
+          ).bind(threeDaysAgo, oneDayAgo, oneDayAgo).all();
+
+          // 2. Struggling: high volume but accuracy < 40%
+          const struggling = await env.DB.prepare(
+            `SELECT u.id, u.name, u.target_test,
+                    COUNT(aa.id) as questions,
+                    ROUND(AVG(CASE WHEN aa.is_correct = 1 THEN 100.0 ELSE 0.0 END), 0) as accuracy
+             FROM users u
+             JOIN test_attempts ta ON ta.user_id = u.id
+             JOIN attempt_answers aa ON aa.attempt_id = ta.id
+             WHERE u.role IN ('student', 'user')
+             AND aa.submitted_at >= ?
+             GROUP BY u.id
+             HAVING questions >= 10 AND accuracy < 40
+             ORDER BY accuracy ASC
+             LIMIT 10`
+          ).bind(sevenDaysAgo).all();
+
+          // 3. Close to goal: estimated band >= 5.0
+          const closeToGoal = await env.DB.prepare(
+            `SELECT u.id, u.name, u.target_test,
+                    ROUND(AVG(CASE WHEN aa.is_correct = 1 THEN 100.0 ELSE 0.0 END), 0) as accuracy
+             FROM users u
+             JOIN test_attempts ta ON ta.user_id = u.id
+             JOIN attempt_answers aa ON aa.attempt_id = ta.id
+             WHERE u.role IN ('student', 'user')
+             AND aa.submitted_at >= ?
+             GROUP BY u.id
+             HAVING accuracy >= 70
+             ORDER BY accuracy DESC
+             LIMIT 10`
+          ).bind(sevenDaysAgo).all();
+
+          let msg = `🚨 *Teacher Alerts*\n\n`;
+
+          if (churnRisk.results?.length) {
+            msg += `🔴 *Churn risk (${churnRisk.results.length}):*\n`;
+            for (const s of (churnRisk.results as any[]).slice(0, 5)) {
+              msg += `  • ${s.name} (${(s.target_test || '?').replace(/_/g, ' ')}) — terakhir aktif 3 hari lalu\n`;
+            }
+            msg += `\n`;
+          }
+
+          if (struggling.results?.length) {
+            msg += `🟠 *Struggling (${struggling.results.length}):*\n`;
+            for (const s of (struggling.results as any[]).slice(0, 5)) {
+              msg += `  • ${s.name} — ${s.questions} soal, ${s.accuracy}% akurasi\n`;
+            }
+            msg += `\n`;
+          }
+
+          if (closeToGoal.results?.length) {
+            msg += `🟢 *Close to goal (${closeToGoal.results.length}):*\n`;
+            for (const s of (closeToGoal.results as any[]).slice(0, 5)) {
+              msg += `  • ${s.name} — ${s.accuracy}% akurasi 🎉\n`;
+            }
+            msg += `\n`;
+          }
+
+          const total = (churnRisk.results?.length || 0) + (struggling.results?.length || 0) + (closeToGoal.results?.length || 0);
+          if (total === 0) {
+            msg = `✅ *Tidak ada alert aktif!*\n\nSemua siswa aktif dan progress-nya sehat.`;
+          }
+
+          await sendMessage(env, chatId, msg, {
+            inline_keyboard: [
+              [{ text: '📊 Buka Dashboard Lengkap', web_app: { url: `${env.WEBAPP_URL}/admin?tg_id=${String(user.telegram_id).replace('.0', '')}` } }],
+            ],
+          });
+        } catch (e: any) {
+          console.error('/alerts error:', e?.message || e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat alerts. Coba lagi.');
+        }
+        return;
+      }
 
       case '/broadcast': {
         if (user.role !== 'teacher' && user.role !== 'admin') {
@@ -5373,6 +5646,97 @@ async function handleCallbackQuery(query: any, env: Env) {
     return;
   }
 
+  // P0 #2: show_weakness — re-render the /weakness profile as a callback
+  // (e.g. from /profile button). Same rendering as the command.
+  if (data === 'show_weakness') {
+    try {
+      const { getStudentWeaknessProfile } = await import('../services/weakness-analysis');
+      const profile = await getStudentWeaknessProfile(env, user.id, user.name || 'Kamu');
+
+      let msg = `📊 *Profil Kelemahan Kamu*\n\n`;
+      if (profile.diagnostic.has_diagnostic && profile.diagnostic.estimated_band) {
+        msg += `🎯 Estimasi band: *${profile.diagnostic.estimated_band}*\n\n`;
+      }
+      if (profile.weaknesses.combined.length > 0) {
+        const top3 = profile.weaknesses.combined.slice(0, 3);
+        msg += `🔴 *Prioritas:*\n`;
+        for (const w of top3) {
+          const emoji = w.priority === 'high' ? '🔴' : w.priority === 'medium' ? '🟡' : '🟢';
+          msg += `${emoji} ${w.skill.replace(/_/g, ' ')}\n`;
+        }
+        msg += `\n`;
+      }
+      if (profile.recommendation) {
+        msg += `💡 *Rekomendasi:* ${profile.recommendation.action}\n`;
+      }
+      await editMessage(env, chatId, messageId, msg, {
+        inline_keyboard: [
+          [
+            { text: '🎯 Drill Kelemahan', callback_data: 'drill_weakness' },
+            { text: '📖 Lesson Plan', callback_data: 'show_lessons' },
+          ],
+          [{ text: '🔙 Menu Utama', callback_data: 'back_study' }],
+        ],
+      });
+    } catch (e) {
+      console.error('show_weakness error:', e);
+      await editMessage(env, chatId, messageId, '⚠️ Gagal memuat. Coba lagi.');
+    }
+    return;
+  }
+
+  // P0 #2: drill_weakness — start a mini drill targeting the top weakness.
+  // Picks the top weakness skill, then asks the test runner for 5 questions
+  // in the matching section with that skill_tag. This closes the loop:
+  // identify gap → drill gap → track in weakness profile again.
+  if (data === 'drill_weakness') {
+    try {
+      const { getStudentWeaknessProfile } = await import('../services/weakness-analysis');
+      const profile = await getStudentWeaknessProfile(env, user.id, user.name || 'Kamu');
+      const top = profile.weaknesses.combined?.[0];
+      if (!top) {
+        await editMessage(env, chatId, messageId,
+          '🎉 Belum ada kelemahan yang teridentifikasi. Coba /test atau /diagnostic dulu.');
+        return;
+      }
+
+      // Map weakness skill → section for the drill. Heuristic: tenses/grammar
+      // → reading, vocab → reading, listening-related → listening, etc.
+      // Falls back to reading if no mapping found.
+      const skill = top.skill.toLowerCase();
+      let section = 'reading';
+      if (skill.includes('listen') || skill.includes('audio')) section = 'listening';
+      else if (skill.includes('speak') || skill.includes('pronunc')) section = 'speaking';
+      else if (skill.includes('write') || skill.includes('essay')) section = 'writing';
+
+      const { suggestDrills } = await import('../services/pre-test-drill');
+      const drill = await suggestDrills(env, user.id, section, 1);
+      if (!drill || drill.concepts.length === 0) {
+        await editMessage(env, chatId, messageId,
+          `🎯 Mau drill ${top.skill.replace(/_/g, ' ')} (${section}) tapi belum ada soal tersedia.\n\n` +
+          `Coba section lain: /test → ${section} (10 soal acak)`);
+        return;
+      }
+
+      const concept = drill.concepts[0].concept;
+      await editMessage(env, chatId, messageId,
+        `🎯 *Drill: ${top.skill.replace(/_/g, ' ')}*\n\n` +
+        `${drill.rationale || 'Fokus pada kelemahan utamamu.'}\n\n` +
+        `⏱️ ~5 menit | ${drill.count} soal`);
+      // Open webapp with drill context
+      const webappUrl = `${env.WEBAPP_URL}/test?tg_id=${String(user.telegram_id).replace('.0', '')}&drill=1&concept=${encodeURIComponent(concept)}&count=${drill.count}`;
+      await sendMessage(env, chatId, `Buka drill:`, {
+        inline_keyboard: [
+          [{ text: '🎯 Mulai Drill (5 soal)', web_app: { url: webappUrl } }],
+        ],
+      });
+    } catch (e) {
+      console.error('drill_weakness error:', e);
+      await editMessage(env, chatId, messageId, '⚠️ Gagal memulai drill. Coba lagi.');
+    }
+    return;
+  }
+
   if (data.startsWith('lesson_start_') || data.startsWith('lesson_skip_') || data.startsWith('lesson_complete_')) {
     const planId = parseInt(data.replace(/lesson_(start|skip|complete)_/, ''));
     const isSkip = data.startsWith('lesson_skip_');
@@ -6449,6 +6813,60 @@ async function handleCallbackQuery(query: any, env: Env) {
       return;
     }
 
+    // P1 #8: Quick Test — opens the mini-app quick test (5 soal, ~5 menit).
+    // Deployed frontend already supports ?drill=1&concept=main_idea&count=5
+    // (added in P0 Quick Test commit b0f678d). Routes user to the same flow
+    // as the TestSelection Quick Test button.
+    if (data === 'study_quicktest') {
+      const webappUrl = `${env.WEBAPP_URL}/test?tg_id=${String(freshUser.telegram_id).replace('.0', '')}&drill=1&concept=main_idea&count=5`;
+      await editMessage(env, chatId, messageId,
+        `⚡ *Quick Test*\n\n5 soal acak, ~5 menit. Cocok buat kamu yang cuma punya waktu sebentar.\n\nKlik tombol di bawah:`,
+        {
+          inline_keyboard: [
+            [{ text: '⚡ Mulai Quick Test (5 soal)', web_app: { url: webappUrl } }],
+            [{ text: '🔙 Kembali', callback_data: 'study_menu' }],
+          ],
+        }
+      );
+      return;
+    }
+
+    // P1 #8: Review — opens vocab review (FSRS). Sends a small batch (3 cards
+    // max) directly in Telegram so the student can do a quick review without
+    // opening the webapp. Falls back to the full vocab menu link if the
+    // student has more cards.
+    if (data === 'study_review') {
+      try {
+        const { getDueVocabReviews, formatVocabCard, formatVocabReviewKeyboard } = await import('../services/vocabulary');
+        const due = await getDueVocabReviews(env, freshUser.id, 3);
+        if (due.length === 0) {
+          await editMessage(env, chatId, messageId,
+            `🎉 *Tidak ada vocab yang perlu di-review!*\n\n` +
+            `Mau tambah kartu baru? Ketik /vocab untuk mulai belajar kata baru.`,
+            {
+              inline_keyboard: [
+                [{ text: '📚 Buka Vocabulary Trainer', web_app: { url: `${env.WEBAPP_URL}/vocab?tg_id=${String(freshUser.telegram_id).replace('.0', '')}` } }],
+                [{ text: '🔙 Kembali', callback_data: 'study_menu' }],
+              ],
+            }
+          );
+          return;
+        }
+
+        // Send first card inline
+        const card = due[0];
+        const msg = `🔄 *Review (FSRS)*\n\n${due.length} kartu menunggu. Here's #1:\n\n` +
+          formatVocabCard(card, true) +
+          `\n\n_Rate how well you know this word:_`;
+        await editMessage(env, chatId, messageId, msg, formatVocabReviewKeyboard(card.id));
+      } catch (e) {
+        console.error('study_review error:', e);
+        await editMessage(env, chatId, messageId,
+          `⚠️ Gagal memuat review. Coba /vocab untuk menu lengkap.`);
+      }
+      return;
+    }
+
     // Daily Challenge
     if (data === 'study_challenge') {
       // Count today's answers
@@ -6513,8 +6931,17 @@ async function handleCallbackQuery(query: any, env: Env) {
     }
 
     // Fallback: any remaining study_ callbacks
+    // Previously this called getTutorResponse (ai.ts) with a generic prompt
+    // and dumped the OpenAI reply. That was a silent UX failure: the
+    // student saw "Study → Grammar → Nouns" and got a random reading
+    // comprehension question. P1 #6: now route to getPrivateTutorResponse
+    // (private-tutor.ts) which has the Socratic persona + reads mental
+    // model + adapts to weakness. This is the DEEP tutor that was already
+    // built but only used in narrow paths. The unmatched-callback log
+    // still happens so we can build explicit handlers.
     if (data.startsWith('study_')) {
-      // Track daily quota for free users
+      console.warn(`[study_fallback] unmatched callback: data="${data}" user=${freshUser.id}`);
+      // Track daily quota for free users (the user did try to engage)
       try {
         const { trackQuestionAnswer, checkTestAccess } = await import('../services/premium');
         const access = await checkTestAccess(env, freshUser.id);
@@ -6528,9 +6955,22 @@ async function handleCallbackQuery(query: any, env: Env) {
       } catch (trackErr) {
         console.error('trackQuestionAnswer error:', trackErr);
       }
-      await editMessage(env, chatId, messageId, '⏳ Sedang berpikir...');
-      const response = await getTutorResponse(env, freshUser, 'Aku mau belajar bahasa Inggris untuk TOEFL iBT. Kasih 1 soal. Maks 8 baris. Plain text.');
-      await sendMessage(env, chatId, response);
+      try {
+        await editMessage(env, chatId, messageId, '⏳ Lagi mikirin personalized drill buat kamu...');
+        const { getPrivateTutorResponse } = await import('../services/private-tutor');
+        const result = await getPrivateTutorResponse(env, freshUser,
+          'Bantu aku dengan materi belajar yang dipersonalisasi. Tanya 1 skill yang mau kupelajari lebih dalam.');
+        await editMessage(env, chatId, messageId, result.text + (result.moodIntervention ? `\n\n${result.moodIntervention}` : ''));
+      } catch (e: any) {
+        console.error('study_fallback private-tutor error:', e?.message || e);
+        // If private-tutor fails (e.g. rate limit), fall back to the
+        // honest "coming soon" message rather than crashing.
+        await editMessage(env, chatId, messageId,
+          `🛠 Lagi ada masalah teknis. Sementara coba:\n` +
+          `• /vocab — Vocabulary trainer\n` +
+          `• /weakness — Profil kelemahan\n` +
+          `• /today — Pelajaran hari ini`);
+      }
       return;
     }
   }

@@ -912,19 +912,29 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
           await ingestWrongsToFsrs(c.env, attemptId, userId);
           const analysis = await analyzeAttempt(c.env, attemptId, userId);
 
-          // Populate test_results.ai_summary so the student sees WHY they
-          // scored what they did when they open the results page a second
-          // time (or when the page loads after the waitUntil finishes).
-          // Rule-based, so no extra OpenAI call or latency.
+          // P1 #7: Populate BOTH ai_summary and detailed_feedback so the
+          // TestResults page can show the full post-test breakdown. Previously
+          // only ai_summary was saved; the rich concept-cluster data from
+          // analyzeAttempt was discarded. Now we persist the full analysis
+          // as detailed_feedback and let the frontend render it.
           try {
             const summary = buildAttemptSummary(analysis, sectionScores, maxBand);
-            if (summary) {
-              await c.env.DB.prepare(
-                'UPDATE test_results SET ai_summary = ? WHERE attempt_id = ?'
-              ).bind(summary, attemptId).run();
-            }
+            const detailPayload = analysis ? JSON.stringify({
+              wrong_count: analysis.wrong_count,
+              total_scored: analysis.total_scored,
+              concept_clusters: (analysis.concept_clusters || []).slice(0, 5).map((c: any) => ({
+                concept: c.concept,
+                miss_count: c.miss_count,
+                priority_score: c.priority_score,
+                humanize: c.humanize || c.concept.replace(/_/g, ' '),
+              })),
+              triaged_concepts: analysis.triaged_concepts || [],
+            }) : null;
+            await c.env.DB.prepare(
+              'UPDATE test_results SET ai_summary = ?, detailed_feedback = ? WHERE attempt_id = ?'
+            ).bind(summary || null, detailPayload, attemptId).run();
           } catch (e: any) {
-            console.error('ai_summary update failed (non-fatal):', e?.message || e);
+            console.error('ai_summary+detailed_feedback update failed (non-fatal):', e?.message || e);
           }
 
           if (analysis && analysis.triaged_concepts && analysis.triaged_concepts.length > 0) {
@@ -1055,6 +1065,33 @@ testRoutes.get('/questions/:section', async (c) => {
       } catch (e) {
         console.error('Smart sequencing error:', e);
         // Fall back to unordered results
+      }
+
+      // P3 #16: IRT-driven adaptive ordering. Reorder questions so the
+      // ones closest to the student's current ability (theta) come first.
+      // The student gets a mix of easy + hard, with the bulk in their
+      // challenge zone. Falls back silently if no IRT profile exists
+      // (new users) or no IRT params exist for the section.
+      try {
+        const { getStudentIRTProfile, getItemParamsBatch } = await import('../services/irt-engine');
+        const profile = await getStudentIRTProfile(c.env.DB, Number(userId));
+        // abilities is IRTAbility[] with .skill field; find the row for this section
+        const abilityRow = profile?.abilities?.find((a: any) => a.skill === section);
+        const theta = abilityRow?.theta ?? null;
+        if (theta !== null) {
+          const ids = questions.map((q: any) => Number(q.id)).filter((x: any) => Number.isInteger(x));
+          const paramsMap = await getItemParamsBatch(c.env.DB, ids);
+          // Sort by |difficulty - theta| ascending (closest difficulty first)
+          questions = [...questions].sort((a: any, b: any) => {
+            const pa = paramsMap.get(Number(a.id));
+            const pb = paramsMap.get(Number(b.id));
+            const aDist = pa ? Math.abs(pa.difficulty - theta) : 999;
+            const bDist = pb ? Math.abs(pb.difficulty - theta) : 999;
+            return aDist - bDist;
+          });
+        }
+      } catch (e) {
+        console.error('IRT adaptive ordering error (non-fatal):', e);
       }
     }
 

@@ -156,10 +156,69 @@ export async function getTutorResponse(
   const { TEST_NAMES } = await import('./teaching');
   const targetTest = TEST_NAMES[user.target_test || 'TOEFL_IBT'] || 'English Test';
 
-  const systemPrompt = TUTOR_SYSTEM_PROMPT
+  let systemPrompt = TUTOR_SYSTEM_PROMPT
     .replaceAll('{name}', user.name)
     .replaceAll('{target_test}', targetTest)
     .replaceAll('{proficiency_level}', user.proficiency_level || 'Unknown');
+
+  // P0 #4: Inject student context so the tutor actually personalizes.
+  // Previously the prompt was just {name}/{target}/{level} — the same
+  // template for every student. Now we layer in:
+  //   1. Mental model — what concepts the student already knows / struggles with
+  //   2. Last 3 wrong answers from practice tests (if any)
+  //   3. Top weakness from the 3-source weakness profile
+  // The model is gpt-4o with 400-token output cap, so we keep this
+  // injection small (~300 chars) to stay within budget.
+  try {
+    const contextBits: string[] = [];
+
+    // 1. Mental model (what they know vs struggle with)
+    try {
+      const { buildMentalModelContext } = await import('./mental-model');
+      const mmContext = await buildMentalModelContext(env, user.id);
+      if (mmContext && mmContext.length > 10) {
+        contextBits.push(`STUDENT CONTEXT:\n${mmContext.slice(0, 800)}`);
+      }
+    } catch { /* mental model optional */ }
+
+    // 2. Last 3 wrong answers from practice
+    try {
+      const recent = await env.DB.prepare(
+        `SELECT aa.section, aa.answer_data, c.question_text
+         FROM attempt_answers aa
+         JOIN test_attempts ta ON aa.attempt_id = ta.id
+         LEFT JOIN test_contents c ON c.id = aa.content_id
+         WHERE ta.user_id = ? AND aa.is_correct = 0
+         ORDER BY aa.id DESC LIMIT 3`
+      ).bind(user.id).all();
+      const wrongs = (recent.results || []) as any[];
+      if (wrongs.length > 0) {
+        const samples = wrongs
+          .map((w, i) => `${i + 1}. [${w.section}] ${(w.question_text || '').slice(0, 80)}`)
+          .join('\n');
+        contextBits.push(`RECENT WRONG ANSWERS:\n${samples}`);
+      }
+    } catch { /* practice history optional */ }
+
+    // 3. Top weakness from 3-source profile
+    try {
+      const { getStudentWeaknessProfile } = await import('./weakness-analysis');
+      const profile = await getStudentWeaknessProfile(env, user.id, user.name || 'Kamu');
+      if (profile.weaknesses?.combined?.length > 0) {
+        const top = profile.weaknesses.combined[0];
+        contextBits.push(`TOP WEAKNESS: ${top.skill.replace(/_/g, ' ')} (${top.priority} priority)`);
+        if (top.evidence?.length > 0) {
+          contextBits.push(`EVIDENCE: ${top.evidence[0]}`);
+        }
+      }
+    } catch { /* weakness profile optional */ }
+
+    if (contextBits.length > 0) {
+      systemPrompt += `\n\n${contextBits.join('\n\n')}`;
+    }
+  } catch (ctxErr) {
+    console.error('[tutor] context injection error (non-fatal):', ctxErr);
+  }
 
   // gpt-4o for AI tutor tasks (smarter, multimodal)
   const model = 'gpt-4o';
