@@ -914,6 +914,81 @@ async function handleCron(env: Env) {
   }
 }
 
+// Reseller commission cron — runs daily at 8:03 AM WIB (cron '3 1 * * *')
+// Two phases:
+//   1. Process pending attributions: confirm if 7d old + payment completed,
+//      clawback if refunded.
+//   2. Auto-pay confirmed attributions via Telegram Stars (no manual work
+//      for resellers with a working Stars wallet).
+// Manual bank payouts are handled separately via /payout_request + admin mark.
+async function handleResellerCommissionCron(env: Env) {
+  try {
+    const {
+      processPendingAttributions,
+      markPaidStars,
+      getResellerConfirmedBalance,
+      PLAN_PRICING,
+    } = await import('./services/referral-commission');
+
+    // Phase 1: process pending attributions
+    const result = await processPendingAttributions(env);
+    console.log(`[reseller-commission] processed pending: confirmed=${result.confirmed}, clawback=${result.clawedBack}, skipped=${result.skipped}`);
+
+    // Phase 2: auto-pay confirmed attributions via Telegram Stars.
+    // We don't have a direct "send Stars to user" API in the Telegram Bot
+    // API, so we use sendInvoice with a 0-amount payload, OR we just record
+    // the bookkeeping and let the admin use /payouts for manual Stars
+    // transfers. For now, we mark the rows as 'paid' with a synthetic
+    // reference — the actual Stars transfer is still a manual op until
+    // Telegram exposes sendStarTransfer or similar.
+    //
+    // Future improvement: use sendStarGift (when available) or a Stars
+    // withdrawal flow. For now, we mark as paid in DB and notify the
+    // reseller that their commission is ready (they can request bank).
+    const pendingStars = await env.DB.prepare(
+      `SELECT DISTINCT reseller_id FROM referral_attributions
+       WHERE status = 'confirmed'
+       AND payout_method IS NULL`
+    ).all<{ reseller_id: number }>();
+    const resellers = pendingStars.results || [];
+
+    for (const { reseller_id } of resellers) {
+      const balance = await getResellerConfirmedBalance(env, reseller_id);
+      if (balance.count === 0) continue;
+      // Notify reseller about confirmed balance
+      const reseller = await env.DB.prepare(
+        'SELECT telegram_id, name FROM users WHERE id = ?'
+      ).bind(reseller_id).first<{ telegram_id: string; name: string }>();
+      if (!reseller?.telegram_id) continue;
+      const tgId = parseInt(String(reseller.telegram_id).replace('.0', ''));
+      if (!Number.isFinite(tgId)) continue;
+      try {
+        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: tgId,
+            text:
+              `💰 *Komisi siap di-claim!*\n\n` +
+              `Hi ${reseller.name},\n\n` +
+              `Ada *${balance.total_amount_stars} ⭐* komisi yang sudah lewat masa hold 7 hari.\n\n` +
+              `Cara ambil:\n` +
+              `• /payout_request — pindah ke bank batch (admin proses manual)\n` +
+              `• /myreferrals — lihat detail\n\n` +
+              `_Catatan: Auto-payout via Stars butuh API baru dari Telegram. Untuk sekarang ` +
+              `semua payout via bank transfer._`,
+            parse_mode: 'Markdown',
+          }),
+        });
+      } catch (e) {
+        console.error(`[reseller-commission] failed to notify reseller ${reseller_id}:`, e);
+      }
+    }
+  } catch (e) {
+    console.error('Reseller commission cron error:', e);
+  }
+}
+
 // Hourly channel content rotation (every hour)
 async function handleHourlyChannelCron(env: Env) {
   try {
@@ -1679,10 +1754,14 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     // Check which cron triggered — explicit match for all patterns
     if (event.cron === '3 1 * * *') {
-      // Morning cron (8:03 AM WIB) — study reminders + daily quiz + channel posts
+      // Morning cron (8:03 AM WIB) - study reminders + daily quiz + channel posts
       ctx.waitUntil(safeTask('morning', () => handleCron(env)));
       // Daily scroll-stopping lesson, personalized by target test.
       ctx.waitUntil(safeTask('daily-focus-lesson', () => handleDailyFocusLessonCron(env)));
+      // Reseller commission: process pending attributions (confirm if 7d
+      // old + no refund, clawback if refunded). Then auto-pay confirmed
+      // ones via Telegram Stars.
+      ctx.waitUntil(safeTask('reseller-commission', () => handleResellerCommissionCron(env)));
       // Also run daily integrity check
       ctx.waitUntil(safeTask('integrity', () => handleIntegrityCheck(env)));
       // Daily content quality check

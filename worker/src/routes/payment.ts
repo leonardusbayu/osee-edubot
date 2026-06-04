@@ -184,6 +184,46 @@ paymentRoutes.post('/tripay/callback', async (c) => {
         'INSERT INTO star_transactions (user_id, amount, type, description, payment_id) VALUES (?, ?, ?, ?, ?)'
       ).bind(userId, days * 100, 'purchase', `Premium ${days} days via Tripay`, merchantRef).run();
 
+      // Referral commission: also create a payment_requests row so the
+      // 7-day cron finds it. We can't INSERT into payment_requests with
+      // a duplicate (user_id, plan_days) because there's no unique
+      // constraint — the idempotency check is on payment_transactions.
+      // So we look up the existing payment_requests row for this user+days
+      // (if any) and reuse it, otherwise INSERT a new one. Then attribute.
+      try {
+        const existingReq = await c.env.DB.prepare(
+          `SELECT id FROM payment_requests
+           WHERE user_id = ? AND days = ? AND method = 'tripay'
+           ORDER BY id DESC LIMIT 1`
+        ).bind(userId, days).first<{ id: number }>();
+        let paymentReqId = existingReq?.id;
+        if (!paymentReqId) {
+          const prResult = await c.env.DB.prepare(
+            `INSERT INTO payment_requests
+               (user_id, amount, days, method, status, confirmed_at, notes)
+             VALUES (?, ?, ?, 'tripay', 'completed', datetime('now'), ?)`
+          ).bind(
+            userId,
+            0,  // amount not in Stars for Tripay path; commission logic uses PLAN_PRICING
+            days,
+            `Tripay ${merchantRef}`
+          ).run();
+          paymentReqId = prResult.meta.last_row_id as number;
+        }
+        const { attributeOnPurchase, PLAN_PRICING } = await import('../services/referral-commission');
+        const planAmountStars = PLAN_PRICING[days] || 0;
+        if (planAmountStars > 0) {
+          await attributeOnPurchase(c.env, {
+            customerId: userId,
+            paymentId: paymentReqId,
+            planDays: days,
+            planAmountStars,
+          });
+        }
+      } catch (e) {
+        console.error('[tripay-callback] referral attribution error (non-fatal):', e);
+      }
+
       // Grant referral reward if applicable
       try {
         await grantReferralReward(c.env, userId, days, c.env.TELEGRAM_BOT_TOKEN);

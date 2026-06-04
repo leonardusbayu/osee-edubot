@@ -1073,10 +1073,44 @@ export async function handleWebhook(update: any, env: Env) {
           expiresAt.setDate(expiresAt.getDate() + days);
           await env.DB.prepare('UPDATE users SET is_premium = 1, premium_until = ? WHERE id = ?')
             .bind(expiresAt.toISOString(), userId).run();
+
+          // Referral commission: insert a payment_requests row (so the
+          // 7-day cron can find it and confirm the attribution), then
+          // call attributeOnPurchase which creates a pending referral
+          // attribution if the user had a reseller code applied. If
+          // no code applied, this is a no-op.
+          try {
+            const prResult = await env.DB.prepare(
+              `INSERT INTO payment_requests
+                 (user_id, amount, days, method, status, confirmed_at, notes)
+               VALUES (?, ?, ?, 'stars', 'completed', datetime('now'), ?)`
+            ).bind(
+              userId,
+              payment.total_amount,  // Stars (XTR), not rupiah
+              days,
+              `Stars payment: ${payment.telegram_payment_charge_id}`
+            ).run();
+            const paymentReqId = prResult.meta.last_row_id as number;
+
+            const { attributeOnPurchase, PLAN_PRICING } = await import('../services/referral-commission');
+            // Use the plan amount in Stars from PLAN_PRICING (matches the
+            // /buy options shown to the user). Fall back to total_amount
+            // from the actual charge if the days aren't in PLAN_PRICING.
+            const planAmountStars = PLAN_PRICING[days] || payment.total_amount;
+            await attributeOnPurchase(env, {
+              customerId: userId,
+              paymentId: paymentReqId,
+              planDays: days,
+              planAmountStars,
+            });
+          } catch (e) {
+            console.error('[successful-payment] referral attribution error (non-fatal):', e);
+          }
+
           await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              chat_id: chatId, 
+            body: JSON.stringify({
+              chat_id: chatId,
               text: `🎉 *Premium Aktif!*\n\nKamu sekarang punya akses premium selama ${days} hari!\n📅 Berakhir: ${expiresAt.toLocaleDateString('id-ID')}\n\nKetik /premium untuk cek status.`,
               parse_mode: 'Markdown'
             }),
@@ -1837,6 +1871,8 @@ async function handleMessage(message: any, env: Env) {
         const premiumHelp = `⭐ *Premium & Referral*\n\n` +
           `/premium — Cek status atau upgrade\n` +
           `/redeem KODE — Tukar kode premium (dari guru)\n` +
+          `/refer KODE — Referral teman (bonus +5 soal)\n` +
+          `/reseller KODE — Pakai kode reseller (kasih komisi 20% ke reseller)\n` +
           `/referral — Lihat kode & link referral\n\n` +
           `🎁 *Referral:* Ajak teman = dapat gratis!`;
 
@@ -1844,7 +1880,11 @@ async function handleMessage(message: any, env: Env) {
           `/admin — Dashboard siswa\n` +
           `/broadcast — Kirim ke semua siswa\n` +
           `/addclass — Hubungkan grup Telegram\n` +
-          `/today — Check daily class activity`;
+          `/today — Check daily class activity\n` +
+          `/alerts — Alerts (churn/struggling/close-to-goal)\n` +
+          `/gencode @user KODE — Generate kode reseller\n` +
+          `/payouts — List pending bank payouts\n` +
+          `/payouts_mark_paid ID — Mark bank payout as done`;
 
         const adminHelp = `👑 *Admin Commands*\n\n` +
           `/stats — Statistik sistem\n` +
@@ -3263,6 +3303,237 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
       }
 
       // ═══════════════════════════════════════════════════════
+      // RESELLER / AFFILIATE COMMANDS
+      // ═══════════════════════════════════════════════════════
+      // /mycode      — show your code + shareable link
+      // /myreferrals — see your commission stats (pending/confirmed/paid)
+      // /payout_request — bundle all confirmed commissions into a bank batch
+      //
+      // Customer-side: /reseller BUDI03 (handled elsewhere)
+      // Admin-side:   /gencode, /payouts, /payouts_mark_paid
+
+      case '/mycode': {
+        if (user.role !== 'reseller' && user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Khusus reseller. Hubungi admin untuk jadi reseller.');
+          return;
+        }
+        try {
+          const { listCodes } = await import('../services/referral-commission');
+          const codes = await listCodes(env, 5);
+          const myCodes = codes.filter((c: any) => c.reseller_id === user.id);
+          if (myCodes.length === 0) {
+            await sendMessage(env, chatId,
+              `❌ Belum ada kode reseller. Hubungi admin untuk generate kode pertama kamu.`);
+            return;
+          }
+          const botUsername = (env.TELEGRAM_BOT_TOKEN?.split(':')[0] || 'OSEE_TOEFL_IELTS_TOEIC_study_bot');
+          let msg = `🏷️ *Kode Reseller Kamu*\n\n`;
+          for (const c of myCodes) {
+            const shareLink = `https://t.me/${botUsername}?start=reseller_${c.code}`;
+            msg += `• \`${c.code}\` — ${c.total_uses} customer, ${c.total_commission_stars} ⭐ earned\n`;
+            msg += `  Share: ${shareLink}\n\n`;
+          }
+          msg += `💡 *Tips share:* Kirim link di atas ke customer. Mereka tinggal klik, ` +
+                 `otomatis pakai kode kamu pas mulai bot. Atau customer bisa manual: ` +
+                 `/reseller ${myCodes[0].code}`;
+          await sendMessage(env, chatId, msg, {
+            inline_keyboard: [
+              [{ text: '📊 Lihat Stats', callback_data: 'myreferrals' }],
+              [{ text: '💰 Request Payout', callback_data: 'payout_request' }],
+            ],
+          });
+        } catch (e) {
+          console.error('/mycode error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat kode. Coba lagi.');
+        }
+        return;
+      }
+
+      case '/myreferrals': {
+        if (user.role !== 'reseller' && user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Khusus reseller.');
+          return;
+        }
+        try {
+          const { getResellerStats } = await import('../services/referral-commission');
+          const stats = await getResellerStats(env, user.id);
+          let msg = `📊 *Stats Reseller*\n\n`;
+          msg += `👥 Total customer: ${stats.pending.count + stats.confirmed.count + stats.paid.count + stats.clawback.count}\n`;
+          msg += `💰 Total revenue generated: ${stats.total_revenue_stars} ⭐\n\n`;
+          msg += `📊 *Komisi:*\n`;
+          msg += `⏳ Pending (hold 7d): ${stats.pending.count} (${stats.pending.total_stars} ⭐)\n`;
+          msg += `✅ Confirmed (payable): ${stats.confirmed.count} (${stats.confirmed.total_stars} ⭐)\n`;
+          msg += `💸 Paid: ${stats.paid.count} (${stats.paid.total_stars} ⭐)\n`;
+          msg += `↩️ Clawback (refund): ${stats.clawback.count} (${stats.clawback.total_stars} ⭐)\n\n`;
+
+          if (stats.confirmed.count > 0) {
+            msg += `💡 *${stats.confirmed.total_stars} ⭐ siap di-claim.* ` +
+                   `Kirim /payout_request untuk pindah ke bank batch. ` +
+                   `(Auto-paid via Telegram Stars untuk reseller yang punya Stars wallet.)`;
+          } else if (stats.pending.count > 0) {
+            msg += `⏳ Tunggu 7 hari setelah customer beli baru komisi jadi confirmed.`;
+          } else {
+            msg += `Belum ada customer yang beli pakai kode kamu. ` +
+                   `Share link kode kamu untuk mulai!`;
+          }
+          await sendMessage(env, chatId, msg, {
+            inline_keyboard: [
+              [{ text: '🏷️ Kode Saya', callback_data: 'mycode' }],
+              [{ text: '💰 Request Payout', callback_data: 'payout_request' }],
+            ],
+          });
+        } catch (e) {
+          console.error('/myreferrals error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat stats. Coba lagi.');
+        }
+        return;
+      }
+
+      case '/payout_request': {
+        if (user.role !== 'reseller' && user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Khusus reseller.');
+          return;
+        }
+        try {
+          const { createBankPayoutRequest } = await import('../services/referral-commission');
+          const result = await createBankPayoutRequest(env, user.id);
+          if (!result) {
+            await sendMessage(env, chatId,
+              `ℹ️ Belum ada komisi yang siap di-claim.\n\n` +
+              `Komisi butuh 7 hari setelah customer beli sebelum jadi payable. ` +
+              `Cek /myreferrals untuk lihat status.`);
+            return;
+          }
+          await sendMessage(env, chatId,
+            `💰 *Payout Request Dibuat*\n\n` +
+            `Payout ID: #${result.payoutId}\n` +
+            `Jumlah: *${result.totalAmountStars} ⭐*\n` +
+            `Atribusi: ${result.attributionCount} customer\n\n` +
+            `Admin akan proses transfer bank kamu dalam 1-3 hari kerja. ` +
+            `Pastikan data rekening kamu sudah lengkap (hubungi admin).`);
+        } catch (e) {
+          console.error('/payout_request error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal membuat payout request. Coba lagi.');
+        }
+        return;
+      }
+
+      // ─── Admin: generate reseller code ───
+
+      case '/gencode': {
+        if (user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Admin only.');
+          return;
+        }
+        const parts = text.split(/\s+/);
+        // Format: /gencode USER_ID_OR_USERNAME CODE
+        if (parts.length < 3) {
+          await sendMessage(env, chatId,
+            `🏷️ *Generate Reseller Code*\n\n` +
+            `Format:\n` +
+            `• /gencode @username CODE — pakai username\n` +
+            `• /gencode USER_ID CODE — pakai numeric ID\n\n` +
+            `Contoh: /gencode @budiganteng BUDI03`);
+          return;
+        }
+        const userRef = parts[1].replace('@', '');
+        const codeStr = parts[2].toUpperCase().trim();
+        try {
+          const { createCode, promoteToReseller } = await import('../services/referral-commission');
+          // Resolve user
+          let userRow: any = null;
+          if (/^\d+$/.test(userRef)) {
+            userRow = await env.DB.prepare('SELECT id, name, role FROM users WHERE id = ?').bind(Number(userRef)).first();
+          } else {
+            userRow = await env.DB.prepare('SELECT id, name, role FROM users WHERE username = ? OR name LIKE ? LIMIT 1')
+              .bind(userRef, `${userRef}%`).first();
+          }
+          if (!userRow) {
+            await sendMessage(env, chatId, `❌ User "${userRef}" tidak ditemukan.`);
+            return;
+          }
+          // Promote to reseller if not already
+          const promoteResult = await promoteToReseller(env, userRow.id);
+          // Create code
+          const code = await createCode(env, { code: codeStr, resellerId: userRow.id, notes: `created by admin ${user.name} on ${new Date().toISOString().split('T')[0]}` });
+          await sendMessage(env, chatId,
+            `✅ *Kode reseller dibuat!*\n\n` +
+            `Reseller: ${userRow.name} (id=${userRow.id})\n` +
+            `Kode: \`${code.code}\`\n` +
+            (promoteResult.updated ? `Role: dipromosikan ke reseller\n` : '') +
+            `\nShare link: https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=reseller_${code.code}`);
+        } catch (e: any) {
+          await sendMessage(env, chatId, `⚠️ Gagal: ${e?.message || e}`);
+        }
+        return;
+      }
+
+      // ─── Admin: list pending bank payouts ───
+
+      case '/payouts': {
+        if (user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Admin only.');
+          return;
+        }
+        try {
+          const { listPendingPayouts } = await import('../services/referral-commission');
+          const pending = await listPendingPayouts(env, 20);
+          if (pending.length === 0) {
+            await sendMessage(env, chatId, `✅ Tidak ada pending bank payout.`);
+            return;
+          }
+          let msg = `💰 *Pending Bank Payouts*\n\n`;
+          for (const p of pending) {
+            msg += `#${p.id} — ${p.reseller_name} (tg:${p.reseller_telegram_id})\n`;
+            msg += `  *${p.total_amount_stars} ⭐* — created ${p.created_at}\n`;
+            msg += `  Mark paid: /payouts_mark_paid ${p.id} [reference]\n\n`;
+          }
+          await sendMessage(env, chatId, msg);
+        } catch (e) {
+          console.error('/payouts error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat payouts.');
+        }
+        return;
+      }
+
+      // ─── Admin: mark a bank payout as paid ───
+
+      case '/payouts_mark_paid': {
+        if (user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Admin only.');
+          return;
+        }
+        const parts = text.split(/\s+/);
+        const payoutId = parseInt(parts[1] || '');
+        if (!payoutId) {
+          await sendMessage(env, chatId, `Format: /payouts_mark_paid ID [reference]\n\nContoh: /payouts_mark_paid 5 BCA-2026-06-02-001`);
+          return;
+        }
+        const reference = parts.slice(2).join(' ') || null;
+        try {
+          const { completeBankPayout } = await import('../services/referral-commission');
+          const result = await completeBankPayout(env, { payoutId, reference });
+          if (!result) {
+            await sendMessage(env, chatId, `❌ Payout #${payoutId} tidak ditemukan.`);
+            return;
+          }
+          if (result.updated === 0) {
+            await sendMessage(env, chatId, `⚠️ Payout #${payoutId} sudah completed.`);
+            return;
+          }
+          await sendMessage(env, chatId,
+            `✅ Payout #${payoutId} marked as paid.\n` +
+            `Reseller id: ${result.resellerId}\n` +
+            `Amount: *${result.payoutAmount} ⭐*\n` +
+            `Updated ${result.updated} attribution rows.`);
+        } catch (e) {
+          console.error('/payouts_mark_paid error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal marking payout.');
+        }
+        return;
+      }
+
+      // ═══════════════════════════════════════════════════════
       // PREMIUM REDEMPTION CODES — teacher-as-reseller channel
       // ═══════════════════════════════════════════════════════
       // Students redeem one-time codes that teachers bought in bulk from
@@ -4065,6 +4336,57 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           await sendMessage(env, chatId, 'Referral berhasil! Kamu dapat +50 XP bonus.');
         } else {
           await sendMessage(env, chatId, 'Kode referral tidak valid atau sudah digunakan.');
+        }
+        return;
+      }
+
+      case '/reseller': {
+        // Reseller/affiliate code application. Different from /refer
+        // (which is friend-to-friend +50 XP). /reseller applies a code
+        // owned by a role='reseller' user; the system credits the
+        // reseller with a 20% commission on the customer's first
+        // premium purchase. The code is recorded on the customer and
+        // attributed when they pay.
+        const code = (text.split(' ')[1] || '').trim();
+        if (!code) {
+          await sendMessage(env, chatId,
+            `🏷️ *Pakai Kode Reseller*\n\n` +
+            `Format: /reseller KODE\n\n` +
+            `Contoh: /reseller BUDI03\n\n` +
+            `Kode reseller memberikan reseller komisi 20% dari plan kamu. ` +
+            `Kamu tetap dapat full akses premium tanpa diskon — bedanya, ` +
+            `reseller yang referensikan kamu dapat bagian.`);
+          return;
+        }
+        try {
+          const { applyCodeToCustomer } = await import('../services/referral-commission');
+          const result = await applyCodeToCustomer(env, { code, customerId: user.id });
+          // Get the reseller's name for a friendly confirmation
+          const reseller = await env.DB.prepare(
+            'SELECT name FROM users WHERE id = ?'
+          ).bind(result.resellerId).first<{ name: string }>();
+          await sendMessage(env, chatId,
+            `✅ *Kode reseller berhasil dipasang!*\n\n` +
+            `Kode: \`${code}\`\n` +
+            (reseller?.name ? `Reseller: ${reseller.name}\n\n` : `\n`) +
+            `Sekarang setiap kali kamu beli premium plan, reseller di atas ` +
+            `akan dapat komisi 20%. Kamu tetap dapat full akses seperti biasa.\n\n` +
+            `Untuk beli: /buy`);
+        } catch (e: any) {
+          const msg = String(e?.message || e);
+          if (msg.includes('sendiri')) {
+            await sendMessage(env, chatId, '😅 Kamu tidak bisa pakai kode referral sendiri.');
+          } else if (msg.includes('sudah pernah')) {
+            await sendMessage(env, chatId,
+              `⚠️ Kamu sudah pernah pakai kode reseller. ` +
+              `Satu akun hanya bisa pakai satu kode reseller saja.`);
+          } else if (msg.includes('tidak ditemukan')) {
+            await sendMessage(env, chatId,
+              `❌ Kode reseller "${code}" tidak ditemukan atau sudah tidak aktif. ` +
+              `Cek lagi kodenya, atau tanya reseller kamu.`);
+          } else {
+            await sendMessage(env, chatId, `⚠️ Gagal: ${msg}`);
+          }
         }
         return;
       }
@@ -6863,6 +7185,55 @@ async function handleCallbackQuery(query: any, env: Env) {
         console.error('study_review error:', e);
         await editMessage(env, chatId, messageId,
           `⚠️ Gagal memuat review. Coba /vocab untuk menu lengkap.`);
+      }
+      return;
+    }
+
+    // Reseller callback buttons (mycode, myreferrals, payout_request)
+    if (data === 'mycode' || data === 'myreferrals' || data === 'payout_request') {
+      if (freshUser.role !== 'reseller' && freshUser.role !== 'admin') {
+        await editMessage(env, chatId, messageId, '⛔ Khusus reseller.');
+        return;
+      }
+      try {
+        if (data === 'mycode') {
+          const { listCodes } = await import('../services/referral-commission');
+          const codes = await listCodes(env, 5);
+          const myCodes = codes.filter((c: any) => c.reseller_id === freshUser.id);
+          if (myCodes.length === 0) {
+            await editMessage(env, chatId, messageId, '❌ Belum ada kode reseller. Hubungi admin.');
+            return;
+          }
+          const botUsername = (env.TELEGRAM_BOT_TOKEN?.split(':')[0] || 'OSEE_TOEFL_IELTS_TOEIC_study_bot');
+          let msg = `🏷️ *Kode Reseller Kamu*\n\n`;
+          for (const c of myCodes) {
+            const shareLink = `https://t.me/${botUsername}?start=reseller_${c.code}`;
+            msg += `• \`${c.code}\` — ${c.total_uses} customer, ${c.total_commission_stars} ⭐\n`;
+            msg += `  Share: ${shareLink}\n\n`;
+          }
+          await editMessage(env, chatId, messageId, msg);
+        } else if (data === 'myreferrals') {
+          const { getResellerStats } = await import('../services/referral-commission');
+          const stats = await getResellerStats(env, freshUser.id);
+          let msg = `📊 *Stats Reseller*\n\n`;
+          msg += `⏳ Pending: ${stats.pending.count} (${stats.pending.total_stars} ⭐)\n`;
+          msg += `✅ Confirmed: ${stats.confirmed.count} (${stats.confirmed.total_stars} ⭐)\n`;
+          msg += `💸 Paid: ${stats.paid.count} (${stats.paid.total_stars} ⭐)\n`;
+          msg += `↩️ Clawback: ${stats.clawback.count}\n`;
+          await editMessage(env, chatId, messageId, msg);
+        } else if (data === 'payout_request') {
+          const { createBankPayoutRequest } = await import('../services/referral-commission');
+          const result = await createBankPayoutRequest(env, freshUser.id);
+          if (!result) {
+            await editMessage(env, chatId, messageId, 'ℹ️ Belum ada komisi yang siap di-claim.');
+            return;
+          }
+          await editMessage(env, chatId, messageId,
+            `💰 Payout request #${result.payoutId} dibuat. ${result.totalAmountStars} ⭐, ${result.attributionCount} customer.`);
+        }
+      } catch (e) {
+        console.error(`reseller callback ${data} error:`, e);
+        await editMessage(env, chatId, messageId, '⚠️ Gagal memuat. Coba lagi.');
       }
       return;
     }
