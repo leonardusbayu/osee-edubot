@@ -163,3 +163,18 @@ blogRoutes.get('/admin/stats', async (c) => {
   const stats = await getClickStats(c.env, days);
   return c.json(stats);
 });
+
+// Admin: seed today's blog articles. Used as a backstop if the
+// morning cron didn't run, and to make the channel CTA links resolve
+// to real content immediately after a deploy. Idempotent: re-running
+// on the same day updates the same row.
+blogRoutes.post('/admin/seed', async (c) => {
+  const { publishVocabOfTheDay, publishQuizOfTheDay } = await import('../services/blog');
+  const vocab = await publishVocabOfTheDay(c.env);
+  const quiz = await publishQuizOfTheDay(c.env);
+  return c.json({
+    ok: true,
+    vocab: vocab ? { slug: vocab.slug, title: vocab.title, view_count: vocab.view_count } : null,
+    quiz: quiz ? { slug: quiz.slug, title: quiz.title, view_count: quiz.view_count } : null,
+  });
+});
