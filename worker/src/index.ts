@@ -14,10 +14,11 @@ import { aiGenRoutes } from './routes/ai-generate';
 import { tutorRoutes } from './routes/tutor';
 import { writingRoutes } from './routes/writing';
 import { gameRoutes } from './routes/games';
-import { certificateRoutes } from './routes/certificates';
-import { analyticsRoutes } from './routes/analytics';
-import { channelAnalyticsRoutes } from './routes/channel-analytics';
-import { premiumRoutes } from './routes/premium';
+  import { certificateRoutes } from './routes/certificates';
+  import { analyticsRoutes } from './routes/analytics';
+  import { channelAnalyticsRoutes } from './routes/channel-analytics';
+  import { blogRoutes } from './routes/blog';
+  import { premiumRoutes } from './routes/premium';
 import { paymentRoutes } from './routes/payment';
 import { handbookRoutes } from './routes/handbook';
 import { weaknessRoutes } from './routes/weakness';
@@ -367,10 +368,11 @@ app.route('/api/speaking', speakingRoutes);
 app.route('/api/ai-generate', aiGenRoutes);
 app.route('/api/writing', writingRoutes);
 app.route('/api/games', gameRoutes);
-app.route('/api/certificates', certificateRoutes);
-app.route('/api/analytics', analyticsRoutes);
-app.route('/api/channel-analytics', channelAnalyticsRoutes);
-app.route('/api/weakness', weaknessRoutes);
+  app.route('/api/certificates', certificateRoutes);
+  app.route('/api/analytics', analyticsRoutes);
+  app.route('/api/channel-analytics', channelAnalyticsRoutes);
+  app.route('/api/blog', blogRoutes);
+  app.route('/api/weakness', weaknessRoutes);
 app.route('/api/premium', premiumRoutes);
 app.route('/api/payment', paymentRoutes);
 app.route('/api/handbook', handbookRoutes);
@@ -894,11 +896,26 @@ async function handleCron(env: Env) {
       console.error('Quiz/discussion cron error:', e);
     }
 
-  } catch (e) {
-    console.error('Cron error:', e);
+    } catch (e) {
+      console.error('Cron error:', e);
+    }
   }
 
-  // Post to public channel - Morning (8 AM WIB = 1 AM UTC)
+  // P1 channel-fix: extracted from handleCron into its own function
+  // so it runs in a separate Worker invocation (different subrequest
+  // budget). Previously this was the last thing in handleCron, which
+  // meant it shared the 50-subrequest cap with study reminders +
+  // Notion sync + reseller cron + integrity checks, and the channel
+  // posts would fail with "Too many subrequests by single Worker
+  // invocation" 100% of the time. New dedicated function is called
+  // from a separate cron slot (10 1 * * * = 5 min after morning).
+
+
+
+// Morning channel post — extracted from handleCron. Runs at 10 1 * * *.
+// Posts vocab + quiz to @TOEFL_IELTS_Indonesia. Same text generation,
+// but in its own Worker invocation so the subrequest budget is fresh.
+async function handleMorningChannelCron(env: Env) {
   try {
     const { generateVocabularyOfTheDay, generateDailyQuiz, formatQuizPost, postToChannel } = await import('./services/contentGenerator');
     const vocab = await generateVocabularyOfTheDay(env);
@@ -1765,6 +1782,7 @@ export default {
       // Also run daily integrity check
       ctx.waitUntil(safeTask('integrity', () => handleIntegrityCheck(env)));
       // Daily content quality check
+      // Daily content quality check
       ctx.waitUntil(safeTask('content-health', () => handleContentHealthCheck(env)));
       // Daily anomaly detection — flag content with low accuracy / high skip rate
       ctx.waitUntil(
@@ -1799,10 +1817,18 @@ export default {
           }
         })(),
       );
-      // Daily error digest for admins
+       // Daily error digest for admins
       ctx.waitUntil(safeTask('error-digest', () => handleErrorDigestCron(env)));
       // Notion daily sync — students only (attempts run at evening cron)
       ctx.waitUntil(safeTask('notion-students', () => handleNotionSync(env, 'students')));
+    } else if (event.cron === '10 1 * * *') {
+      // P1 channel-fix: morning channel post in its own Worker invocation.
+      // 10 1 * * * = 8:10 AM WIB = 5 minutes after the morning batch,
+      // so the 50-subrequest budget is fresh (no sharing with the
+      // 5+ other waitUntil tasks at 3 1 * * *). The old 100% failure
+      // rate on the 01:03 UTC slot is now the 10:01 UTC slot — and
+      // should be 0%.
+      ctx.waitUntil(safeTask('morning-channel', () => handleMorningChannelCron(env)));
     } else if (event.cron === '7 1 * * 1') {
       // Monday weekly leaderboard (8:07 AM WIB)
       ctx.waitUntil(safeTask('weekly', () => handleWeeklyCron(env)));

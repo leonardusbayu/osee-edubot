@@ -38,7 +38,14 @@ interface IdiomItem {
 }
 
 const OSEE_BOT = 'https://t.me/osee_IBT_IELTS_tutor_bot?start=';
-const OSEE_BLOG = 'https://osee.co.id/blog/';
+// P1 channel-fix: previously pointed to osee.co.id/blog/<slug> which
+// returns "connection closed unexpectedly" (server-level failure on
+// the WordPress backend). Channel posts drove 0 conversions because
+// every CTA link was a dead click. Now points to a worker endpoint
+// (P2 will populate it with real articles; for now it renders a
+// minimal HTML page that links back to the bot). The endpoint
+// always returns 200, so the channel never links to a dead page.
+const OSEE_BLOG = 'https://edubot-api.edubot-leonardus.workers.dev/api/blog/article/';
 
 function formatTestEmoji(testType: string): string {
   switch (testType) {
