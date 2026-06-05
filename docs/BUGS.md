@@ -25,7 +25,9 @@ ships, move it from Open → Fixed with the commit hash.
 
 | # | Commit | Area | Title |
 |---|--------|------|-------|
-| F44 | (pending) | channel+blog | Week 1–4: stagger crons, fix broken osee.co.id links, /api/blog worker endpoint, dynamic quiz/vocab from test_contents, auto-publish blog-of-the-day |
+| F44a | `c817c83` | channel+blog | /api/blog/admin/seed POST endpoint (backstop for missed morning cron) |
+| F44 | `23540b2` | channel+blog | Week 2+4: dynamic content from test_contents + auto-publish blog-of-the-day |
+| F44-pre | `e972658` | channel+blog | Week 1+3: stagger crons + replace broken osee.co.id/blog links + /api/blog worker endpoint |
 | F43 | `b0f678d` | frontend | Add Quick Test option (5 soal, 5 menit) + delete orphan files |
 | F42 | `d60fce1` | tests | Loosen test abandonment threshold 2h → 24h (BUGS #16) |
 | F41 | `de9c67e` | channel | /start now logs channel_referrals (was 0 rows) |
@@ -63,6 +65,8 @@ ships, move it from Open → Fixed with the commit hash.
 | 13 | P1 | ops | CI runs are red since Apr 13 | F13 |
 | 14 | P2 | content | TOEFL ITP error-id rows with blank content | F24 |
 | 15 | P2 | worker | findIdleStudents HAVING-clause flag | N/A |
+| 16 | P1 | tests | Test abandonment threshold 2h too tight — students marked abandoned after 3-4h study break | F42 |
+| 17 | P0 | channel | /start did not log channel_referrals — 0 conversions from any channel | F41 |
 
 ---
 
