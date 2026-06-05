@@ -15,6 +15,7 @@ import SkillPractice from './pages/SkillPractice';
 import WeaknessDashboard from './pages/WeaknessDashboard';
 import AdminPanel from './pages/AdminPanel';
 import TeacherDashboard from './pages/TeacherDashboard';
+import ResellerDashboard from './pages/ResellerDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
 
 declare global {
@@ -193,6 +194,7 @@ function App() {
         <Route path="/admin" element={<AdminPanel />} />
         <Route path="/admin/weaknesses" element={<WeaknessDashboard />} />
         <Route path="/admin/teacher" element={<TeacherDashboard />} />
+        <Route path="/admin/reseller" element={<ResellerDashboard />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/admin/panel" element={<AdminPanel />} />
       </Routes>

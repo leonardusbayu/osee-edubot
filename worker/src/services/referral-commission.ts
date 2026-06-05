@@ -96,10 +96,11 @@ export async function createCode(
   if (!/^[A-Z0-9_-]{2,32}$/.test(code)) {
     throw new Error('Invalid code format. Use 2-32 chars: A-Z, 0-9, _, -');
   }
-  // Verify the user is a reseller
-  const user = await env.DB.prepare('SELECT id, role FROM users WHERE id = ?').bind(args.resellerId).first<any>();
+  // Verify the user is a reseller (primary OR additional role)
+  const user = await env.DB.prepare('SELECT id, role, roles FROM users WHERE id = ?').bind(args.resellerId).first<any>();
   if (!user) throw new Error('User not found');
-  if (user.role !== 'reseller') {
+  const { userHasRole } = await import('./user-roles');
+  if (!userHasRole(user, 'reseller')) {
     throw new Error('User is not a reseller. Promote them first.');
   }
   // Verify code is unique
@@ -509,14 +510,28 @@ export async function listCodes(env: Env, limit: number = 50): Promise<any[]> {
 }
 
 /**
- * Promote a user to role='reseller'. Idempotent.
+ * Promote a user to role='reseller'. If the user already has a primary
+ * role (e.g. they're already a teacher), the 'reseller' role is
+ * APPENDED to users.roles instead of overwriting users.role. This is
+ * the multi-role path: a teacher can be a reseller simultaneously.
+ *
+ * Idempotent: if the user already has 'reseller' in either column,
+ * returns wasPromoted=false.
  */
-export async function promoteToReseller(env: Env, userId: number): Promise<{ updated: boolean; newRole: string }> {
-  const user = await env.DB.prepare('SELECT role FROM users WHERE id = ?').bind(userId).first<any>();
+export async function promoteToReseller(env: Env, userId: number): Promise<{ updated: boolean; newRole: string; newRoles: string | null }> {
+  const user = await env.DB.prepare('SELECT role, roles FROM users WHERE id = ?').bind(userId).first<{ role: string | null; roles: string | null }>();
   if (!user) throw new Error('User not found');
-  if (user.role === 'reseller') {
-    return { updated: false, newRole: 'reseller' };
+
+  const { addRoleToUser } = await import('./user-roles');
+  const result = addRoleToUser(user.role || null, user.roles || null, 'reseller');
+  if (!result.wasPromoted) {
+    return { updated: false, newRole: result.newRole || 'reseller', newRoles: result.newRoles };
   }
-  await env.DB.prepare(`UPDATE users SET role = 'reseller' WHERE id = ?`).bind(userId).run();
-  return { updated: true, newRole: 'reseller' };
+
+  // Update both columns (role unchanged if user already had a primary)
+  await env.DB.prepare(
+    `UPDATE users SET role = ?, roles = ? WHERE id = ?`
+  ).bind(result.newRole, result.newRoles, userId).run();
+
+  return { updated: true, newRole: result.newRole || 'reseller', newRoles: result.newRoles };
 }

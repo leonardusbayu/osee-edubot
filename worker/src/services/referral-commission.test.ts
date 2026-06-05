@@ -20,10 +20,10 @@ import {
 // In-memory mock D1 — supports the SQL our service runs.
 function makeMockDb() {
   const users: any[] = [
-    { id: 1, name: 'Customer One', role: 'student', referral_code_applied: null },
-    { id: 2, name: 'Customer Two', role: 'student', referral_code_applied: null },
-    { id: 3, name: 'Reseller Budi', role: 'reseller', referral_code_applied: null },
-    { id: 4, name: 'Reseller Andi', role: 'reseller', referral_code_applied: null },
+    { id: 1, name: 'Customer One', role: 'student', roles: null, referral_code_applied: null },
+    { id: 2, name: 'Customer Two', role: 'student', roles: null, referral_code_applied: null },
+    { id: 3, name: 'Reseller Budi', role: 'reseller', roles: null, referral_code_applied: null },
+    { id: 4, name: 'Reseller Andi', role: 'reseller', roles: null, referral_code_applied: null },
   ];
   const codes: ReferralCode[] = [];
   const attributions: any[] = [];
@@ -56,9 +56,14 @@ function makeMockDb() {
 
 function runFirst(bound: { sql: string; params: any[] }, state: any): any {
   const { sql, params } = bound;
-  // User lookup (any column list containing role)
   if (/SELECT\s+.*role.*FROM\s+users\s+WHERE\s+id\s*=\s*\?/i.test(sql)) {
     return state.users.find((u: any) => u.id === params[0]) || null;
+  }
+  // For the role+roles multi-role lookup (used by promoteToReseller)
+  if (sql.includes('SELECT role, roles FROM users WHERE id = ?')) {
+    const u = state.users.find((u: any) => u.id === params[0]);
+    if (!u) return null;
+    return { id: u.id, role: u.role, roles: u.roles || null } as any;
   }
   if (sql.includes('SELECT id FROM users WHERE id = ?')) {
     return state.users.find((u: any) => u.id === params[0]) || null;
@@ -133,9 +138,18 @@ function runAll(bound: { sql: string; params: any[] }, state: any): { results: a
 
 function runExec(bound: { sql: string; params: any[] }, state: any): any {
   const { sql, params } = bound;
-  if (sql.startsWith("UPDATE users SET role = 'reseller'")) {
+  if (sql.includes("UPDATE users SET role = 'reseller'")) {
     const u = state.users.find((u: any) => u.id === params[0]);
     if (u) u.role = 'reseller';
+    return { success: true, meta: { changes: 1, last_row_id: 0 } };
+  }
+  // Multi-role UPDATE (new: role + roles)
+  if (sql.includes("UPDATE users SET role = ?, roles = ?")) {
+    const u = state.users.find((u: any) => u.id === params[2]);
+    if (u) {
+      u.role = params[0];
+      u.roles = params[1];
+    }
     return { success: true, meta: { changes: 1, last_row_id: 0 } };
   }
   if (sql.includes("UPDATE users SET referral_code_applied = ?")) {
@@ -499,10 +513,21 @@ describe('referral-commission', () => {
   });
 
   describe('promoteToReseller', () => {
-    it('promotes a student to reseller', async () => {
+    it('promotes a student to reseller (adds to roles, keeps primary role)', async () => {
+      // Multi-role: primary role stays 'student', new role 'reseller' added to roles
       const result = await promoteToReseller(env, 1);
       expect(result.updated).toBe(true);
-      expect(state.users[0].role).toBe('reseller');
+      expect(state.users[0].role).toBe('student');  // unchanged
+      expect(state.users[0].roles).toBe('reseller');  // added
+    });
+
+    it('adds reseller to a teacher without overwriting primary role', async () => {
+      // Set user 1 to be a teacher first
+      state.users[0].role = 'teacher';
+      const result = await promoteToReseller(env, 1);
+      expect(result.updated).toBe(true);
+      expect(state.users[0].role).toBe('teacher');  // still teacher
+      expect(state.users[0].roles).toBe('reseller');  // now also reseller
     });
 
     it('is idempotent if already reseller', async () => {

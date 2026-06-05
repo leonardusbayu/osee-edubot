@@ -1876,7 +1876,7 @@ async function handleMessage(message: any, env: Env) {
           `/referral — Lihat kode & link referral\n\n` +
           `🎁 *Referral:* Ajak teman = dapat gratis!`;
 
-        const teacherHelp = `👨‍🏫 *Teacher Commands*\n\n` +
+        const teacherHelp = `👨‍🏫 *Teacher / Reseller Commands*\n\n` +
           `/admin — Dashboard siswa\n` +
           `/broadcast — Kirim ke semua siswa\n` +
           `/addclass — Hubungkan grup Telegram\n` +
@@ -1884,7 +1884,11 @@ async function handleMessage(message: any, env: Env) {
           `/alerts — Alerts (churn/struggling/close-to-goal)\n` +
           `/gencode @user KODE — Generate kode reseller\n` +
           `/payouts — List pending bank payouts\n` +
-          `/payouts_mark_paid ID — Mark bank payout as done`;
+          `/payouts_mark_paid ID — Mark bank payout as done\n` +
+          `/mycode — Lihat kode reseller kamu\n` +
+          `/myreferrals — Stats reseller\n` +
+          `/payout_request — Request bank payout\n` +
+          `/myreseller — Buka Reseller Dashboard (webapp)`;
 
         const adminHelp = `👑 *Admin Commands*\n\n` +
           `/stats — Statistik sistem\n` +
@@ -3312,11 +3316,13 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
       // Customer-side: /reseller BUDI03 (handled elsewhere)
       // Admin-side:   /gencode, /payouts, /payouts_mark_paid
 
-      case '/mycode': {
-        if (user.role !== 'reseller' && user.role !== 'admin') {
-          await sendMessage(env, chatId, '⛔ Khusus reseller. Hubungi admin untuk jadi reseller.');
-          return;
-        }
+        case '/mycode': {
+          // Multi-role: a teacher who is also a reseller can use /mycode.
+          const { userHasRole: _uhr1 } = await import('../services/user-roles');
+          if (!_uhr1(user, 'reseller') && !_uhr1(user, 'admin')) {
+            await sendMessage(env, chatId, '⛔ Khusus reseller. Hubungi admin untuk jadi reseller.');
+            return;
+          }
         try {
           const { listCodes } = await import('../services/referral-commission');
           const codes = await listCodes(env, 5);
@@ -3349,11 +3355,12 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
         return;
       }
 
-      case '/myreferrals': {
-        if (user.role !== 'reseller' && user.role !== 'admin') {
-          await sendMessage(env, chatId, '⛔ Khusus reseller.');
-          return;
-        }
+        case '/myreferrals': {
+          const { userHasRole: _uhr2 } = await import('../services/user-roles');
+          if (!_uhr2(user, 'reseller') && !_uhr2(user, 'admin')) {
+            await sendMessage(env, chatId, '⛔ Khusus reseller.');
+            return;
+          }
         try {
           const { getResellerStats } = await import('../services/referral-commission');
           const stats = await getResellerStats(env, user.id);
@@ -3390,33 +3397,67 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
       }
 
       case '/payout_request': {
-        if (user.role !== 'reseller' && user.role !== 'admin') {
-          await sendMessage(env, chatId, '⛔ Khusus reseller.');
-          return;
-        }
-        try {
-          const { createBankPayoutRequest } = await import('../services/referral-commission');
-          const result = await createBankPayoutRequest(env, user.id);
-          if (!result) {
-            await sendMessage(env, chatId,
-              `ℹ️ Belum ada komisi yang siap di-claim.\n\n` +
-              `Komisi butuh 7 hari setelah customer beli sebelum jadi payable. ` +
-              `Cek /myreferrals untuk lihat status.`);
+          const { userHasRole: _uhr3 } = await import('../services/user-roles');
+          if (!_uhr3(user, 'reseller') && !_uhr3(user, 'admin')) {
+            await sendMessage(env, chatId, '⛔ Khusus reseller.');
             return;
           }
+          try {
+            const { createBankPayoutRequest } = await import('../services/referral-commission');
+            const result = await createBankPayoutRequest(env, user.id);
+            if (!result) {
+              await sendMessage(env, chatId,
+                `ℹ️ Belum ada komisi yang siap di-claim.\n\n` +
+                `Komisi butuh 7 hari setelah customer beli sebelum jadi payable. ` +
+                `Cek /myreferrals untuk lihat status.`);
+              return;
+            }
+            await sendMessage(env, chatId,
+              `💰 *Payout Request Dibuat*\n\n` +
+              `Payout ID: #${result.payoutId}\n` +
+              `Jumlah: *${result.totalAmountStars} ⭐*\n` +
+              `Atribusi: ${result.attributionCount} customer\n\n` +
+              `Admin akan proses transfer bank kamu dalam 1-3 hari kerja. ` +
+              `Pastikan data rekening kamu sudah lengkap (hubungi admin).`);
+          } catch (e) {
+            console.error('/payout_request error:', e);
+            await sendMessage(env, chatId, '⚠️ Gagal membuat payout request. Coba lagi.');
+          }
+          return;
+      }
+
+      case '/myreseller': {
+        // Reseller dashboard — same multi-role check as /mycode etc.
+        const { userHasRole: _uhr_res } = await import('../services/user-roles');
+        if (!_uhr_res(user, 'reseller') && !_uhr_res(user, 'admin')) {
           await sendMessage(env, chatId,
-            `💰 *Payout Request Dibuat*\n\n` +
-            `Payout ID: #${result.payoutId}\n` +
-            `Jumlah: *${result.totalAmountStars} ⭐*\n` +
-            `Atribusi: ${result.attributionCount} customer\n\n` +
-            `Admin akan proses transfer bank kamu dalam 1-3 hari kerja. ` +
-            `Pastikan data rekening kamu sudah lengkap (hubungi admin).`);
-        } catch (e) {
-          console.error('/payout_request error:', e);
-          await sendMessage(env, chatId, '⚠️ Gagal membuat payout request. Coba lagi.');
+            `⛔ Khusus reseller.\n\n` +
+            `Mau jadi reseller? Ketik /start dulu lalu minta admin /gencode @username KODE.`);
+          return;
         }
+        const tgId = String(user.telegram_id).replace('.0', '');
+        const dashboardUrl = `${env.WEBAPP_URL}/admin/reseller?tg_id=${tgId}`;
+        await sendMessage(env, chatId,
+          `💰 *Reseller Dashboard*\n\n` +
+          `Lihat customer kamu, earnings detail, dan activity chart:\n\n` +
+          `👥 Customer list\n` +
+          `💰 Earnings per attribution\n` +
+          `📈 Weekly activity\n` +
+          `🏷️ Code share links\n\n` +
+          `Buka:`,
+          {
+            inline_keyboard: [
+              [{ text: '💰 Buka Reseller Dashboard', web_app: { url: dashboardUrl } }],
+              [
+                { text: '🏷️ Kode Saya', callback_data: 'mycode' },
+                { text: '📊 Stats', callback_data: 'myreferrals' },
+              ],
+            ],
+          }
+        );
         return;
       }
+
 
       // ─── Admin: generate reseller code ───
 
@@ -7191,7 +7232,9 @@ async function handleCallbackQuery(query: any, env: Env) {
 
     // Reseller callback buttons (mycode, myreferrals, payout_request)
     if (data === 'mycode' || data === 'myreferrals' || data === 'payout_request') {
-      if (freshUser.role !== 'reseller' && freshUser.role !== 'admin') {
+      // Multi-role: a teacher with 'reseller' in users.roles can also use these.
+      const { userHasRole } = await import('../services/user-roles');
+      if (!userHasRole(freshUser, 'reseller') && !userHasRole(freshUser, 'admin')) {
         await editMessage(env, chatId, messageId, '⛔ Khusus reseller.');
         return;
       }

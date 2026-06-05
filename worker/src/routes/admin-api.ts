@@ -1125,6 +1125,178 @@ adminApiRoutes.get('/premium/overview', async (c) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// RESELLER DASHBOARD — multi-role support: a teacher who is also a
+// reseller sees BOTH their class data (existing teacher dashboard) AND
+// their referral data (these endpoints). The auth check uses userHasRole
+// so users with role='teacher' + roles='reseller' are admitted.
+// ═══════════════════════════════════════════════════════════════
+
+// Auth helper: accept a reseller OR admin. Teachers who are ALSO
+// resellers pass via their `roles` column.
+function requireResellerOrAdmin(c: any): { userId: number; isAdmin: boolean } | { error: Response } {
+  const tgIdRaw = c.req.header('x-telegram-user-id') || c.req.query('tg_id');
+  if (!tgIdRaw) return { error: c.json({ error: 'Missing x-telegram-user-id' }, 400) };
+  const tgId = String(tgIdRaw).replace('.0', '');
+  // Synchronous-ish lookup — admin-api runs in worker, no await
+  return { userId: 0, isAdmin: true }; // placeholder, see async version below
+}
+
+// Async version: lookup user, check multi-role
+async function authReseller(c: any): Promise<{ ok: true; userId: number; isAdmin: boolean } | { ok: false; res: Response }> {
+  const tgIdRaw = c.req.header('x-telegram-user-id') || c.req.query('tg_id');
+  if (!tgIdRaw) return { ok: false, res: c.json({ error: 'Missing x-telegram-user-id' }, 400) };
+  const tgId = String(tgIdRaw).replace('.0', '');
+  const user = await c.env.DB.prepare(
+    'SELECT id, role, roles FROM users WHERE telegram_id = ?'
+  ).bind(tgId).first() as { id: number; role: string | null; roles: string | null } | null;
+  if (!user) return { ok: false, res: c.json({ error: 'User not found' }, 404) };
+  const { userHasRole } = await import('../services/user-roles');
+  const isAdmin = userHasRole(user, 'admin');
+  if (!userHasRole(user, 'reseller') && !isAdmin) {
+    return { ok: false, res: c.json({ error: 'Reseller role required' }, 403) };
+  }
+  return { ok: true, userId: user.id, isAdmin };
+}
+
+// 1. My Customers — every user who applied a code owned by this reseller
+adminApiRoutes.get('/reseller-dashboard/customers', async (c) => {
+  const auth = await authReseller(c);
+  if (!auth.ok) return auth.res;
+  const resellerId = auth.userId;
+  const limit = parseInt(c.req.query('limit') || '50');
+
+  // Pull all codes owned by this reseller
+  const codes = await c.env.DB.prepare(
+    `SELECT id, code, total_uses, total_revenue_stars, total_commission_stars, created_at
+     FROM referral_codes WHERE reseller_id = ? ORDER BY created_at DESC`
+  ).bind(resellerId).all<any>();
+
+  // Pull all attributions (joined with customer info)
+  const customers = await c.env.DB.prepare(
+    `SELECT a.id as attribution_id,
+            a.status,
+            a.commission_amount_stars,
+            a.commission_rate,
+            a.plan_days,
+            a.plan_amount_stars,
+            a.confirmed_at,
+            a.paid_at,
+            a.created_at as purchase_date,
+            u.id as customer_id,
+            u.name as customer_name,
+            u.telegram_id as customer_telegram_id,
+            u.target_test as customer_target_test,
+            u.is_premium as customer_is_premium,
+            u.premium_until as customer_premium_until,
+            (SELECT MAX(ta.started_at) FROM test_attempts ta WHERE ta.user_id = u.id) as last_test_date,
+            (SELECT COUNT(*) FROM test_attempts ta WHERE ta.user_id = u.id) as total_attempts
+     FROM referral_attributions a
+     JOIN users u ON u.id = a.customer_id
+     WHERE a.reseller_id = ?
+     ORDER BY a.created_at DESC
+     LIMIT ?`
+  ).bind(resellerId, limit).all<any>();
+
+  return c.json({
+    codes: codes.results,
+    customers: customers.results,
+    reseller_id: resellerId,
+  });
+});
+
+// 2. My Earnings — full attribution list with rich details
+adminApiRoutes.get('/reseller-dashboard/earnings', async (c) => {
+  const auth = await authReseller(c);
+  if (!auth.ok) return auth.res;
+  const resellerId = auth.userId;
+  const status = c.req.query('status'); // optional filter: pending|confirmed|paid|clawback
+
+  let query = `
+    SELECT a.id, a.status, a.commission_amount_stars, a.commission_rate,
+           a.plan_days, a.plan_amount_stars, a.confirmed_at, a.paid_at,
+           a.payout_method, a.payout_reference, a.notes, a.created_at,
+           u.id as customer_id, u.name as customer_name,
+           c.code
+    FROM referral_attributions a
+    JOIN users u ON u.id = a.customer_id
+    JOIN referral_codes c ON c.id = a.code_id
+    WHERE a.reseller_id = ?`;
+  const params: any[] = [resellerId];
+  if (status) {
+    query += ` AND a.status = ?`;
+    params.push(status);
+  }
+  query += ` ORDER BY a.created_at DESC LIMIT 200`;
+
+  const rows = await c.env.DB.prepare(query).bind(...params).all<any>();
+
+  // Roll up totals by status
+  const totals: Record<string, { count: number; stars: number }> = {};
+  for (const row of rows.results) {
+    const s = row.status;
+    if (!totals[s]) totals[s] = { count: 0, stars: 0 };
+    totals[s].count++;
+    totals[s].stars += row.commission_amount_stars;
+  }
+
+  return c.json({
+    attributions: rows.results,
+    totals,
+    reseller_id: resellerId,
+  });
+});
+
+// 3. Activity trends — weekly chart data
+adminApiRoutes.get('/reseller-dashboard/activity', async (c) => {
+  const auth = await authReseller(c);
+  if (!auth.ok) return auth.res;
+  const resellerId = auth.userId;
+
+  // 8-week window: new customers, new revenue, new commission per week
+  const eightWeeksAgo = new Date(Date.now() - 56 * 24 * 3600 * 1000).toISOString();
+  const rows = await c.env.DB.prepare(
+    `SELECT strftime('%Y-%W', a.created_at) as week,
+            COUNT(*) as new_customers,
+            SUM(a.plan_amount_stars) as revenue_stars,
+            SUM(a.commission_amount_stars) as commission_stars
+     FROM referral_attributions a
+     WHERE a.reseller_id = ? AND a.created_at >= ?
+     GROUP BY week
+     ORDER BY week ASC`
+  ).bind(resellerId, eightWeeksAgo).all<any>();
+
+  return c.json({
+    weeks: rows.results,
+    reseller_id: resellerId,
+  });
+});
+
+// 4. My Code — current codes + share links + simple stats
+adminApiRoutes.get('/reseller-dashboard/my-code', async (c) => {
+  const auth = await authReseller(c);
+  if (!auth.ok) return auth.res;
+  const resellerId = auth.userId;
+
+  const codes = await c.env.DB.prepare(
+    `SELECT id, code, is_active, total_uses, total_revenue_stars,
+            total_commission_stars, notes, created_at
+     FROM referral_codes WHERE reseller_id = ? ORDER BY created_at DESC`
+  ).bind(resellerId).all<any>();
+
+  // Bot username for share link
+  const botUsername = c.env.TELEGRAM_BOT_TOKEN?.split(':')[0]
+    || 'OSEE_TOEFL_IELTS_TOEIC_study_bot';
+
+  return c.json({
+    codes: codes.results.map((c: any) => ({
+      ...c,
+      share_link: `https://t.me/${botUsername}?start=reseller_${c.code}`,
+    })),
+    reseller_id: resellerId,
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
 // SYSTEM CONFIG
 // ═══════════════════════════════════════════════════════════════
 
