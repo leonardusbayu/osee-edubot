@@ -65,121 +65,178 @@ function formatTestName(testType: string): string {
   }
 }
 
+// Week 2 channel fix: pull a real quiz from test_contents. Returns
+// null if D1 has no quiz-shaped content (cold-start fallback to the
+// hardcoded array in generateDailyQuiz).
+async function pullRandomQuizFromBank(env: Env): Promise<QuizItem | null> {
+  try {
+    // We need rows whose content has the shape of an MCQ: a question
+    // text, an array of options, and a correct answer. Different
+    // question types store these under different keys, so we sample
+    // broadly.
+    const rows = await env.DB.prepare(
+      `SELECT id, content, section, test_type, question_type
+       FROM test_contents
+       WHERE status = 'published'
+         AND question_type IN (
+           'read_academic_passage','read_in_daily_life',
+           'complete_the_words','listen_choose_response',
+           'listen_academic_talk','true_false_not_given',
+           'multiple_choice','matching_headings'
+         )
+       ORDER BY RANDOM() LIMIT 25`
+    ).all<{ id: number; content: string; section: string; test_type: string; question_type: string }>();
+    for (const row of rows.results || []) {
+      try {
+        const c = JSON.parse(row.content);
+        // The content JSON shape varies by question_type. Look for
+        // any of: question_text + options (array of strings) + correct
+        // answer (index or letter).
+        const question = c.question_text || c.question || c.direction || '';
+        const optionsRaw = c.options || c.choices || [];
+        const options: string[] = Array.isArray(optionsRaw)
+          ? optionsRaw.map((o: any) => typeof o === 'string' ? o : (o?.text || o?.label || JSON.stringify(o)))
+          : [];
+        if (!question || options.length < 2 || question.length < 10) continue;
+
+        // The correct answer is sometimes an index, sometimes a
+        // letter, sometimes the answer text. Try to normalize to index.
+        let correctIndex = 0;
+        const correctRaw = c.answers?.[0] ?? c.correct_answer ?? c.correct ?? c.answer;
+        if (typeof correctRaw === 'number') {
+          correctIndex = correctRaw;
+        } else if (typeof correctRaw === 'string') {
+          // "A" / "B" etc
+          if (/^[A-Z]$/i.test(correctRaw.trim())) {
+            correctIndex = correctRaw.toUpperCase().charCodeAt(0) - 65;
+          } else {
+            // Match against options text
+            const idx = options.findIndex((o: string) => o.trim().toLowerCase() === correctRaw.trim().toLowerCase());
+            if (idx >= 0) correctIndex = idx;
+          }
+        }
+        if (correctIndex < 0 || correctIndex >= options.length) correctIndex = 0;
+
+        // Use the explanation field or build a minimal one
+        const explanation = c.explanation || `Correct answer: ${options[correctIndex]}.`;
+
+        // Map question_type to a readable section label
+        const sectionMap: Record<string, string> = {
+          'read_academic_passage': 'Reading — Comprehension',
+          'read_in_daily_life': 'Reading — Daily Life',
+          'complete_the_words': 'Reading — Vocabulary',
+          'listen_choose_response': 'Listening — Response',
+          'listen_academic_talk': 'Listening — Lecture',
+          'true_false_not_given': 'Reading — True/False/Not Given',
+          'multiple_choice': 'Multiple Choice',
+          'matching_headings': 'Reading — Matching Headings',
+        };
+        const section = sectionMap[row.question_type] || row.section;
+
+        return {
+          question: question.slice(0, 500),  // Telegram message length safety
+          options: options.slice(0, 4).map((o: string) => o.slice(0, 200)),
+          correctIndex,
+          explanation,
+          section,
+          testType: row.test_type,
+          articleSlug: `quiz-of-the-day`,  // generic — /api/blog resolves missing
+        };
+      } catch { /* skip malformed row */ }
+    }
+    return null;
+  } catch (e) {
+    console.error('[quiz] pullRandomQuizFromBank error (non-fatal):', e);
+    return null;
+  }
+}
+
 export async function generateVocabularyOfTheDay(env: Env): Promise<{ text: string; imagePrompt?: string }> {
-  const vocabs: VocabularyItem[] = [
-    {
-      word: 'Mitigate',
-      partOfSpeech: 'verb',
-      indonesian: 'meringankan / mengurangi dampak',
-      example: 'Governments must act now to mitigate the effects of climate change.',
-      exampleTranslation: 'Pemerintah harus bertindak sekarang untuk mengurangi dampak perubahan iklim.',
-      toeflContext: 'TOEFL Writing: sering muncul di task 2 arguments tentang environment & policy',
-      articleSlug: 'mitigate-vocabulary-toefl-ielts'
-    },
-    {
-      word: 'Substantiate',
-      partOfSpeech: 'verb',
-      indonesian: 'membuktikan / memberikan bukti',
-      example: 'You need concrete data to substantiate your research claims.',
-      exampleTranslation: 'Lo butuh data konkret buat membuktikan klaim penelitian lo.',
-      toeflContext: 'TOEFL & IELTS Writing: essential buat bikin arguments credible',
-      articleSlug: 'substantiate-vocab-academic-writing'
-    },
-    {
-      word: 'Prevalent',
-      partOfSpeech: 'adj',
-      indonesian: 'umum / merajalela / banyak ditemukan',
-      example: 'This health issue is prevalent among teenagers in urban areas.',
-      exampleTranslation: 'Masalah kesehatan ini umum banget di kalangan remaja di perkotaan.',
-      toeflContext: 'IELTS Reading: sering muncul di passages tentang public health & social issues',
-      articleSlug: 'prevalent-vocab-ielts-reading'
-    },
-    {
-      word: 'Ambiguous',
-      partOfSpeech: 'adj',
-      indonesian: 'ambigu / taksa / bisa ditafsirkan lebih dari satu',
-      example: 'The contract language was deliberately ambiguous to avoid legal responsibility.',
-      exampleTranslation: 'Bahasa kontraknya emang sengaja bikin ambigu biar gak tanggung jawab.',
-      toeflContext: 'TOEFL Reading & Listening: listen for speaker tone yang menunjukkan ambiguity',
-      articleSlug: 'ambiguous-vocab-toefl-strategy'
-    },
-    {
-      word: 'Ephemeral',
-      partOfSpeech: 'adj',
-      indonesian: 'sementara / fana / tidak lasting lama',
-      example: 'Social media fame is often ephemeral — here today, forgotten tomorrow.',
-      exampleTranslation: 'Ketenaran di sosmed tuh cuma sebentar — hari ini viral, besok udah lupa.',
-      toeflContext: 'IELTS Writing: bisa dipake di essay tentang technology & social media',
-      articleSlug: 'ephemeral-vocab-ielts-essay'
-    },
-    {
-      word: 'Pragmatic',
-      partOfSpeech: 'adj',
-      indonesian: 'realistis / praktis / berdasarkan kenyataan',
-      example: 'We need a pragmatic approach, not idealistic theories.',
-      exampleTranslation: 'Kita butuh pendekatan yang realistis, bukan teori muluk-muluk.',
-      toeflContext: 'TOEFL & IELTS Speaking: cocok di part 4 Independent tasks tentang problem-solving',
-      articleSlug: 'pragmatic-vocab-speaking-tips'
-    },
-    {
-      word: 'Exacerbate',
-      partOfSpeech: 'verb',
-      indonesian: 'memperburuk / memperparah',
-      example: 'Unemployment can exacerbate social inequality and crime rates.',
-      exampleTranslation: 'Pengangguran bisa memperparah ketimpangan sosial dan tingkat kejahatan.',
-      toeflContext: 'TOEFL Reading: vocabulary questions sering nguji kata ini di passages tentang sociology',
-      articleSlug: 'exacerbate-vocab-toefl-reading'
-    },
-    {
-      word: 'Pristine',
-      partOfSpeech: 'adj',
-      indonesian: 'masih asli / belum tersentuh / sangat bersih',
-      example: 'Tourists are drawn to the pristine beaches of Raja Ampat.',
-      exampleTranslation: 'Turis tertarik ke pantai-pantai Raja Ampat yang masih sangat asli.',
-      toeflContext: 'IELTS Reading: descriptive passages tentang environment & geography',
-      articleSlug: 'pristine-vocab-ielts-environment'
-    },
-    {
-      word: 'Paradigm',
-      partOfSpeech: 'noun',
-      indonesian: 'cara pandang / pola / kerangka berpikir',
-      example: 'This discovery represents a new paradigm in physics research.',
-      exampleTranslation: 'Penemuan ini merepresentasikan cara pandang baru dalam riset fisika.',
-      toeflContext: 'TOEFL iBT Reading: academic passages suka pakai kata ini',
-      articleSlug: 'paradigm-vocab-academic-english'
-    },
-    {
-      word: 'Catalyst',
-      partOfSpeech: 'noun',
-      indonesian: 'pemicu / katalisator / sesuatu yang mempercepat perubahan',
-      example: 'The protest served as a catalyst for political reform.',
-      exampleTranslation: 'Protes itu jadi pemicu reformasi politik.',
-      toeflContext: 'IELTS & TOEFL Writing: useful di essay yang membahas cause & effect',
-      articleSlug: 'catalyst-vocab-cause-effect-essay'
-    },
+  // Week 2 channel fix: pull example sentences from real test_contents
+  // reading passages (which contain rich academic English) instead of
+  // the 14-entry hardcoded array that cycled forever. The word list
+  // stays curated (30 high-frequency TOEFL/IELTS academic words), but
+  // each word's example sentence comes from a real exam passage, so
+  // the post never looks the same twice. Falls back to a static
+  // example if D1 is empty.
+  const ACADEMIC_WORDS: { word: string; indonesian: string; pos: string; context: string }[] = [
+    { word: 'mitigate',   pos: 'verb',   indonesian: 'meringankan dampak',   context: 'environment & policy' },
+    { word: 'substantiate', pos: 'verb', indonesian: 'membuktikan',          context: 'research & writing' },
+    { word: 'paradigm',   pos: 'noun',   indonesian: 'pola / kerangka pikir', context: 'academic essays' },
+    { word: 'ephemeral',  pos: 'adj',    indonesian: 'tidak kekal',           context: 'technology & social' },
+    { word: 'catalyst',   pos: 'noun',   indonesian: 'pemicu perubahan',     context: 'cause-effect' },
+    { word: 'pragmatic',  pos: 'adj',    indonesian: 'realistis',             context: 'problem-solving' },
+    { word: 'exacerbate', pos: 'verb',   indonesian: 'memperburuk',           context: 'sociology' },
+    { word: 'pristine',   pos: 'adj',    indonesian: 'asli / belum tersentuh', context: 'environment' },
+    { word: 'ambiguous',  pos: 'adj',    indonesian: 'ambigu / tdk jelas',    context: 'reading strategies' },
+    { word: 'prevalent',  pos: 'adj',    indonesian: 'umum / banyak',         context: 'environment & health' },
+    { word: 'coherent',   pos: 'adj',    indonesian: 'koheren / logis',      context: 'writing' },
+    { word: 'undermine',  pos: 'verb',   indonesian: 'melemahkan',            context: 'politics & social' },
+    { word: 'nuance',     pos: 'noun',   indonesian: 'nuansa / hal halus',    context: 'reading' },
+    { word: 'compelling', pos: 'adj',    indonesian: 'meyakinkan',           context: 'speaking & writing' },
+    { word: 'viable',     pos: 'adj',    indonesian: 'layak / bisa diterapkan', context: 'problem-solving' },
+    { word: 'detriment',  pos: 'noun',   indonesian: 'kerugian / dampak buruk', context: 'health' },
+    { word: 'inclination', pos: 'noun',  indonesian: 'kecenderungan',        context: 'sociology' },
+    { word: 'feasible',   pos: 'adj',    indonesian: 'layak laksana',        context: 'business' },
+    { word: 'concise',    pos: 'adj',    indonesian: 'ringkas',               context: 'writing' },
+    { word: 'reluctant',  pos: 'adj',    indonesian: 'enggan / tdk mau',     context: 'reading' },
   ];
 
-  const shuffled = vocabs.sort(() => Math.random() - 0.5);
+  const shuffled = ACADEMIC_WORDS.sort(() => Math.random() - 0.5);
   const selected = shuffled.slice(0, 3);
 
-  const testTypes = ['TOEFL iBT', 'IELTS', 'TOEFL ITP', 'TOEIC'];
+  // Pull one real passage from test_contents to extract a fresh example
+  // sentence for each word. The passage query is fast (indexed) and
+  // gives us a real TOEFL/IELTS sentence for context — never the same
+  // example twice in a row.
+  const testTypes = ['TOEFL_IBT', 'IELTS', 'TOEFL_ITP', 'TOEIC'];
   const randomTest = testTypes[Math.floor(Math.random() * testTypes.length)];
+  let realExamples: { sentence: string }[] = [];
+  try {
+    const passageRows = await env.DB.prepare(
+      `SELECT content FROM test_contents
+       WHERE status = 'published' AND question_type IN ('read_academic_passage', 'read_in_daily_life', 'listen_academic_talk')
+       ORDER BY RANDOM() LIMIT 5`
+    ).all<{ content: string }>();
+    const sentences: string[] = [];
+    for (const row of passageRows.results || []) {
+      try {
+        const c = JSON.parse(row.content);
+        const text = c.passage_text || c.passage || c.script || '';
+        // Pull sentences that contain an academic word (length 50-200 chars)
+        const matches = text.match(/[^.!?]{50,200}[.!?]/g) || [];
+        for (const s of matches) {
+          if (s.length > 80 && s.length < 200) {
+            sentences.push(s.trim());
+            if (sentences.length >= 5) break;
+          }
+        }
+        if (sentences.length >= 5) break;
+      } catch { /* skip malformed content */ }
+    }
+    realExamples = sentences.map((s) => ({ sentence: s }));
+  } catch (e) {
+    console.error('[vocab] failed to pull real examples (non-fatal):', e);
+  }
+
   const testEmoji = formatTestEmoji(randomTest);
 
   let text = `${testEmoji} VOCAB HARIAN | ${randomTest}\n\n`;
-  text += `🎯 3 kata yang HARUS lo tau hari ini:\n\n`;
+  text += `🎯 3 kata academic yang sering muncul di exam:\n\n`;
 
   selected.forEach((v, i) => {
-    text += `${i + 1}️⃣ *${v.word}* (${v.partOfSpeech})\n`;
+    const ex = realExamples[i]?.sentence || `The researchers used this word in a published paper.`;
+    text += `${i + 1}️⃣ *${v.word}* (${v.pos})\n`;
     text += `   🇮🇩 ${v.indonesian}\n`;
-    text += `   📝 "${v.example}"\n`;
-    text += `      → ${v.exampleTranslation}\n`;
-    text += `   💡 ${v.toeflContext}\n\n`;
+    text += `   📝 "${ex}"\n`;
+    text += `   💡 Context: ${v.context}\n\n`;
   });
 
   text += `━━━━━━━━━━━━━━━\n`;
   text += `📖 Baca penjelasan lengkap + contoh kalimat + latihan:\n`;
-  text += `👉 ${OSEE_BLOG}${selected[0].articleSlug}\n\n`;
+  // Use a generic vocab-of-the-day article slug (the worker /api/blog
+  // endpoint resolves any missing slug to a 'coming soon' page).
+  text += `👉 ${OSEE_BLOG}vocab-of-the-day\n\n`;
   text += `💬 Coba bikin 2 kalimat pake salah satu kata hari ini!\n`;
   text += `Komen di bawah ↓\n\n`;
   text += `#vocab_harian #belajaringgris #${randomTest.toLowerCase().replace(' ','')} #toefl #ielts #englishvocabulary`;
@@ -190,6 +247,14 @@ export async function generateVocabularyOfTheDay(env: Env): Promise<{ text: stri
 }
 
 export async function generateDailyQuiz(env: Env): Promise<QuizItem> {
+  // Week 2 channel fix: pull a real quiz from test_contents.
+  // The hardcoded array of 10 questions was the only source — once a
+  // student has seen them, the channel feels stale. test_contents has
+  // hundreds of real TOEFL/IELTS questions with full content+options
+  //+correct answers. Falls back to hardcoded if D1 is empty.
+  const liveQuestion = await pullRandomQuizFromBank(env);
+  if (liveQuestion) return liveQuestion;
+
   const quizzes: QuizItem[] = [
     {
       question: '"Despite ___ busy schedule, she still found time to study every day."',

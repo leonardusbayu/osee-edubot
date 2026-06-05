@@ -25,6 +25,7 @@ ships, move it from Open → Fixed with the commit hash.
 
 | # | Commit | Area | Title |
 |---|--------|------|-------|
+| F44 | (pending) | channel+blog | Week 1–4: stagger crons, fix broken osee.co.id links, /api/blog worker endpoint, dynamic quiz/vocab from test_contents, auto-publish blog-of-the-day |
 | F43 | `b0f678d` | frontend | Add Quick Test option (5 soal, 5 menit) + delete orphan files |
 | F42 | `d60fce1` | tests | Loosen test abandonment threshold 2h → 24h (BUGS #16) |
 | F41 | `de9c67e` | channel | /start now logs channel_referrals (was 0 rows) |

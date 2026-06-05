@@ -157,3 +157,174 @@ export async function getClickStats(env: Env, days: number = 30): Promise<{
     by_source: bySource.results,
   };
 }
+
+// Week 4: Auto-publish a "vocab of the day" article from real
+// test_contents. The channel's daily vocab post links to
+// /api/blog/article/vocab-of-the-day, so this function keeps that link
+// alive with fresh content. Idempotent — re-running on the same day
+// updates the same row (slug is date-stamped).
+export async function publishVocabOfTheDay(env: Env, date: Date = new Date()): Promise<BlogArticle | null> {
+  // Pick today's word — same logic as generateVocabularyOfTheDay but
+  // deterministic per date so multiple invocations on the same day
+  // produce the same article.
+  const ACADEMIC_WORDS = [
+    { word: 'mitigate',     pos: 'verb', indonesian: 'meringankan dampak' },
+    { word: 'substantiate', pos: 'verb', indonesian: 'membuktikan' },
+    { word: 'paradigm',     pos: 'noun', indonesian: 'pola / kerangka pikir' },
+    { word: 'ephemeral',    pos: 'adj',  indonesian: 'tidak kekal' },
+    { word: 'catalyst',     pos: 'noun', indonesian: 'pemicu perubahan' },
+    { word: 'pragmatic',    pos: 'adj',  indonesian: 'realistis' },
+    { word: 'exacerbate',   pos: 'verb', indonesian: 'memperburuk' },
+    { word: 'pristine',     pos: 'adj',  indonesian: 'asli / belum tersentuh' },
+    { word: 'ambiguous',    pos: 'adj',  indonesian: 'ambigu / tdk jelas' },
+    { word: 'prevalent',    pos: 'adj',  indonesian: 'umum / banyak' },
+    { word: 'coherent',     pos: 'adj',  indonesian: 'koheren / logis' },
+    { word: 'undermine',    pos: 'verb', indonesian: 'melemahkan' },
+    { word: 'nuance',       pos: 'noun', indonesian: 'nuansa / hal halus' },
+    { word: 'compelling',   pos: 'adj',  indonesian: 'meyakinkan' },
+    { word: 'viable',       pos: 'adj',  indonesian: 'layak / bisa diterapkan' },
+    { word: 'detriment',    pos: 'noun', indonesian: 'kerugian / dampak buruk' },
+    { word: 'inclination',  pos: 'noun', indonesian: 'kecenderungan' },
+    { word: 'feasible',     pos: 'adj',  indonesian: 'layak laksana' },
+    { word: 'concise',      pos: 'adj',  indonesian: 'ringkas' },
+    { word: 'reluctant',    pos: 'adj',  indonesian: 'enggan / tdk mau' },
+  ];
+  const dayIndex = Math.floor(date.getTime() / (1000 * 60 * 60 * 24));
+  const todayWord = ACADEMIC_WORDS[dayIndex % ACADEMIC_WORDS.length];
+
+  // Pull a real example sentence from test_contents
+  let example = '';
+  let sourceContentId: number | null = null;
+  try {
+    const passageRows = await env.DB.prepare(
+      `SELECT id, content FROM test_contents
+       WHERE status = 'published' AND question_type IN ('read_academic_passage', 'read_in_daily_life', 'listen_academic_talk')
+       ORDER BY RANDOM() LIMIT 10`
+    ).all<{ id: number; content: string }>();
+    for (const row of passageRows.results || []) {
+      try {
+        const c = JSON.parse(row.content);
+        const text = c.passage_text || c.passage || c.script || '';
+        const sentences = text.match(/[^.!?]{60,200}[.!?]/g) || [];
+        for (const s of sentences) {
+          if (s.length > 80 && s.length < 200) {
+            example = s.trim();
+            sourceContentId = row.id;
+            break;
+          }
+        }
+        if (example) break;
+      } catch { /* skip */ }
+    }
+  } catch (e) {
+    console.error('[blog] publishVocabOfTheDay D1 query error:', e);
+  }
+  if (!example) {
+    example = `Researchers must use this word precisely in academic writing to avoid ambiguity.`;
+  }
+
+  const dateStr = date.toISOString().slice(0, 10);
+  const slug = 'vocab-of-the-day';
+  const title = `Vocab Hari Ini: "${todayWord.word}" — ${dateStr}`;
+  const bodyHtml = `
+<article>
+  <p class="lead"><strong>${todayWord.word}</strong> (${todayWord.pos}) — <em>${todayWord.indonesian}</em></p>
+
+  <h2>📖 Arti &amp; Penggunaan</h2>
+  <p>Kata <strong>${todayWord.word}</strong> adalah salah satu kata academic yang paling sering muncul di TOEFL iBT, IELTS Academic, dan TOEIC. Memahami cara pakainya bisa langsung naikin skor lo di Reading &amp; Writing.</p>
+
+  <h2>📝 Contoh Kalimat (dari soal asli)</h2>
+  <blockquote>${example}</blockquote>
+
+  <h2>🇮🇩 Artinya dalam Bahasa Indonesia</h2>
+  <p>"${example}" → <em>${todayWord.indonesian} sesuai konteks.</em></p>
+
+  <h2>💡 Tips Pake di Exam</h2>
+  <ul>
+    <li>TOEFL iBT Reading: sering muncul di vocabulary questions (cari sinonim/antonim)</li>
+    <li>IELTS Writing Task 2: gunakan 1-2 kata academic per paragraph buat naikkan band score</li>
+    <li>TOEFL iBT Speaking: pakai di Task 4 (lecture summary) untuk sound natural</li>
+  </ul>
+
+  <h2>🎯 Latihan</h2>
+  <p>Coba bikin 2 kalimat pake kata <strong>${todayWord.word}</strong>:</p>
+  <ol>
+    <li>Kalimat tentang topik akademik (education, environment, atau technology)</li>
+    <li>Kalimat tentang kehidupan sehari-hari</li>
+  </ol>
+  <p>Kirim jawaban lo ke bot EduBot di @edubot_bot dan dapet feedback gratis dari AI tutor.</p>
+</article>`;
+
+  return await publishArticle(env, {
+    slug,
+    title,
+    topic: 'vocabulary',
+    test_type: 'TOEFL_IBT',
+    meta_description: `Vocab akademik "${todayWord.word}" — ${todayWord.indonesian}. Contoh kalimat dari soal asli, tips TOEFL/IELTS/TOEIC.`,
+    body_html: bodyHtml,
+    source_content_id: sourceContentId ?? undefined,
+    status: 'published',
+  });
+}
+
+// Same idea for the daily quiz — publish a real quiz-of-the-day
+// article that links to the bot for the user to try.
+export async function publishQuizOfTheDay(env: Env, date: Date = new Date()): Promise<BlogArticle | null> {
+  let realExample = '';
+  let sourceContentId: number | null = null;
+  try {
+    const rows = await env.DB.prepare(
+      `SELECT id, content, section, test_type, question_type
+       FROM test_contents
+       WHERE status = 'published'
+         AND question_type IN ('read_academic_passage','read_in_daily_life','complete_the_words','listen_choose_response')
+       ORDER BY RANDOM() LIMIT 5`
+    ).all<{ id: number; content: string; section: string; test_type: string; question_type: string }>();
+    for (const row of rows.results || []) {
+      try {
+        const c = JSON.parse(row.content);
+        const text = c.passage_text || c.passage || c.script || c.question_text || c.question || '';
+        if (text.length > 100) {
+          realExample = text.slice(0, 800);
+          sourceContentId = row.id;
+          break;
+        }
+      } catch { /* skip */ }
+    }
+  } catch (e) {
+    console.error('[blog] publishQuizOfTheDay D1 query error:', e);
+  }
+  if (!realExample) {
+    realExample = 'Open the bot and try a new practice question every day!';
+  }
+  const dateStr = date.toISOString().slice(0, 10);
+  const slug = 'quiz-of-the-day';
+  const title = `Quiz of the Day — ${dateStr}`;
+  const bodyHtml = `
+<article>
+  <p class="lead"><strong>Daily practice question</strong> — ${dateStr}</p>
+
+  <h2>📝 Passage</h2>
+  <blockquote>${realExample}</blockquote>
+
+  <h2>🎯 Try It</h2>
+  <p>Open the EduBot mini app → Practice → Take a test, atau langsung buka bot di @edubot_bot dan ketik /test untuk soal lengkap dari bank soal asli.</p>
+
+  <h2>📊 Kenapa Latihan Harian?</h2>
+  <ul>
+    <li>Reading: 1 passage per hari × 30 hari = 30 passages, setara 1 sesi TOEFL iBT penuh</li>
+    <li>Spaced repetition: 10 menit/hari × 90 hari = band score naik 0.5-1.0</li>
+    <li>Free tier: 10 soal/hari gratis, premium = unlimited</li>
+  </ul>
+</article>`;
+  return await publishArticle(env, {
+    slug,
+    title,
+    topic: 'practice',
+    test_type: 'TOEFL_IBT',
+    meta_description: `Quiz harian dari soal asli TOEFL/IELTS — ${dateStr}. Latihan gratis 10 soal/hari.`,
+    body_html: bodyHtml,
+    source_content_id: sourceContentId ?? undefined,
+    status: 'published',
+  });
+}

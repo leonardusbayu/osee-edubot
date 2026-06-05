@@ -918,6 +918,25 @@ async function handleCron(env: Env) {
 async function handleMorningChannelCron(env: Env) {
   try {
     const { generateVocabularyOfTheDay, generateDailyQuiz, formatQuizPost, postToChannel } = await import('./services/contentGenerator');
+    const { publishVocabOfTheDay, publishQuizOfTheDay } = await import('./services/blog');
+
+    // Week 4: publish fresh blog articles before posting the channel
+    // message. The channel post links to /api/blog/article/vocab-of-the-day
+    // and /api/blog/article/quiz-of-the-day, so this keeps the links alive
+    // with real content (instead of "coming soon" placeholder).
+    try {
+      const blogVocab = await publishVocabOfTheDay(env);
+      console.log('Blog vocab article published:', blogVocab?.slug);
+    } catch (e) {
+      console.error('Blog vocab publish error (non-fatal):', e);
+    }
+    try {
+      const blogQuiz = await publishQuizOfTheDay(env);
+      console.log('Blog quiz article published:', blogQuiz?.slug);
+    } catch (e) {
+      console.error('Blog quiz publish error (non-fatal):', e);
+    }
+
     const vocab = await generateVocabularyOfTheDay(env);
     const vocabOk = await postToChannel(env, vocab.text, 'vocab');
     console.log('Channel vocab post:', vocabOk ? 'OK' : 'FAILED');
