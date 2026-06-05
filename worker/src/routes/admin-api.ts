@@ -1296,6 +1296,140 @@ adminApiRoutes.get('/reseller-dashboard/my-code', async (c) => {
   });
 });
 
+// 5. Send broadcast to my customers
+//    POST /api/v1/admin/reseller-dashboard/message
+//    Body: { message: string, customer_ids: number[] }
+//    Enforces per-customer 7-day cooldown + per-reseller 3-broadcasts/day
+adminApiRoutes.post('/reseller-dashboard/message', async (c) => {
+  const auth = await authReseller(c);
+  if (!auth.ok) return auth.res;
+  const resellerId = auth.userId;
+  if (!c.env.TELEGRAM_BOT_TOKEN) {
+    return c.json({ error: 'Telegram bot token not configured' }, 500);
+  }
+  const body = await c.req.json().catch(() => ({}));
+  const message = (body.message as string || '').trim();
+  const customerIds: number[] = Array.isArray(body.customer_ids) ? body.customer_ids : [];
+  if (!message) return c.json({ error: 'message is required' }, 400);
+  if (customerIds.length === 0) return c.json({ error: 'customer_ids is empty' }, 400);
+  if (customerIds.length > 500) return c.json({ error: 'Max 500 customers per broadcast' }, 400);
+
+  // Pull the target list. We only allow sending to customers the
+  // reseller actually has an attribution with (security: prevents
+  // a reseller from spamming random telegram users).
+  const placeholders = customerIds.map(() => '?').join(',');
+  const targets = await c.env.DB.prepare(
+    `SELECT DISTINCT u.id as customer_id, u.telegram_id as customer_telegram_id, u.name as customer_name
+     FROM users u
+     JOIN referral_attributions a ON a.customer_id = u.id
+     WHERE a.reseller_id = ? AND u.id IN (${placeholders})`
+  ).bind(resellerId, ...customerIds).all<any>();
+
+  if (targets.results.length === 0) {
+    return c.json({ error: 'No valid customers found' }, 400);
+  }
+
+  const { sendResellerBroadcast } = await import('../services/reseller-messaging');
+  const result = await sendResellerBroadcast(c.env, {
+    resellerId,
+    message,
+    targets: targets.results,
+    botToken: c.env.TELEGRAM_BOT_TOKEN,
+  });
+
+  return c.json(result);
+});
+
+// 6. Get message history for this reseller
+adminApiRoutes.get('/reseller-dashboard/message-history', async (c) => {
+  const auth = await authReseller(c);
+  if (!auth.ok) return auth.res;
+  const { getResellerMessageHistory } = await import('../services/reseller-messaging');
+  const history = await getResellerMessageHistory(c.env, auth.userId, 100);
+  return c.json({ messages: history });
+});
+
+// 7. Class comparison: which of my class students used my reseller code
+//    (and vice versa). Only meaningful if the reseller is ALSO a teacher
+//    with at least one class. If the reseller has no classes, returns empty.
+adminApiRoutes.get('/reseller-dashboard/class-comparison', async (c) => {
+  const auth = await authReseller(c);
+  if (!auth.ok) return auth.res;
+  const resellerId = auth.userId;
+
+  // 1. Get this reseller's classes (where they're the teacher)
+  const classes = await c.env.DB.prepare(
+    `SELECT id, name, invite_code, is_active
+     FROM classes WHERE teacher_id = ?`
+  ).bind(resellerId).all<any>();
+  const classList = classes.results || [];
+
+  if (classList.length === 0) {
+    return c.json({
+      classes: [],
+      summary: { total_students: 0, used_my_code: 0, joined_via_code: 0, overlap: 0 },
+      message: 'Kamu belum punya class. /addclass dulu untuk bandingin dengan reseller.',
+    });
+  }
+
+  const classIds = classList.map((c: any) => c.id);
+
+  // 2. Students in those classes
+  const classStudents = await c.env.DB.prepare(
+    `SELECT DISTINCT u.id, u.name, u.telegram_id, u.referral_code_applied,
+            u.target_test, ce.class_id
+     FROM class_enrollments ce
+     JOIN users u ON u.id = ce.user_id
+     WHERE ce.class_id IN (${classIds.map(() => '?').join(',')})`
+  ).bind(...classIds).all<any>();
+
+  // 3. Customers referred by my code(s)
+  const myCustomers = await c.env.DB.prepare(
+    `SELECT DISTINCT u.id, u.name, u.telegram_id, u.referral_code_applied,
+            u.target_test
+     FROM referral_attributions a
+     JOIN users u ON u.id = a.customer_id
+     WHERE a.reseller_id = ?`
+  ).bind(resellerId).all<any>();
+
+  // 4. Compute the overlap and union
+  const classStudentMap = new Map<number, any>();
+  for (const s of classStudents.results || []) classStudentMap.set(s.id, s);
+  const myCustomerMap = new Map<number, any>();
+  for (const c of myCustomers.results || []) myCustomerMap.set(c.id, c);
+
+  const overlap: any[] = [];
+  const classOnly: any[] = [];
+  const codeOnly: any[] = [];
+
+  for (const [id, s] of classStudentMap) {
+    if (myCustomerMap.has(id)) {
+      overlap.push({ ...s, in_class: true, used_my_code: true });
+    } else {
+      classOnly.push({ ...s, in_class: true, used_my_code: false });
+    }
+  }
+  for (const [id, c] of myCustomerMap) {
+    if (!classStudentMap.has(id)) {
+      codeOnly.push({ ...c, in_class: false, used_my_code: true });
+    }
+  }
+
+  return c.json({
+    classes: classList,
+    summary: {
+      total_students: classStudentMap.size,
+      used_my_code: myCustomerMap.size,
+      class_only: classOnly.length,
+      code_only: codeOnly.length,
+      overlap: overlap.length,
+    },
+    overlap,
+    class_only: classOnly,
+    code_only: codeOnly,
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════
 // SYSTEM CONFIG
 // ═══════════════════════════════════════════════════════════════
