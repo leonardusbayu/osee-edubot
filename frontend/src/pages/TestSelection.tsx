@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTestStore } from '../stores/test';
 import { authedFetch } from '../api/authedFetch';
+import UpgradePrompt from '../components/UpgradePrompt';
+import { openTelegramLink } from '../utils/telegram';
 
 interface QuotaInfo {
   allowed: boolean;
@@ -437,6 +439,7 @@ export default function TestSelection() {
         <div className="space-y-3 mb-6">
           <a
             href="https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=premium"
+            onClick={(e) => { e.preventDefault(); openTelegramLink('https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=premium'); }}
             className="block w-full bg-gradient-to-r from-yellow-400 to-orange-500 text-black font-bold py-4 rounded-xl text-center"
           >
             ⭐ Upgrade Premium
@@ -491,7 +494,11 @@ export default function TestSelection() {
         </p>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">{error}</div>
+          error.includes('Batas harian tercapai') ? (
+            <UpgradePrompt reason={error} />
+          ) : (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">{error}</div>
+          )
         )}
 
         <button
@@ -594,7 +601,11 @@ export default function TestSelection() {
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">{error}</div>
+        error.includes('Batas harian tercapai') ? (
+          <UpgradePrompt reason={error} />
+        ) : (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">{error}</div>
+        )
       )}
 
       <div className="bg-gradient-to-r from-tg-button/10 to-tg-button/5 rounded-xl p-4 mb-6">

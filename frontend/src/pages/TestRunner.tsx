@@ -6,6 +6,8 @@ import { startOfflineSyncService, stopOfflineSyncService, syncPendingAnswers } f
 import Timer from '../components/Timer';
 import AudioRecorder from '../components/AudioRecorder';
 import ReportIssueButton from '../components/ReportIssueButton';
+import UpgradePrompt from '../components/UpgradePrompt';
+import { openTelegramLink } from '../utils/telegram';
 import { hapticTap, hapticCorrect, hapticWrong, hapticHeavy, hapticSelection } from '../utils/haptic';
 
 const API_URL = (import.meta.env.VITE_API_URL as string) || 'https://edubot-api.edubot-leonardus.workers.dev/api';
@@ -1808,6 +1810,7 @@ export default function TestRunner() {
                 <p className="text-xs text-tg-hint mt-1">Upgrade untuk akses soal ini</p>
                 <a
                   href="https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=premium"
+                  onClick={(e) => { e.preventDefault(); openTelegramLink('https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=premium'); }}
                   className="block mt-3 bg-yellow-500 text-black font-bold py-2 px-4 rounded-lg text-sm"
                 >
                   ⭐ Upgrade Premium
@@ -2272,8 +2275,7 @@ export default function TestRunner() {
                 {speakingResult.premium_required && speakingResult.upgrade_url && (
                   <a
                     href={speakingResult.upgrade_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    onClick={(e) => { e.preventDefault(); openTelegramLink(speakingResult.upgrade_url!); }}
                     className="block mt-3 px-4 py-2 rounded-lg bg-tg-button text-tg-button-text font-medium text-center"
                   >
                     Upgrade ke Premium

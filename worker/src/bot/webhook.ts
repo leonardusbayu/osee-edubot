@@ -1788,6 +1788,40 @@ async function handleMessage(message: any, env: Env) {
           "UPDATE diagnostic_sessions SET status = 'cancelled' WHERE user_id = ? AND status = 'in_progress'"
         ).bind(user.id).run();
 
+        // Deep link from mini app's "Upgrade" button (?start=premium).
+        // Previously this just showed the regular /start welcome — the
+        // mini app link was a dead end. Now we route to the same flow
+        // as the /premium command so the user sees Stars/GoPay options
+        // immediately.
+        if (startParam === 'premium') {
+          const { checkPremium } = await import('../services/premium');
+          const premiumInfo = await checkPremium(env, user.id);
+          if (premiumInfo.is_premium) {
+            await sendMessage(env, chatId,
+              `✅ *Premium Active*\n\n` +
+              `Akses premium kamu aktif${premiumInfo.days_remaining ? ` untuk ${premiumInfo.days_remaining} hari lagi` : ''}.`
+            );
+          } else {
+            await sendMessage(env, chatId,
+              `⭐ *Upgrade Premium*\n\n` +
+              `Akses tak terbatas! Pilih paket:\n\n` +
+              `• 7 hari = 375 ⭐ (Rp 30.000)\n` +
+              `• 30 hari = 1.238 ⭐ (Rp 99.000)\n` +
+              `• 90 hari = 3.375 ⭐ (Rp 270.000)\n` +
+              `• 180 hari = 6.250 ⭐ (Rp 500.000)\n` +
+              `• 365 hari = 11.875 ⭐ (Rp 950.000)\n\n` +
+              `💡 Kumpulkan referral 5 teman = 1 bulan gratis! /referral`,
+              {
+                inline_keyboard: [
+                  [{ text: '💳 Beli dengan Telegram Stars', callback_data: 'buy_stars' }],
+                  [{ text: '🏦 Transfer GoPay', callback_data: 'buy_manual' }],
+                ],
+              }
+            );
+          }
+          return;
+        }
+
         // P1 #9: Auto-create first lesson plan on /start for returning users.
         // Previously a student had to type /lesson to discover the feature.
         // Now we check on /start and create one in the background. The next

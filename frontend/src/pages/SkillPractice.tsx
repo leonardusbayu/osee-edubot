@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTestStore } from '../stores/test';
 import { authedFetch } from '../api/authedFetch';
+import UpgradePrompt from '../components/UpgradePrompt';
 
 interface SkillIRT {
   theta: number;
@@ -225,7 +226,11 @@ export default function SkillPractice() {
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">{error}</div>
+        error.includes('Batas harian tercapai') ? (
+          <UpgradePrompt reason={error} />
+        ) : (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4 text-sm text-red-700">{error}</div>
+        )
       )}
 
       {/* Recommendation Banner */}

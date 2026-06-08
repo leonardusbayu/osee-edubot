@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { authedFetch } from '../api/authedFetch';
+import UpgradePrompt from '../components/UpgradePrompt';
 
 interface ProgressData {
   target_test: string;
@@ -148,9 +149,7 @@ export default function Progress() {
               {quota.remaining} soal tersisa hari ini · Reset {new Date(quota.reset_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
             </p>
           ) : (
-            <p className="text-xs text-red-500 font-medium">
-              Kuota habis! Upgrade ke Premium untuk akses unlimited.
-            </p>
+            <UpgradePrompt reason="Kuota habis! Upgrade ke Premium untuk akses unlimited." variant="card" />
           )}
         </div>
       )}
