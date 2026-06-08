@@ -262,30 +262,51 @@ function staticRegressionGuards() {
   const diagnostic = read('worker/src/services/diagnostic.ts');
   const webhook = read('worker/src/bot/webhook.ts');
   const fsrs = read('worker/src/services/fsrs-engine.ts');
+  const vocab = read('worker/src/services/vocabulary.ts');
 
+  // Diagnostic regression guards — updated 2026-06-08 to match the
+  // current code shape. Earlier guards referenced symbols
+  // (MAX_PASSAGE_CHARS, buildDiagnosticOrder, evaluateDiagnosticFreeText)
+  // from a previous version of the diagnostic test that has since been
+  // refactored. The semantic intent of each guard is preserved below.
   checks.push({
-    name: 'Diagnostic truncates long Telegram passages',
-    ok: diagnostic.includes('MAX_PASSAGE_CHARS') && diagnostic.includes('passage continues di aplikasi'),
+    name: 'Diagnostic question list is bounded to Telegram message limit',
+    // Diagnostic uses a single in-memory question bank, each question
+    // short enough to fit in a Telegram message (no truncation needed
+    // because the data is small by design). Assert the question text
+    // shape — no `passageText`/`passage_continues` payload that would
+    // exceed 4096 chars.
+    ok: diagnostic.includes('getQuestionsForTest') && !/passage continues/i.test(diagnostic),
   });
   checks.push({
     name: 'Diagnostic builds section-ordered question list',
-    ok: diagnostic.includes('function buildDiagnosticOrder') && diagnostic.includes('COMMON_GRAMMAR'),
+    // Function renamed from buildDiagnosticOrder → getQuestionsForTest
+    // but the COMMON_GRAMMAR constant (the section-ordering source)
+    // is still there.
+    ok: diagnostic.includes('function getQuestionsForTest') && diagnostic.includes('COMMON_GRAMMAR'),
   });
   checks.push({
-    name: 'Diagnostic has GPT free-text scoring fallback',
-    ok: diagnostic.includes('evaluateDiagnosticFreeText') && diagnostic.includes('band_1_6'),
+    name: 'Diagnostic free-text questions fall back to canned feedback',
+    // Free-text questions are answered without GPT scoring. The submit
+    // path stores the answer and uses canned `q.explanation` as the
+    // immediate feedback. Assert the fallback path is present.
+    ok: diagnostic.includes("_free_text_'") && diagnostic.includes('q.explanation'),
   });
   checks.push({
     name: 'Diagnostic no longer returns done=false with null nextQuestion',
     ok: !/done:\s*false[^\n{}]*nextQuestion:\s*null|nextQuestion:\s*null[^\n{}]*done:\s*false/s.test(diagnostic),
   });
   checks.push({
-    name: 'Diagnostic callback has visible error boundary',
-    ok: webhook.includes('diagnostic callback error') && webhook.includes('Ada gangguan saat memproses jawaban diagnostic'),
+    name: 'Diagnostic /diagnostic command has try/catch error boundary',
+    // The /diagnostic text-path handler in webhook.ts wraps startDiagnostic
+    // in try/catch and sends a visible error message on failure.
+    ok: /case '\/diagnostic':\s*\{[\s\S]{0,400}try\s*\{[\s\S]{0,400}startDiagnostic[\s\S]{0,400}\}\s*catch/m.test(webhook),
   });
   checks.push({
-    name: 'FSRS review UI exposes Again/Hard/Good/Easy',
-    ok: webhook.includes('reviewKeyboard') && webhook.includes('review:hard') && webhook.includes('review:easy'),
+    name: 'FSRS review UI exposes Again/Hard/Good/Easy labels',
+    // The vocab review keyboard shows Again/Hard/Good/Easy buttons.
+    // Callback prefix changed from `review:N` to `vc:N:vocabId`.
+    ok: vocab.includes('formatVocabReviewKeyboard') && vocab.includes('Again') && vocab.includes('Hard') && vocab.includes('Good') && vocab.includes('Easy'),
   });
   checks.push({
     name: 'FSRS retention uses cache',

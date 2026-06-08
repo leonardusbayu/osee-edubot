@@ -283,6 +283,9 @@ ttsRoutes.get('/speak', async (c) => {
     console.error('[tts/speak] OPENAI_API_KEY missing — check wrangler secrets');
     return c.json({ error: 'TTS not configured' }, 500);
   }
+  // Bug-hunt #1 (2026-06-08): was missing auth check — anonymous callers
+  // could burn OpenAI credits. Same gate as /dialogue.
+  if (!(await requireAuthedTTS(c))) return c.json({ error: 'Unauthorized' }, 401);
 
   const text = c.req.query('text');
   const voice = c.req.query('voice') || 'alloy';

@@ -29,34 +29,6 @@ const TARGET_EMOJI: Record<TargetTest, string> = {
 };
 
 const DAILY_LESSONS: Record<TargetTest, DailyLesson[]> = {
-  TOEFL_IBT: [
-    {
-      target: 'TOEFL_IBT',
-      label: TARGET_LABELS.TOEFL_IBT,
-      hook: 'Kalau reading TOEFL terasa panjang, masalahnya sering bukan vocab — tapi kamu membaca semua kalimat seolah semuanya penting.',
-      insight: 'TOEFL iBT suka menyembunyikan jawaban di fungsi kalimat: contrast, cause, example, atau definition.',
-      microLesson: 'Cari signal words dulu: however, therefore, for example, in other words. Setelah itu baru baca kalimat sebelum/sesudahnya.',
-      tryNow: 'Latihan 60 detik: ambil 1 paragraf English, lingkari 3 signal words, lalu tulis fungsi tiap kalimat: reason/example/contrast/result.',
-      reflection: 'Pertanyaan kecil: tadi kamu mencari arti kata, atau mencari fungsi kalimat?',
-      cta: 'Ketik /study lalu pilih Reading → Vocab in Context atau Speed Reading.',
-      scene: 'A focused student at a desk scanning an academic passage on a tablet, with highlighted connector words and a notebook showing cause, contrast, example symbols',
-      sceneVocab: ['however', 'therefore', 'example', 'contrast', 'academic passage'],
-      focusCallback: 'cat_reading',
-    },
-    {
-      target: 'TOEFL_IBT',
-      label: TARGET_LABELS.TOEFL_IBT,
-      hook: 'Speaking TOEFL bukan lomba aksen. Ini lomba struktur dalam 45 detik.',
-      insight: 'Jawaban yang terdengar lancar biasanya punya kerangka: opinion → reason → example → closing.',
-      microLesson: 'Pakai OREO: Opinion, Reason, Example, Opinion again. Satu alasan kuat lebih bagus daripada tiga alasan mentah.',
-      tryNow: 'Rekam 30 detik: “I prefer studying in the morning.” Pakai 1 reason + 1 example pribadi.',
-      reflection: 'Apakah jawabanmu punya contoh spesifik, atau masih terlalu umum?',
-      cta: 'Ketik /speak atau /study → Speaking → Express Opinion.',
-      scene: 'A student recording a short English speaking answer on a phone with a simple OREO framework card on the desk',
-      sceneVocab: ['opinion', 'reason', 'example', 'recording', 'speaking'],
-      focusCallback: 'cat_speaking',
-    },
-  ],
   TOEFL_ITP: [
     {
       target: 'TOEFL_ITP',
@@ -140,6 +112,8 @@ const DAILY_LESSONS: Record<TargetTest, DailyLesson[]> = {
       sceneVocab: ['when', 'where', 'who', 'why', 'response'],
       focusCallback: 'cat_listening',
     },
+  ],
+  TOEFL_IBT: [
     {
       target: 'TOEFL_IBT',
       label: TARGET_LABELS.TOEFL_IBT,

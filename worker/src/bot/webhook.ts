@@ -2776,9 +2776,14 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
       }
 
       case '/diagnostic': {
-        const { startDiagnostic } = await import('../services/diagnostic');
-        const intro = await startDiagnostic(env, user);
-        await sendMessage(env, chatId, intro);
+        try {
+          const { startDiagnostic } = await import('../services/diagnostic');
+          const intro = await startDiagnostic(env, user);
+          await sendMessage(env, chatId, intro);
+        } catch (e: any) {
+          console.error('Diagnostic command error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memulai diagnostic. Coba lagi ya.');
+        }
         return;
       }
 
