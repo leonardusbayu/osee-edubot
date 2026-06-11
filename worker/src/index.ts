@@ -1792,6 +1792,36 @@ function safeTask(label: string, fn: () => Promise<unknown>): Promise<void> {
   })();
 }
 
+// Weekly score estimate snapshots (ROADMAP_M3 §1.1). Snapshots users active
+// in the last 14 days, processing those with the oldest (or no) snapshot
+// first, capped at 200 per run to stay inside the subrequest budget.
+async function handleScoreSnapshotCron(env: Env): Promise<void> {
+  const { saveSnapshot } = await import('./services/score-predictor');
+
+  const users = await env.DB.prepare(
+    `SELECT u.id, COALESCE(u.target_test, 'TOEFL_IBT') AS test_type,
+            (SELECT MAX(se.snapshot_date) FROM score_estimates se WHERE se.user_id = u.id) AS last_snapshot
+     FROM users u
+     WHERE u.role = 'student' AND u.is_active = 1
+       AND u.last_study_date >= date('now', '-14 days')
+     ORDER BY (last_snapshot IS NOT NULL), last_snapshot ASC
+     LIMIT 200`
+  ).all();
+
+  let saved = 0;
+  let skipped = 0;
+  for (const u of (users.results || []) as any[]) {
+    try {
+      const est = await saveSnapshot(env, u.id, u.test_type);
+      if (est) saved++;
+      else skipped++; // no signals yet (brand-new student)
+    } catch (e) {
+      console.error(`[score-snapshots] user ${u.id} failed:`, (e as any)?.message || e);
+    }
+  }
+  console.log('[score-snapshots]', JSON.stringify({ candidates: users.results?.length || 0, saved, skipped }));
+}
+
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
@@ -1860,6 +1890,10 @@ export default {
       ctx.waitUntil(safeTask('weekly', () => handleWeeklyCron(env)));
       // Notion weekly reports sync
       ctx.waitUntil(safeTask('notion-weekly', () => handleNotionWeeklySync(env)));
+      // Weekly score estimate snapshots (ROADMAP_M3 §1.1) — students active
+      // in the last 14 days, oldest snapshot first, capped to respect the
+      // subrequest budget.
+      ctx.waitUntil(safeTask('score-snapshots', () => handleScoreSnapshotCron(env)));
       // Weekly full content audit — scans every published row via validator
       ctx.waitUntil(
         (async () => {

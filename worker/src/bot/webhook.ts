@@ -1885,6 +1885,7 @@ async function handleMessage(message: any, env: Env) {
           `/drill — Speaking drill listen-and-repeat + prosody scoring\n` +
           `/pronounce — Drill pronunciation 254 kata\n` +
           `/listen — Listening library (TTS + comprehension)\n` +
+          `/strategi — Strategi tes per ujian (time management, playbook soal)\n` +
           `/template — Writing templates (IELTS, TOEFL, TOEIC)\n` +
           `/video — Video comprehension (TED + lectures + Q&A)\n` +
           `/phase — Cek study phase kamu + rekomendasi\n` +
@@ -2283,7 +2284,18 @@ async function handleMessage(message: any, env: Env) {
             await sendMessage(env, chatId, 'Belum ada data progress. Mulai dengan /test atau /diagnostic.');
             return;
           }
-          await sendMessage(env, chatId, formatProgressMessage(report), mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id));
+          let progressText = formatProgressMessage(report);
+          // Score prediction (ROADMAP_M3 §1.1) — best-effort, computed on demand.
+          try {
+            const { estimateScore, formatScoreEstimateMessage } = await import('../services/score-predictor');
+            const estimate = await estimateScore(env, user.id, user.target_test || 'TOEFL_IBT');
+            if (estimate) {
+              progressText += `\n\n${formatScoreEstimateMessage(estimate)}`;
+            }
+          } catch (e) {
+            console.error('Score estimate error:', e);
+          }
+          await sendMessage(env, chatId, progressText, mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id));
         } catch (e) {
           console.error('Progress command error:', e);
           await sendMessage(env, chatId, 'Gagal memuat progress. Coba lagi nanti.');
@@ -2852,6 +2864,24 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           `🎯 Disesuaikan untuk TOEFL, IELTS, TOEIC`,
           { inline_keyboard: pronunRows }
         );
+        return;
+      }
+
+      case '/strategi': {
+        // Test-strategy lessons — hardcoded thread-lessons per exam (M3 §3.3)
+        try {
+          const { strategyMenuKeyboard } = await import('../services/strategy-lessons');
+          const tt = user.target_test || 'TOEFL_IBT';
+          await sendMessage(env, chatId,
+            `🎯 *Strategi Tes: ${tt.replace(/_/g, ' ')}*\n\n` +
+            `Kenaikan skor dalam waktu singkat lebih banyak datang dari STRATEGI tes daripada level bahasa Inggris.\n\n` +
+            `Pilih strategi yang mau kamu pelajari:`,
+            strategyMenuKeyboard(tt)
+          );
+        } catch (e) {
+          console.error('/strategi error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat strategi. Coba lagi ya.');
+        }
         return;
       }
 
@@ -5581,6 +5611,37 @@ async function handleCallbackQuery(query: any, env: Env) {
     } catch (e) {
       console.error('ptr callback error:', e);
       await sendMessage(env, chatId, 'Ada masalah buka sesi review. Coba lagi sebentar lagi ya.');
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // STRATEGY LESSON CALLBACKS (/strategi)
+  //   strategy:<lesson_id> — send the lesson body, then its quiz
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('strategy:')) {
+    try {
+      const { findStrategyLesson } = await import('../services/strategy-lessons');
+      const lessonId = data.slice('strategy:'.length);
+      const found = findStrategyLesson(lessonId);
+      if (!found) {
+        await sendMessage(env, chatId, 'Hmm, strategi itu nggak ketemu. Coba buka lagi lewat /strategi ya.');
+        return;
+      }
+      const { lesson } = found;
+      await sendMessage(env, chatId, `${lesson.title}\n\n${lesson.body}`);
+      if (lesson.quiz) {
+        const letters = ['A', 'B', 'C', 'D'];
+        const optLines = lesson.quiz.options
+          .map((opt, i) => `${letters[i]}. ${opt}`)
+          .join('\n');
+        await sendMessage(env, chatId,
+          `Cek pemahaman dulu, satu soal aja:\n\n${lesson.quiz.question}\n\n${optLines}\n\nBales pakai huruf jawabannya ya.`
+        );
+      }
+    } catch (e) {
+      console.error('strategy callback error:', e);
+      await sendMessage(env, chatId, '⚠️ Gagal memuat strategi. Coba lagi ya.');
     }
     return;
   }
@@ -8413,6 +8474,7 @@ async function handleCallbackQuery(query: any, env: Env) {
         `/study — Pilih topik belajar\n` +
         `/today — Pelajaran hari ini\n` +
         `/review — Review soal yang salah\n` +
+        `/strategi — Strategi tes per ujian\n` +
         `/challenge @user — Duel 5 soal\n\n` +
         `💡 Kirim voice message = latihan speaking!`,
         { inline_keyboard: [[{ text: '◀️ Kembali', callback_data: 'help_main' }]] }
