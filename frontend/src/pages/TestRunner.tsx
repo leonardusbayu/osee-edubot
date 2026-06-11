@@ -65,7 +65,7 @@ const AudioWithError = ({
   onPlay,
   fallbackText,
 }: {
-  src: string;
+  src: string | null | undefined;
   className?: string;
   onPlay?: () => void;
   // Optional: the spoken text so the user can still do the exercise visually
@@ -77,17 +77,22 @@ const AudioWithError = ({
   const [err, setErr] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
+  // Defensive: src may arrive as null/undefined/non-string from a partial
+  // mapQuestion result. Coerce + bail early so subsequent .startsWith
+  // / .includes calls never throw "Cannot read property of undefined".
+  const safeSrc = typeof src === 'string' && src.length > 0 ? src : '';
+
   // Preflight HEAD check — catches 404s the <audio> onError handler
   // misses in Telegram's iOS webview (it renders a silent player instead
   // of firing error). Only checks same-origin /api/ URLs, since CORS
   // blocks HEAD on external CDNs and we can't tell 404 from blocked.
   useEffect(() => {
-    if (!src) return;
-    if (!src.startsWith('/api/') && !src.includes('/api/tts/speak')) return;
+    if (!safeSrc) return;
+    if (!safeSrc.startsWith('/api/') && !safeSrc.includes('/api/tts/speak')) return;
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(src, { method: 'HEAD' });
+        const res = await fetch(safeSrc, { method: 'HEAD' });
         if (!cancelled && (res.status === 404 || res.status === 410)) {
           setErr(true);
         }
@@ -97,9 +102,9 @@ const AudioWithError = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [src, attempt]);
+  }, [safeSrc, attempt]);
 
-  if (!src) return null;
+  if (!safeSrc) return null;
   if (err) {
     return (
       <div className="bg-tg-secondary rounded-lg p-3 text-sm space-y-2">
@@ -127,7 +132,7 @@ const AudioWithError = ({
   const firePlayed = () => {
     if (firedRef.current) return;
     firedRef.current = true;
-    onPlay?.();
+    try { onPlay?.(); } catch { /* swallow — playback fired after unmount */ }
   };
   return (
     <audio
@@ -136,7 +141,7 @@ const AudioWithError = ({
       // <audio> remembers the failed src.
       key={attempt}
       controls
-      src={attempt > 0 ? `${src}${src.includes('?') ? '&' : '?'}_r=${attempt}` : src}
+      src={attempt > 0 ? `${safeSrc}${safeSrc.includes('?') ? '&' : '?'}_r=${attempt}` : safeSrc}
       className={className}
       onError={() => setErr(true)}
       onPlay={firePlayed}
@@ -145,7 +150,9 @@ const AudioWithError = ({
       onTimeUpdate={(e) => {
         // Fires every ~250ms during playback. Any current time > 0.3s means
         // the audio actually produced sound, even if onPlay was swallowed.
-        if ((e.currentTarget.currentTime ?? 0) > 0.3) firePlayed();
+        try {
+          if ((e.currentTarget?.currentTime ?? 0) > 0.3) firePlayed();
+        } catch { /* e.currentTarget may be null on unmount */ }
       }}
     />
   );

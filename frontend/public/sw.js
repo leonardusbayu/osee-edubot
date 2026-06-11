@@ -3,7 +3,7 @@
 // (with the previous bundle's content hash) and users see stale
 // frontend bugs after a deploy. The activate handler deletes the
 // previous cache automatically.
-const CACHE_NAME = 'edubot-v2';
+const CACHE_NAME = 'edubot-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
