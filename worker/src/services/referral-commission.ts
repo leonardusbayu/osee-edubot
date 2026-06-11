@@ -234,7 +234,182 @@ export async function attributeOnPurchase(
      WHERE id = ?`
   ).bind(args.planAmountStars, amount, codeRow.id).run();
 
+  await logCommissionAudit(env, {
+    resellerId: codeRow.reseller_id, attributionId: id,
+    action: 'attribution_created', newStatus: 'pending',
+    amountStars: amount, triggeredBy: 'webhook',
+    notes: `payment #${args.paymentId}, ${args.planDays}d`,
+  });
+  await enforceSoftCaps(env, codeRow.reseller_id);
+
   return await env.DB.prepare('SELECT * FROM referral_attributions WHERE id = ?').bind(id).first<Attribution>();
+}
+
+/**
+ * Append-only audit trail for commission events. Best-effort: a failed
+ * audit insert never blocks the money flow itself.
+ */
+export async function logCommissionAudit(
+  env: Env,
+  args: {
+    resellerId: number;
+    attributionId?: number | null;
+    action: string;
+    oldStatus?: string | null;
+    newStatus?: string | null;
+    amountStars?: number | null;
+    triggeredBy: string;
+    notes?: string | null;
+  }
+): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO commission_audit
+         (reseller_id, attribution_id, action, old_status, new_status, amount_stars, triggered_by, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      args.resellerId, args.attributionId ?? null, args.action,
+      args.oldStatus ?? null, args.newStatus ?? null, args.amountStars ?? null,
+      args.triggeredBy, args.notes ?? null
+    ).run();
+  } catch (e) {
+    console.warn('[commission-audit] insert failed (non-fatal):', e);
+  }
+}
+
+/**
+ * Enforce the soft caps that were previously defined but never checked:
+ *   - >SOFT_CAP_ATTRIBUTIONS_PER_DAY new attributions today → flag
+ *   - >SOFT_CAP_CLAWBACK_RATE clawback rate (min 4 attributions) → flag
+ * Flagging never blocks the attribution itself — it marks the reseller for
+ * admin review (users.reseller_flagged) and logs to commission_audit.
+ */
+export async function enforceSoftCaps(env: Env, resellerId: number): Promise<void> {
+  try {
+    const today = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM referral_attributions
+       WHERE reseller_id = ? AND date(created_at) = date('now')`
+    ).bind(resellerId).first<{ n: number }>();
+    let reason: string | null = null;
+    if (Number(today?.n || 0) > SOFT_CAP_ATTRIBUTIONS_PER_DAY) {
+      reason = `${today!.n} attributions in one day (cap ${SOFT_CAP_ATTRIBUTIONS_PER_DAY})`;
+    } else {
+      const totals = await env.DB.prepare(
+        `SELECT
+           SUM(CASE WHEN status = 'clawback' THEN 1 ELSE 0 END) AS clawbacks,
+           COUNT(*) AS total
+         FROM referral_attributions WHERE reseller_id = ?`
+      ).bind(resellerId).first<{ clawbacks: number; total: number }>();
+      const total = Number(totals?.total || 0);
+      const clawbacks = Number(totals?.clawbacks || 0);
+      if (total >= 4 && clawbacks / total > SOFT_CAP_CLAWBACK_RATE) {
+        reason = `clawback rate ${Math.round((clawbacks / total) * 100)}% over ${total} attributions (cap ${SOFT_CAP_CLAWBACK_RATE * 100}%)`;
+      }
+    }
+    if (reason) {
+      const user = await env.DB.prepare(
+        'SELECT reseller_flagged FROM users WHERE id = ?'
+      ).bind(resellerId).first<{ reseller_flagged: number }>();
+      if (Number(user?.reseller_flagged || 0) !== 1) {
+        await env.DB.prepare(
+          `UPDATE users SET reseller_flagged = 1, reseller_flag_reason = ? WHERE id = ?`
+        ).bind(reason, resellerId).run();
+        await logCommissionAudit(env, {
+          resellerId, action: 'flagged', triggeredBy: 'cron', notes: reason,
+        });
+        console.warn(`[soft-cap] reseller ${resellerId} flagged: ${reason}`);
+      }
+    }
+  } catch (e) {
+    console.warn('[soft-cap] check failed (non-fatal):', e);
+  }
+}
+
+/**
+ * Stars-equivalent value for an arbitrary code duration. Exact plan match
+ * wins; otherwise pro-rata from the 30-day plan rate.
+ */
+export function starsForDays(days: number): number {
+  if (PLAN_PRICING[days]) return PLAN_PRICING[days];
+  return Math.round(days * (PLAN_PRICING[30] / 30));
+}
+
+/**
+ * Commission attribution for a premium_codes redemption (teacher/reseller
+ * sold codes). Codes are prepaid, so the attribution is created directly as
+ * status='confirmed' — payable in the next payout batch, no 7-day hold.
+ *
+ * The owning reseller must have (or gets) a referral_codes row so the
+ * existing ledger FK and denormalized counters stay consistent.
+ * Returns null (never throws) when no commission applies.
+ */
+export async function attributeOnCodeRedemption(
+  env: Env,
+  args: { customerId: number; ownerResellerId: number; premiumCodeId: number; days: number }
+): Promise<Attribution | null> {
+  try {
+    if (args.ownerResellerId === args.customerId) {
+      console.warn(`[code-attribution] reseller ${args.ownerResellerId} redeemed own code. Skipping.`);
+      return null;
+    }
+    // One reseller attribution per customer, ever (UNIQUE(customer_id))
+    const existing = await env.DB.prepare(
+      'SELECT id FROM referral_attributions WHERE customer_id = ?'
+    ).bind(args.customerId).first();
+    if (existing) return null;
+
+    // Find or create the reseller's referral_codes row
+    let codeRow = await env.DB.prepare(
+      'SELECT id FROM referral_codes WHERE reseller_id = ? AND is_active = 1 ORDER BY id ASC LIMIT 1'
+    ).bind(args.ownerResellerId).first<{ id: number }>();
+    if (!codeRow) {
+      const ins = await env.DB.prepare(
+        `INSERT INTO referral_codes (code, reseller_id, notes)
+         VALUES (?, ?, 'auto-created for premium code commission')`
+      ).bind(`RES${args.ownerResellerId}`, args.ownerResellerId).run();
+      codeRow = { id: ins.meta.last_row_id as number };
+    }
+
+    const planAmountStars = starsForDays(args.days);
+    const rate = COMMISSION_RATE_DEFAULT;
+    const amount = Math.floor((planAmountStars * rate) / 100);
+
+    const result = await env.DB.prepare(
+      `INSERT INTO referral_attributions
+         (code_id, reseller_id, customer_id, payment_id, plan_days, plan_amount_stars,
+          commission_rate, commission_amount_stars, status, confirmed_at, notes)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 'confirmed', datetime('now'), ?)`
+    ).bind(
+      codeRow.id, args.ownerResellerId, args.customerId,
+      args.days, planAmountStars, rate, amount,
+      `premium code redemption #${args.premiumCodeId} (prepaid, no hold)`
+    ).run();
+    const id = result.meta.last_row_id as number;
+
+    await env.DB.prepare(
+      `UPDATE referral_codes
+       SET total_uses = total_uses + 1,
+           total_revenue_stars = total_revenue_stars + ?,
+           total_commission_stars = total_commission_stars + ?
+       WHERE id = ?`
+    ).bind(planAmountStars, amount, codeRow.id).run();
+
+    await logCommissionAudit(env, {
+      resellerId: args.ownerResellerId, attributionId: id,
+      action: 'attribution_created', newStatus: 'confirmed',
+      amountStars: amount, triggeredBy: 'code_redemption',
+      notes: `premium code #${args.premiumCodeId}, ${args.days}d`,
+    });
+    await enforceSoftCaps(env, args.ownerResellerId);
+
+    return await env.DB.prepare(
+      'SELECT * FROM referral_attributions WHERE id = ?'
+    ).bind(id).first<Attribution>();
+  } catch (e) {
+    // Commission is bookkeeping — never let it break the redemption itself
+    console.error('[code-attribution] failed (non-fatal):', e);
+    return null;
+  }
 }
 
 /**
@@ -306,13 +481,51 @@ export async function processPendingAttributions(env: Env, now: Date = new Date(
  * Called from the refunded_payment webhook handler.
  */
 export async function clawbackOnRefund(env: Env, paymentId: number): Promise<number> {
+  // Already-paid attributions can't be silently clawed back — the reseller
+  // has the money. Flag those separately so admin can net the debt against
+  // the reseller's next payout.
+  const paidRows = await env.DB.prepare(
+    `SELECT id, reseller_id, commission_amount_stars FROM referral_attributions
+     WHERE payment_id = ? AND status = 'paid'`
+  ).bind(paymentId).all<{ id: number; reseller_id: number; commission_amount_stars: number }>();
+  for (const row of paidRows.results || []) {
+    await env.DB.prepare(
+      `UPDATE referral_attributions
+       SET status = 'clawback',
+           notes = COALESCE(notes, '') || ' REFUND AFTER PAYOUT on payment ' || ? ||
+                   ' — deduct ' || ? || ' stars from next payout'
+       WHERE id = ?`
+    ).bind(paymentId, row.commission_amount_stars, row.id).run();
+    await logCommissionAudit(env, {
+      resellerId: row.reseller_id, attributionId: row.id,
+      action: 'paid_reversal_required', oldStatus: 'paid', newStatus: 'clawback',
+      amountStars: row.commission_amount_stars, triggeredBy: 'webhook',
+      notes: `refund on payment ${paymentId} after payout — net against next payout`,
+    });
+  }
+
   const result = await env.DB.prepare(
     `UPDATE referral_attributions
      SET status = 'clawback',
          notes = COALESCE(notes, '') || ' refund on payment ' || ?
      WHERE payment_id = ? AND status IN ('pending', 'confirmed')`
   ).bind(paymentId, paymentId).run();
-  return (result.meta.changes as number) || 0;
+  const changed = (result.meta.changes as number) || 0;
+
+  // Audit + soft-cap re-check for every affected reseller
+  const affected = await env.DB.prepare(
+    `SELECT id, reseller_id, commission_amount_stars FROM referral_attributions
+     WHERE payment_id = ? AND status = 'clawback'`
+  ).bind(paymentId).all<{ id: number; reseller_id: number; commission_amount_stars: number }>();
+  const resellerIds = new Set<number>();
+  for (const row of affected.results || []) {
+    resellerIds.add(row.reseller_id);
+  }
+  for (const rid of resellerIds) {
+    await enforceSoftCaps(env, rid);
+  }
+
+  return changed + (paidRows.results?.length || 0);
 }
 
 /**

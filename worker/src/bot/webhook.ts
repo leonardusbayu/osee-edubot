@@ -3692,25 +3692,57 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           await sendMessage(env, chatId, 'Command ini hanya untuk admin.');
           return;
         }
-        // Syntax: /gencodes COUNT DAYS "batch_label" [notes]
-        // Example: /gencodes 50 30 budi_mar26 "50 seats for Budi's class"
+        // Syntax: /gencodes COUNT DAYS [batch_label] [@owner] [notes]
+        // @owner attributes the batch to a reseller/teacher — every redemption
+        // then earns them 20% commission (prepaid, instantly confirmed).
         const parts = text.match(/^\/gencodes\s+(\d+)\s+(\d+)(?:\s+(\S+))?(?:\s+(.+))?$/i);
         if (!parts) {
           await sendMessage(env, chatId,
-            `Usage: /gencodes COUNT DAYS [batch_label] [notes]\n\n` +
+            `Usage: /gencodes COUNT DAYS [batch_label] [@owner] [notes]\n\n` +
             `Examples:\n` +
-            `• /gencodes 50 30 budi_mar26\n` +
-            `  → 50 codes × 30 days each, batch='budi_mar26'\n` +
+            `• /gencodes 50 30 budi_mar26 @budiganteng\n` +
+            `  → 50 codes × 30 days, batch='budi_mar26', commission to @budiganteng\n` +
             `• /gencodes 10 7 trial_batch "Jan trial for 10 students"\n` +
-            `• /gencodes 20 90 — (no batch label)\n\n` +
+            `• /gencodes 20 90 — (no batch label, house codes, no commission)\n\n` +
             `Limits: 1-500 codes, 1-730 days per code.`
           );
           return;
         }
         const count = parseInt(parts[1]);
         const days = parseInt(parts[2]);
-        const batchId = parts[3] || null;
-        const notes = parts[4] || null;
+        let batchId = parts[3] || null;
+        let rest = parts[4] || null;
+
+        // Pull an optional @owner token out of batch/notes position
+        let ownerRef: string | null = null;
+        if (batchId && batchId.startsWith('@')) {
+          ownerRef = batchId.slice(1);
+          batchId = null;
+        } else if (rest) {
+          const restTokens = rest.split(/\s+/);
+          if (restTokens[0].startsWith('@')) {
+            ownerRef = restTokens[0].slice(1);
+            rest = restTokens.slice(1).join(' ') || null;
+          }
+        }
+        const notes = rest;
+
+        // Resolve owner → user id, promote to reseller
+        let ownerResellerId: number | null = null;
+        let ownerName: string | null = null;
+        if (ownerRef) {
+          const ownerRow = await env.DB.prepare(
+            'SELECT id, name FROM users WHERE username = ? OR name LIKE ? LIMIT 1'
+          ).bind(ownerRef, `${ownerRef}%`).first() as any;
+          if (!ownerRow) {
+            await sendMessage(env, chatId, `❌ Owner "@${ownerRef}" tidak ditemukan. Batch tidak dibuat.`);
+            return;
+          }
+          ownerResellerId = ownerRow.id;
+          ownerName = ownerRow.name;
+          const { promoteToReseller } = await import('../services/referral-commission');
+          await promoteToReseller(env, ownerRow.id);
+        }
 
         if (count > 500) {
           await sendMessage(env, chatId, 'Max 500 codes per batch. Split into multiple /gencodes.');
@@ -3719,14 +3751,15 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
 
         try {
           const { generateCodes } = await import('../services/premium-codes');
-          const codes = await generateCodes(env, user.id, count, days, batchId, notes);
+          const codes = await generateCodes(env, user.id, count, days, batchId, notes, null, ownerResellerId);
 
           // Send summary first
           await sendMessage(env, chatId,
             `✅ ${codes.length} codes generated\n` +
             `⏱️ ${days} days each\n` +
-            `🏷️ Batch: ${batchId || '(none)'}\n\n` +
-            `Codes below (copy and send to teacher). Each line = one code.`
+            `🏷️ Batch: ${batchId || '(none)'}\n` +
+            (ownerResellerId ? `💰 Komisi 20% ke: ${ownerName} (id=${ownerResellerId})\n` : '') +
+            `\nCodes below (copy and send to teacher). Each line = one code.`
           );
 
           // Chunk codes into messages of ~30 lines each (Telegram 4096 char limit)

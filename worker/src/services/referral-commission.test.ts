@@ -11,6 +11,8 @@ import {
   completeBankPayout,
   listPendingPayouts,
   promoteToReseller,
+  attributeOnCodeRedemption,
+  starsForDays,
   COMMISSION_RATE_DEFAULT,
   PLAN_PRICING,
   type ReferralCode,
@@ -83,6 +85,13 @@ function runFirst(bound: { sql: string; params: any[] }, state: any): any {
   if (sql.includes('SELECT * FROM referral_attributions WHERE customer_id = ?')) {
     return state.attributions.find((a: any) => a.customer_id === params[0]) || null;
   }
+  if (sql.includes('SELECT id FROM referral_attributions WHERE customer_id = ?')) {
+    return state.attributions.find((a: any) => a.customer_id === params[0]) || null;
+  }
+  if (sql.includes('SELECT id FROM referral_codes WHERE reseller_id = ? AND is_active = 1')) {
+    const c = state.codes.find((c: any) => c.reseller_id === params[0] && c.is_active === 1);
+    return c ? { id: c.id } : null;
+  }
   if (sql.includes('SELECT * FROM referral_attributions WHERE payment_id = ?')) {
     return state.attributions.find((a: any) => a.payment_id === params[0]) || null;
   }
@@ -130,6 +139,12 @@ function runAll(bound: { sql: string; params: any[] }, state: any): { results: a
   if (sql.includes('SELECT p.*, u.name as reseller_name')) {
     return { results: state.payouts.filter((p: any) => p.status === 'pending') };
   }
+  if (sql.includes("WHERE payment_id = ? AND status = 'paid'")) {
+    return { results: state.attributions.filter((a: any) => a.payment_id === params[0] && a.status === 'paid') };
+  }
+  if (sql.includes("WHERE payment_id = ? AND status = 'clawback'")) {
+    return { results: state.attributions.filter((a: any) => a.payment_id === params[0] && a.status === 'clawback') };
+  }
   if (sql.includes('SELECT c.*, u.name as reseller_name FROM referral_codes c')) {
     return { results: [...state.codes].sort((a: any, b: any) => b.total_uses - a.total_uses) };
   }
@@ -175,6 +190,29 @@ function runExec(bound: { sql: string; params: any[] }, state: any): any {
       c.total_commission_stars += params[1];
     }
     return { success: true, meta: { changes: 1, last_row_id: 0 } };
+  }
+  if (sql.startsWith("INSERT INTO referral_attributions") && sql.includes("'confirmed', datetime('now')")) {
+    // attributeOnCodeRedemption: prepaid → confirmed immediately, payment_id NULL
+    const id = state.attributions.length + 1;
+    const attr = {
+      id, code_id: params[0], reseller_id: params[1], customer_id: params[2],
+      payment_id: null, plan_days: params[3], plan_amount_stars: params[4],
+      commission_rate: params[5], commission_amount_stars: params[6],
+      status: 'confirmed', confirmed_at: new Date().toISOString(),
+      paid_at: null, payout_method: null, payout_reference: null,
+      notes: params[7], created_at: new Date().toISOString(),
+    };
+    state.attributions.push(attr);
+    return { success: true, meta: { last_row_id: id, changes: 1 } };
+  }
+  if (sql.includes("REFUND AFTER PAYOUT")) {
+    // clawbackOnRefund paid-reversal path: params = (paymentId, amount, id)
+    const a = state.attributions.find((a: any) => a.id === params[2]);
+    if (a) {
+      a.status = 'clawback';
+      a.notes = (a.notes || '') + ` REFUND AFTER PAYOUT on payment ${params[0]} — deduct ${params[1]} stars from next payout`;
+    }
+    return { success: true, meta: { changes: a ? 1 : 0, last_row_id: 0 } };
   }
   if (sql.startsWith("INSERT INTO referral_attributions")) {
     const id = state.attributions.length + 1;
@@ -555,6 +593,83 @@ describe('referral-commission', () => {
       const commission = Math.floor((PLAN_PRICING[365] * COMMISSION_RATE_DEFAULT) / 100);
       // 11875 * 0.2 = 2375
       expect(commission).toBe(2375);
+    });
+  });
+
+  describe('starsForDays', () => {
+    it('returns exact plan price for known durations', () => {
+      expect(starsForDays(7)).toBe(375);
+      expect(starsForDays(30)).toBe(1238);
+      expect(starsForDays(365)).toBe(11875);
+    });
+
+    it('pro-rates odd durations from the 30-day rate', () => {
+      expect(starsForDays(60)).toBe(Math.round(60 * (1238 / 30)));
+      expect(starsForDays(1)).toBe(Math.round(1238 / 30));
+    });
+  });
+
+  describe('attributeOnCodeRedemption', () => {
+    it('creates an instantly-confirmed attribution for a reseller-owned code', async () => {
+      const attr = await attributeOnCodeRedemption(env, {
+        customerId: 1, ownerResellerId: 3, premiumCodeId: 42, days: 30,
+      });
+      expect(attr).not.toBeNull();
+      expect(attr?.status).toBe('confirmed');
+      expect(attr?.reseller_id).toBe(3);
+      expect(attr?.plan_amount_stars).toBe(PLAN_PRICING[30]);
+      expect(attr?.commission_amount_stars).toBe(Math.floor(PLAN_PRICING[30] * 0.2));
+      // Auto-created referral_codes row for the reseller
+      const code = state.codes.find((c) => c.reseller_id === 3);
+      expect(code).toBeDefined();
+      expect(code!.total_uses).toBe(1);
+    });
+
+    it('reuses the reseller existing referral code row', async () => {
+      await createCode(env, { code: 'BUDI03', resellerId: 3 });
+      const attr = await attributeOnCodeRedemption(env, {
+        customerId: 1, ownerResellerId: 3, premiumCodeId: 42, days: 7,
+      });
+      expect(attr?.code_id).toBe(state.codes[0].id);
+      expect(state.codes.length).toBe(1);
+    });
+
+    it('skips self-redemption', async () => {
+      const attr = await attributeOnCodeRedemption(env, {
+        customerId: 3, ownerResellerId: 3, premiumCodeId: 42, days: 30,
+      });
+      expect(attr).toBeNull();
+    });
+
+    it('skips customers already attributed to a reseller', async () => {
+      await attributeOnCodeRedemption(env, { customerId: 1, ownerResellerId: 3, premiumCodeId: 42, days: 30 });
+      const second = await attributeOnCodeRedemption(env, { customerId: 1, ownerResellerId: 4, premiumCodeId: 43, days: 30 });
+      expect(second).toBeNull();
+      expect(state.attributions.length).toBe(1);
+    });
+
+    it('confirmed code commissions show up in payout balance immediately', async () => {
+      await attributeOnCodeRedemption(env, { customerId: 1, ownerResellerId: 3, premiumCodeId: 42, days: 30 });
+      const payout = await createBankPayoutRequest(env, 3);
+      expect(payout).not.toBeNull();
+      expect(payout!.totalAmountStars).toBe(Math.floor(PLAN_PRICING[30] * 0.2));
+    });
+  });
+
+  describe('clawbackOnRefund after payout', () => {
+    it('flips already-paid attributions to clawback with a reversal note', async () => {
+      state.attributions.push({
+        id: 1, code_id: 1, reseller_id: 3, customer_id: 1, payment_id: 100,
+        plan_days: 30, plan_amount_stars: 1238, commission_rate: 20,
+        commission_amount_stars: 247, status: 'paid',
+        confirmed_at: '', paid_at: '', payout_method: 'stars',
+        payout_reference: 'x', notes: null, created_at: new Date().toISOString(),
+      });
+      const changed = await clawbackOnRefund(env, 100);
+      expect(changed).toBe(1);
+      expect(state.attributions[0].status).toBe('clawback');
+      expect(state.attributions[0].notes).toContain('REFUND AFTER PAYOUT');
+      expect(state.attributions[0].notes).toContain('247');
     });
   });
 });

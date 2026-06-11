@@ -34,7 +34,8 @@ type AlertMetric =
   | 'server_errors'
   | 'openai_errors'
   | 'whisper_errors'
-  | 'activity_drop';
+  | 'activity_drop'
+  | 'api_cost';
 
 const WINDOW_MINUTES = 60;
 const BASELINE_HOURS = 24;
@@ -47,6 +48,8 @@ const OPENAI_ERROR_CEILING = 10;
 const WHISPER_ERROR_CEILING = 5;
 const ACTIVITY_DROP_RATIO = 0.3;
 const ACTIVITY_DROP_MIN_BASELINE = 20;
+// Daily OpenAI/API spend ceiling. Override with env.DAILY_COST_ALERT_USD.
+const DAILY_COST_ALERT_USD_DEFAULT = 20;
 
 interface WindowCounts {
   attempts: number;
@@ -232,6 +235,31 @@ export async function runSloSnapshot(env: Env): Promise<SloSnapshotResult> {
     threshold: baselineActivityPerHour * ACTIVITY_DROP_RATIO,
     detail: `activity=${currentActivity} vs 24h avg ${baselineActivityPerHour.toFixed(1)}/hr`,
   });
+
+  // api_cost: today's cumulative API spend over the daily ceiling. Catches
+  // runaway generation loops and abuse before the monthly bill does.
+  try {
+    const costCeiling = Number((env as any).DAILY_COST_ALERT_USD || DAILY_COST_ALERT_USD_DEFAULT);
+    const costRow = await env.DB.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS total FROM api_usage
+        WHERE created_at >= date('now')`
+    ).first<{ total: number }>();
+    const todayCost = Number(costRow?.total || 0);
+    const baselineCostRow = await env.DB.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS total FROM api_usage
+        WHERE created_at >= date('now', '-7 days') AND created_at < date('now')`
+    ).first<{ total: number }>();
+    const dailyAvgCost = Number(baselineCostRow?.total || 0) / 7;
+    await evaluate('api_cost', todayCost > costCeiling, {
+      severity: 'high',
+      current: todayCost,
+      baseline: dailyAvgCost,
+      threshold: costCeiling,
+      detail: `today's API spend $${todayCost.toFixed(2)} > ceiling $${costCeiling} (7d avg $${dailyAvgCost.toFixed(2)}/day)`,
+    });
+  } catch (e) {
+    console.warn('[slo] api_cost check failed (non-fatal):', e);
+  }
 
   return {
     snapshot_id: snapshotId,

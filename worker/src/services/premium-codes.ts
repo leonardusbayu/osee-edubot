@@ -57,6 +57,7 @@ export async function generateCodes(
   batchId: string | null = null,
   notes: string | null = null,
   expiresInDays: number | null = null,
+  ownerResellerId: number | null = null,
 ): Promise<GeneratedCode[]> {
   if (count <= 0 || count > 500) {
     throw new Error('count must be between 1 and 500');
@@ -78,9 +79,9 @@ export async function generateCodes(
     const code = generateCode();
     try {
       await env.DB.prepare(
-        `INSERT INTO premium_codes (code, days, batch_id, notes, created_by, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(code, days, batchId, notes, createdBy, expiresAt).run();
+        `INSERT INTO premium_codes (code, days, batch_id, notes, created_by, expires_at, owner_reseller_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(code, days, batchId, notes, createdBy, expiresAt, ownerResellerId).run();
       out.push({ code, days });
     } catch (e: any) {
       // UNIQUE constraint collision — astronomically rare (32^10) but retry
@@ -102,6 +103,8 @@ export interface RedeemResult {
   days_granted?: number;
   new_expiry?: string;
   code_info?: { batch_id: string | null; notes: string | null };
+  code_id?: number;
+  owner_reseller_id?: number | null;
 }
 
 /**
@@ -123,7 +126,7 @@ export async function redeemCode(
   const code = `OSEE-${clean.slice(4, 9)}-${clean.slice(9)}`;
 
   const row = await env.DB.prepare(
-    `SELECT id, days, batch_id, notes, redeemed_at, expires_at
+    `SELECT id, days, batch_id, notes, redeemed_at, expires_at, owner_reseller_id
        FROM premium_codes WHERE code = ? LIMIT 1`
   ).bind(code).first() as any;
 
@@ -151,11 +154,25 @@ export async function redeemCode(
     `SELECT premium_until FROM users WHERE id = ?`
   ).bind(userId).first() as any;
 
+  // Commission attribution for reseller-owned codes (prepaid → confirmed
+  // immediately, no hold). Best-effort: never blocks the redemption.
+  if (row.owner_reseller_id) {
+    const { attributeOnCodeRedemption } = await import('./referral-commission');
+    await attributeOnCodeRedemption(env, {
+      customerId: userId,
+      ownerResellerId: Number(row.owner_reseller_id),
+      premiumCodeId: Number(row.id),
+      days: Number(row.days),
+    });
+  }
+
   return {
     success: true,
     days_granted: Number(row.days),
     new_expiry: newExpiryRow?.premium_until || null,
     code_info: { batch_id: row.batch_id, notes: row.notes },
+    code_id: Number(row.id),
+    owner_reseller_id: row.owner_reseller_id ? Number(row.owner_reseller_id) : null,
   };
 }
 
