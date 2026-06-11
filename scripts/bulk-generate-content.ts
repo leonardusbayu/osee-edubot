@@ -379,18 +379,37 @@ async function main() {
     }
     return out;
   }
-  const refTextValues = refs.flatMap((r: any) => extractTextValues(r.content_parsed || {}));
-  const refBlob = refTextValues.join(' \n ').toLowerCase().replace(/\s+/g, ' ');
   const NGRAM_SIZE = 7;
+  function ngramsOf(text: string): Set<string> {
+    const out = new Set<string>();
+    const words = text.toLowerCase().replace(/\s+/g, ' ').split(' ');
+    for (let i = 0; i + NGRAM_SIZE <= words.length; i++) {
+      const ngram = words.slice(i, i + NGRAM_SIZE).join(' ');
+      if (ngram.length >= 25) out.add(ngram);
+    }
+    return out;
+  }
+  // Boilerplate filter: instruction phrasing ("choose the word that best
+  // completes the sentence") recurs in EVERY reference of formulaic types
+  // like text_completion — that's template, not content. Only n-grams
+  // unique to a single reference are protected content.
+  const ngramRefCount = new Map<string, number>();
+  for (const r of refs) {
+    const refGrams = new Set<string>();
+    for (const v of extractTextValues((r as any).content_parsed || {})) {
+      for (const g of ngramsOf(v)) refGrams.add(g);
+    }
+    for (const g of refGrams) ngramRefCount.set(g, (ngramRefCount.get(g) || 0) + 1);
+  }
+  const protectedGrams = new Set<string>();
+  for (const [g, n] of ngramRefCount) {
+    if (n === 1) protectedGrams.add(g);
+  }
   function hasLongCopy(content: any): boolean {
     const values = extractTextValues(content);
     for (const v of values) {
-      const lower = v.toLowerCase().replace(/\s+/g, ' ');
-      const words = lower.split(' ');
-      for (let i = 0; i + NGRAM_SIZE <= words.length; i++) {
-        const ngram = words.slice(i, i + NGRAM_SIZE).join(' ');
-        if (ngram.length < 25) continue;
-        if (refBlob.includes(ngram)) return true;
+      for (const g of ngramsOf(v)) {
+        if (protectedGrams.has(g)) return true;
       }
     }
     return false;
