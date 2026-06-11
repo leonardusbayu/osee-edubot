@@ -279,7 +279,7 @@ export function renderDailyFocusLesson(lesson: DailyLesson, name?: string | null
   const firstName = name?.trim().split(/\s+/)[0] || 'Teman';
   const emoji = TARGET_EMOJI[lesson.target];
   return `${emoji} *Lesson hari ini buat ${lesson.label}*\n\n` +
-    `${firstName}, stop scroll 20 detik. Ini bisa langsung kepakai di latihanmu hari ini:\n\n` +
+    `_${firstName}, stop scroll 20 detik. Ini bisa langsung kepakai di latihanmu hari ini:_\n\n` +
     `🔥 ${lesson.hook}\n\n` +
     `🧠 *Insight*\n${lesson.insight}\n\n` +
     `⚡ *Micro-lesson*\n${lesson.microLesson}\n\n` +

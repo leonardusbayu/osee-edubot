@@ -122,39 +122,63 @@ const ROLEPLAY_SCENARIOS = [
 // Telegram Bot API helper.
 //
 // Historically this STRIPPED all formatting and sent flat plain text — every
-// `*bold*` in the codebase was deleted instead of rendered, which made
-// messages read like unstyled walls of text. Now we convert the project's
-// markdown-ish conventions to Telegram HTML (parse_mode: 'HTML'):
-//   *text* / **text** → <b>text</b>   (project convention: * means bold)
-//   `code`            → <code>code</code>
-//   - item            → • item
+// Rich + warm message formatter (parse_mode: 'HTML').
+//
+// Converts the project's loose markdown-ish conventions to Telegram HTML:
+//   *text* / **text**  → <b>text</b>   (bold, project convention: * means bold)
+//   _text_             → <i>text</i>   (italic — emphasis, vocab terms, etc.)
+//   `code`             → <code>code</code>  (monospace for code/vocab/IDs)
+//   - item             → • item
+//   === header ===     → <b>─ header ─</b>   (section divider, gives visual rhythm)
+//   ⸻ or ─── lines    → <b>────────────</b>  (separator, max width 16 chars)
+//
+// Anything else (headings, code fences, [link](url)) is unwrapped to plain
+// text. HTML special characters in user-supplied content are escaped BEFORE
+// our own tags are inserted.
+//
 // sendMessage falls back to plain text if Telegram rejects the HTML.
 function formatForTelegramHtml(text: string): string {
+  // First strip markdown syntax that we don't render
   let t = text
     .replace(/#{1,6}\s*/g, '')                   // headers → plain
     .replace(/`{3}(?:\w+)?\n?([\s\S]*?)`{3}/g, '$1') // unwrap code fences, keep content
-    .replace(/\[(.+?)\]\(.+?\)/g, '$1');         // [link](url) → link text
+    .replace(/\[(.+?)\]\((.+?)\)/g, '$1 ($2)')   // [text](url) → text (url) (URL visible in plain HTML)
+    .replace(/^>\s?/gm, '');                     // > blockquote markers
+
   // Escape HTML BEFORE inserting our own tags
   t = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
   t = t
+    // Section dividers first so they don't get processed by * / _ below
+    .replace(/^===\s*(.+?)\s*===\s*$/gm, '<b>┄ $1 ┄</b>')
+    // Bold (double-star and single-star — project uses both)
     .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
     .replace(/\*([^*\n]+)\*/g, '<b>$1</b>')
+    // Italic (underscore)
+    .replace(/_([^_\n]+)_/g, '<i>$1</i>')
+    // Monospace (backtick)
     .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/^[-*]\s/gm, '• ')
+    // Bullet list: - or * at start of line → • (preserves indentation)
+    .replace(/^(\s*)[-*]\s/gm, '$1• ')
+    // Collapse 3+ blank lines into 2
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   return t;
 }
 
-// Legacy plain-text fallback (used when Telegram rejects the HTML payload)
+// Legacy plain-text fallback (used when Telegram rejects the HTML payload).
+// Strips all formatting so the user still sees SOMETHING.
 function cleanForTelegram(text: string): string {
   return text
     .replace(/#{1,6}\s*/g, '')
     .replace(/\*\*(.+?)\*\*/g, '$1')
     .replace(/\*(.+?)\*/g, '$1')
+    .replace(/_(.+?)_/g, '$1')
     .replace(/`{3}[\s\S]*?`{3}/g, '')
     .replace(/`(.+?)`/g, '$1')
-    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+    .replace(/\[(.+?)\]\((.+?)\)/g, '$1 ($2)')
+    .replace(/^===\s*(.+?)\s*===\s*$/gm, '── $1 ──')
+    .replace(/^>\s?/gm, '')
     .replace(/^[-*]\s/gm, '• ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -1894,13 +1918,26 @@ async function handleMessage(message: any, env: Env) {
           let streakLine = '';
           if (streak >= 2) {
             const fire = streak >= 30 ? '🔥🔥🔥' : streak >= 7 ? '🔥🔥' : '🔥';
-            streakLine = `\n${fire} Streak: *${streak} hari berturut-turut!*`;
+            streakLine = `\n${fire} _Streak ${streak} hari berturut-turut — pertahankan!_`;
           } else if (streak === 1) {
-            streakLine = `\n✨ Baru mulai streak — jaga terus biar ada api-nya! 🔥`;
+            streakLine = `\n_✨ Baru mulai streak — jaga terus biar ada api-nya!_ 🔥`;
           }
 
+          // Warm greeting — uses rich + warm formatting (bold, italic, emoji rhythm)
+          // Greeting varies by streak to keep returning users feeling recognized.
+          const greetings = ['Hai', 'Halo', 'Welcome back', 'Senang lihat kamu lagi'];
+          const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+          const hour = new Date().getUTCHours() + 7; // WIB
+          const timeOfDay = hour < 11 ? 'pagi' : hour < 15 ? 'siang' : hour < 18 ? 'sore' : 'malam';
+
           await sendMessage(env, chatId,
-            `Halo lagi, ${user.name}! 👋\n\n${tEmoji} Target: *${tt.replace(/_/g, ' ')}*${streakLine}\n\nMau ngapain hari ini?`,
+            `${greeting} <b>${user.name}</b>! 👋\n` +
+            `\n` +
+            `_Selamat ${timeOfDay}_ — siap lanjut ${tEmoji} *${tt.replace(/_/g, ' ')}*?${streakLine}\n` +
+            `\n` +
+            `=== Mau ngapain hari ini? ===\n` +
+            `\n` +
+            `Pilih salah satu di bawah, atau langsung ketik aja. Aku bantu sebisa mungkin! ✨`,
             mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id),
           );
         } else {
@@ -2039,19 +2076,18 @@ async function handleMessage(message: any, env: Env) {
         // 365 days = Rp 950,000 = 11,875 Stars
         await sendMessage(env, chatId,
           `⭐ *Upgrade Premium*\n\n` +
-          `Trial kamu sudah berakhir. Upgrade untuk akses tak terbatas!\n\n` +
-          `📦 *Paket Premium:*\n` +
-          `• 7 hari = 375 ⭐ (Rp 30.000)\n` +
-          `• 30 hari = 1.238 ⭐ (Rp 99.000)\n` +
-          `• 90 hari = 3.375 ⭐ (Rp 270.000)\n` +
-          `• 180 hari = 6.250 ⭐ (Rp 500.000)\n` +
-          `• 365 hari = 11.875 ⭐ (Rp 950.000)\n\n` +
-          `💡 *Tips:* Kumpulkan referral 5 teman = 1 bulan gratis!\n\n` +
-          `Kirim /referral untuk lihat kode referral kamu.`,
+          `_Trial kamu sudah berakhir. Buka kunci akses tak terbatas:_ ✨\n\n` +
+          `=== 📦 Pilih Paket ===\n` +
+          `• _7 hari_ — *375 ⭐* _≈ Rp 30rb_\n` +
+          `• _30 hari_ — *1.238 ⭐* _≈ Rp 99rb_\n` +
+          `• _90 hari_ — *3.375 ⭐* _≈ Rp 270rb_ _(best value!)_\n` +
+          `• _180 hari_ — *6.250 ⭐* _≈ Rp 500rb_\n` +
+          `• _365 hari_ — *11.875 ⭐* _≈ Rp 950rb_\n\n` +
+          `💡 *Tips:* _Ajak 5 teman lewat /referral = 1 bulan gratis!_ 🎁\n`,
           {
             inline_keyboard: [
-              [{ text: '💳 Beli dengan Telegram Stars', callback_data: 'buy_stars' }],
-              [{ text: '🏦 Transfer GoPay', callback_data: 'buy_manual' }],
+              [{ text: '💳 Beli via Telegram Stars (instant)', callback_data: 'buy_stars' }],
+              [{ text: '🏦 Transfer GoPay (manual)', callback_data: 'buy_manual' }],
             ],
           }
         );
@@ -2290,23 +2326,23 @@ async function handleMessage(message: any, env: Env) {
       case '/pembelian': {
         await sendMessage(env, chatId,
           `💳 *Pembelian Premium*\n\n` +
-          `Pilih metode pembayaran:\n\n` +
-          `1️⃣ *Telegram Stars* (Instant)\n` +
-          `   • 7 hari = 375 ⭐\n` +
-          `   • 30 hari = 1.238 ⭐\n` +
-          `   • 90 hari = 3.375 ⭐\n\n` +
-          `2️⃣ *Transfer GoPay* (Manual)\n` +
-          `   • Transfer ke GoPay kami\n` +
-          `   • Konfirmasi manual oleh admin\n\n` +
-          `3️⃣ *WhatsApp*\n` +
-          `   • Chat kami untuk metode lain\n` +
-          `   • wa.me/628112467784\n\n` +
-          `Klik tombol di bawah untuk pilih metode.`,
+          `_Pilih metode pembayaran yang paling nyaman buat kamu:_ 👇\n\n` +
+          `=== 1️⃣ Telegram Stars (Instant) ===\n` +
+          `⭐ _Bayar pakai Stars — langsung aktif dalam hitungan detik!_\n` +
+          `• _7 hari_ = *375 ⭐*\n` +
+          `• _30 hari_ = *1.238 ⭐*\n` +
+          `• _90 hari_ = *3.375 ⭐*\n\n` +
+          `=== 2️⃣ Transfer GoPay (Manual) ===\n` +
+          `🏦 _Transfer ke nomor GoPay kami, lalu admin konfirmasi._\n\n` +
+          `=== 3️⃣ WhatsApp ===\n` +
+          `💬 _Chat kami untuk metode lain (QRIS, bank transfer, dll)._\n` +
+          `📱 wa.me/628112467784\n\n` +
+          `_Pilih salah satu di bawah — proses cuma 30 detik._ ✨`,
           {
             inline_keyboard: [
-              [{ text: '1️⃣ Beli via Stars', callback_data: 'buy_stars' }],
-              [{ text: '2️⃣ Transfer GoPay', callback_data: 'buy_manual' }],
-              [{ text: '3️⃣ Hubungi WhatsApp', url: 'https://wa.me/628112467784' }],
+              [{ text: '⭐ Beli via Stars (instant)', callback_data: 'buy_stars' }],
+              [{ text: '🏦 Transfer GoPay (manual)', callback_data: 'buy_manual' }],
+              [{ text: '💬 Hubungi WhatsApp', url: 'https://wa.me/628112467784' }],
             ],
           }
         );
@@ -2614,11 +2650,11 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           // Continue existing plan
           const progressBar = buildProgressBarInline(activePlan.progress_percent);
 
-          let msg = `📖 *${activePlan.title}*\n`;
-          msg += `Step ${(step.index ?? activePlan.current_step) + 1}/${activePlan.total_steps} ${progressBar}\n\n`;
-          msg += `*${step.title || 'Lesson step'}*\n`;
-          msg += `(${step.expected_minutes ?? 5} menit)\n\n`;
-          msg += `Ketik sesuatu untuk mulai step ini, atau "skip" untuk lanjut ke step berikutnya.`;
+          let msg = `📖 _Sedang jalan:_\n`;
+          msg += `*${activePlan.title}*\n\n`;
+          msg += `${progressBar} *Step ${(step.index ?? activePlan.current_step) + 1}/${activePlan.total_steps}* · _${step.expected_minutes ?? 5} menit_\n\n`;
+          msg += `=== *${step.title || 'Lesson step'}* ===\n\n`;
+          msg += `_Ketik apa aja untuk mulai step ini, atau "skip" untuk lompat ke berikutnya._`;
 
           await sendMessage(env, chatId, msg, {
             inline_keyboard: [
@@ -2644,14 +2680,15 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
             const diffLabels = ['', '🌱 Beginner', '📗 Elementary', '📘 Intermediate', '📙 Advanced', '📕 Expert'];
             const diffLabel = diffLabels[plan.difficulty_level] || diffLabels[3];
 
-            let msg = `📖 *Lesson Plan Baru!*\n\n`;
+            let msg = `🎉 *Lesson Plan baru siap!*\n\n`;
             msg += `*${plan.title}*\n`;
-            msg += `${plan.description}\n\n`;
-            msg += `📚 Skills: ${skills}\n`;
-            msg += `${cefrEmoji[cefrLevel] || '📊'} Level: *${cefrLevel}* (adapted to: ${diffLabel})\n`;
-            msg += `⏱️ Estimasi: ${plan.estimated_minutes} menit\n`;
-            msg += `📝 ${plan.total_steps} steps\n\n`;
-            msg += `Ketik /lesson lagi untuk mulai!`;
+            msg += `_${plan.description}_\n\n`;
+            msg += `=== Detail ===\n`;
+            msg += `📚 Skills: *${skills}*\n`;
+            msg += `${cefrEmoji[cefrLevel] || '📊'} Level kamu: *${cefrLevel}* _(${diffLabel})_\n`;
+            msg += `⏱️ Estimasi: *${plan.estimated_minutes} menit*\n`;
+            msg += `📝 Total: *${plan.total_steps} steps*\n\n`;
+            msg += `_Siap mulai kapan aja — ketik /lesson lagi._ ✨`;
 
             await sendMessage(env, chatId, msg);
           } catch (e: any) {
@@ -2993,13 +3030,14 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           const tt = user.target_test || 'TOEFL_IBT';
           await sendMessage(env, chatId,
             `🎯 *Strategi Tes: ${tt.replace(/_/g, ' ')}*\n\n` +
-            `Kenaikan skor dalam waktu singkat lebih banyak datang dari STRATEGI tes daripada level bahasa Inggris.\n\n` +
-            `Pilih strategi yang mau kamu pelajari:`,
+            `_Kenaikan skor dalam waktu singkat lebih banyak datang dari_ *STRATEGI tes* _daripada level bahasa Inggris._\n\n` +
+            `=== Pilih strategi yang mau kamu pelajari ===\n` +
+            `_Tip: mulai dari "Time Management" — 5 menit yang bisa hemat 10+ menit di tes._ ⚡`,
             strategyMenuKeyboard(tt)
           );
         } catch (e) {
           console.error('/strategi error:', e);
-          await sendMessage(env, chatId, '⚠️ Gagal memuat strategi. Coba lagi ya.');
+          await sendMessage(env, chatId, '⚠️ _Gagal memuat strategi. Coba lagi ya._');
         }
         return;
       }
@@ -3017,7 +3055,7 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           });
         } catch (e) {
           console.error('/vocab error:', e);
-          await sendMessage(env, chatId, '⚠️ Gagal memuat kartu vocab. Coba lagi ya.');
+          await sendMessage(env, chatId, '⚠️ _Gagal memuat kartu vocab. Coba lagi ya._');
         }
         return;
       }
@@ -3151,7 +3189,8 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
       case '/today': {
         const { getTodayLesson } = await import('../services/studyplan');
         const lesson = await getTodayLesson(env, user.id);
-        let base = lesson || 'Belum ada study plan. Ketik /diagnostic dulu untuk tes penempatan.';
+        let base = lesson || `📋 *Belum ada study plan*\n\n` +
+          `_Supaya aku bisa kasih lesson yang pas, mulai dengan /diagnostic dulu — cuma 20 soal, sekitar 5-8 menit._ ✨`;
 
         // P0 #3: Surface FSRS-due vocab reviews in /today. The vocab
         // trainer tracks per-card state via FSRS (vocabulary.ts) but
@@ -3161,13 +3200,13 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           const { getVocabStats } = await import('../services/vocabulary');
           const stats = await getVocabStats(env, user.id);
           if (stats.dueToday > 0) {
-            base += `\n\n📚 *${stats.dueToday} vocabulary card* menunggu review (FSRS). ` +
-              `Ketik /vocab untuk mulai.`;
+            base += `\n\n📚 *${stats.dueToday} vocabulary card* _menunggu review (FSRS)._ ` +
+              `_Ketik /vocab untuk mulai._`;
           } else if (stats.total === 0) {
-            base += `\n\n📚 Belum ada vocabulary dipelajari. Ketik /vocab untuk mulai dari kata pertama.`;
+            base += `\n\n📚 _Belum ada vocabulary dipelajari._ _Ketik /vocab untuk mulai dari kata pertama._`;
           } else if (stats.total > 0) {
-            base += `\n\n📚 Vocabulary: ${stats.learned}/${stats.total} dikuasai, ${stats.accuracy}% akurasi. ` +
-              `Tambah kartu baru: /vocab`;
+            base += `\n\n📚 _Vocabulary: ${stats.learned}/${stats.total} dikuasai, ${stats.accuracy}% akurasi._ ` +
+              `_Tambah kartu baru: /vocab_`;
           }
         } catch (e) {
           console.error('[today] vocab stats error:', e);
@@ -3184,12 +3223,12 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
             const top = profile.weaknesses.combined[0];
             const focusAreas = profile.recommendation?.focus_areas?.slice(0, 3) || [];
             const focusList = focusAreas.length > 0
-              ? `\n🎯 Fokus: ${focusAreas.map(a => a.replace(/_/g, ' ')).join(', ')}`
+              ? `\n🎯 _Fokus: ${focusAreas.map(a => a.replace(/_/g, ' ')).join(', ')}_`
               : '';
-            base += `\n\n📊 *Kelemahan utamamu:* ${top.skill.replace(/_/g, ' ')} (${top.priority} priority)\n` +
-              `📝 Bukti: ${top.evidence?.slice(0, 2).join('; ') || 'data belum cukup'}` +
+            base += `\n\n📊 *Kelemahan utamamu:* _${top.skill.replace(/_/g, ' ')}_ _(${top.priority} priority)_\n` +
+              `📝 _Bukti:_ ${top.evidence?.slice(0, 2).join('; ') || '_data belum cukup_'}` +
               focusList +
-              `\n\nKetik /weakness untuk lihat profil lengkap + rekomendasi drill.`;
+              `\n\n_Ketik /weakness untuk lihat profil lengkap + rekomendasi drill._`;
           }
         } catch (e) {
           console.error('[today] weakness injection error:', e);
@@ -9153,15 +9192,33 @@ function vocabLevelKeyboard() {
 }
 
 async function editMessage(env: Env, chatId: number, messageId: number, text: string, replyMarkup?: any) {
-  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+  // Convert markdown-ish to HTML so callers can write *bold* / _italic_
+  // and have it render. Falls back to plain text on HTML rejection so
+  // the message always updates.
+  const html = formatForTelegramHtml(text);
+  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chat_id: chatId,
       message_id: messageId,
-      text,
-      parse_mode: 'Markdown',
+      text: html,
+      parse_mode: 'HTML',
       reply_markup: replyMarkup,
     }),
   });
+  if (!res.ok) {
+    // HTML parse rejection (e.g. model output had unbalanced tags) —
+    // retry as plain text so the message at least updates.
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text: cleanForTelegram(text),
+        reply_markup: replyMarkup,
+      }),
+    });
+  }
 }
