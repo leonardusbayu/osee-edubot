@@ -284,7 +284,14 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
   // Review-debt header (ROADMAP_M3 §1.5): filled in below; when debt is
   // heavy/critical the nudge goes at the very TOP, before the lesson.
   let debtHeader = '';
-  const withTaper = (msg: string) => `${debtHeader}${countdownLine}${msg}${taperNote}`;
+  // Weekly target header (FEATURE_GOALS.md): one compact progress line.
+  let targetHeader = '';
+  try {
+    const { formatTargetHeader } = await import('./weekly-target');
+    targetHeader = await formatTargetHeader(env, userId);
+    if (targetHeader) targetHeader += '\n';
+  } catch { /* table may not exist — ignore */ }
+  const withTaper = (msg: string) => `${debtHeader}${countdownLine}${targetHeader}${msg}${taperNote}`;
 
   const planData = JSON.parse(plan.plan_data || '[]');
   const currentDay = plan.current_day;

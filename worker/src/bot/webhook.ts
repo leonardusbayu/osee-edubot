@@ -2395,6 +2395,13 @@ async function handleMessage(message: any, env: Env) {
           } catch (e) {
             console.error('Mock delta error:', e);
           }
+          // Weekly target detail (FEATURE_GOALS.md) — best-effort.
+          try {
+            const { formatTargetDetail } = await import('../services/weekly-target');
+            progressText += await formatTargetDetail(env, user.id);
+          } catch (e) {
+            console.error('Weekly target error:', e);
+          }
           await sendMessage(env, chatId, progressText, mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id));
         } catch (e) {
           console.error('Progress command error:', e);
