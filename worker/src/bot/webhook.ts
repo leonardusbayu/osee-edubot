@@ -119,18 +119,44 @@ const ROLEPLAY_SCENARIOS = [
   },
 ];
 
-// Telegram Bot API helper
+// Telegram Bot API helper.
+//
+// Historically this STRIPPED all formatting and sent flat plain text — every
+// `*bold*` in the codebase was deleted instead of rendered, which made
+// messages read like unstyled walls of text. Now we convert the project's
+// markdown-ish conventions to Telegram HTML (parse_mode: 'HTML'):
+//   *text* / **text** → <b>text</b>   (project convention: * means bold)
+//   `code`            → <code>code</code>
+//   - item            → • item
+// sendMessage falls back to plain text if Telegram rejects the HTML.
+function formatForTelegramHtml(text: string): string {
+  let t = text
+    .replace(/#{1,6}\s*/g, '')                   // headers → plain
+    .replace(/`{3}(?:\w+)?\n?([\s\S]*?)`{3}/g, '$1') // unwrap code fences, keep content
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1');         // [link](url) → link text
+  // Escape HTML BEFORE inserting our own tags
+  t = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  t = t
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/\*([^*\n]+)\*/g, '<b>$1</b>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/^[-*]\s/gm, '• ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return t;
+}
+
+// Legacy plain-text fallback (used when Telegram rejects the HTML payload)
 function cleanForTelegram(text: string): string {
-  // Strip markdown that Telegram can't render
   return text
-    .replace(/#{1,6}\s*/g, '')         // Remove ### headers
-    .replace(/\*\*(.+?)\*\*/g, '$1')   // **bold** → bold (Telegram HTML doesn't use **)
-    .replace(/\*(.+?)\*/g, '$1')       // *italic* → italic
-    .replace(/`{3}[\s\S]*?`{3}/g, '')  // Remove code blocks
-    .replace(/`(.+?)`/g, '$1')         // Remove inline code
-    .replace(/\[(.+?)\]\(.+?\)/g, '$1') // [link](url) → link
-    .replace(/^[-*]\s/gm, '• ')        // - item → • item
-    .replace(/\n{3,}/g, '\n\n')        // Max 2 newlines
+    .replace(/#{1,6}\s*/g, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/`{3}[\s\S]*?`{3}/g, '')
+    .replace(/`(.+?)`/g, '$1')
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1')
+    .replace(/^[-*]\s/gm, '• ')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
@@ -302,16 +328,30 @@ function buildReviewReminder(review: ReviewDisplay): string {
 }
 
 export async function sendMessage(env: Env, chatId: number, text: string, replyMarkup?: any) {
-  const cleaned = cleanForTelegram(text);
-  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+  const html = formatForTelegramHtml(text);
+  const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       chat_id: chatId,
-      text: cleaned,
+      text: html,
+      parse_mode: 'HTML',
       reply_markup: replyMarkup,
     }),
   });
+  if (!res.ok) {
+    // HTML parse rejection (unbalanced tags from model output, etc.) —
+    // retry as plain text so the message always gets through.
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: cleanForTelegram(text),
+        reply_markup: replyMarkup,
+      }),
+    });
+  }
 }
 
 async function sendChatAction(env: Env, chatId: number, action: string = 'typing') {
