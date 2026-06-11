@@ -870,6 +870,17 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
           if (a.is_correct) g.correct++;
         }
 
+        // §2.1 ROADMAP_M3: incremental theta update per section feeding the
+        // ability-matched selector (student_ability table). Best-effort.
+        try {
+          const { updateAbilityAfterSession } = await import('../services/ability-matching');
+          for (const skill of sectionGroups.keys()) {
+            await updateAbilityAfterSession(c.env, userId, skill);
+          }
+        } catch (e: any) {
+          console.error('updateAbilityAfterSession error (non-fatal):', e?.message || e);
+        }
+
         for (const [skill, stats] of sectionGroups.entries()) {
           if (stats.total >= 3) { // Only record if meaningful session
             const acc = stats.correct / stats.total;
@@ -1042,13 +1053,30 @@ testRoutes.get('/questions/:section', async (c) => {
         extraClauses.push(`skill_tags LIKE ?`);
         extraParams.push(`%"${drillConcept.replace(/"/g, '')}"%`);
       }
-      const rows = await selectUnderExposedQuestions<any>(c.env, {
-        userId: Number(userId),
-        limit,
-        extraWhere: extraClauses.join(' AND '),
-        extraParams,
-        columns: 'id, question_type, title, content, media_url, difficulty',
-      });
+      // §2.1 ROADMAP_M3: ability-matched selection (70% in-zone / 20% review /
+      // 10% stretch) for the plain practice path. Only when there's no
+      // question_type / drill filter — filtered requests keep the exposure
+      // sampler. Returns null (→ fallback) when the student has no theta yet,
+      // the student_ability table is missing, or the pool is too thin.
+      let rows: any[] | null = null;
+      if (!questionType && !drillConcept) {
+        try {
+          const { selectAbilityMatchedQuestions } = await import('../services/ability-matching');
+          rows = await selectAbilityMatchedQuestions(c.env, Number(userId), testType, section, limit);
+        } catch (e) {
+          console.error('ability-matched selection error (non-fatal):', e);
+          rows = null;
+        }
+      }
+      if (!rows || rows.length === 0) {
+        rows = await selectUnderExposedQuestions<any>(c.env, {
+          userId: Number(userId),
+          limit,
+          extraWhere: extraClauses.join(' AND '),
+          extraParams,
+          columns: 'id, question_type, title, content, media_url, difficulty',
+        });
+      }
       result = { results: rows };
     } else {
       const stmt = c.env.DB.prepare(query);

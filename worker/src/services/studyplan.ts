@@ -261,11 +261,33 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
 
   if (!plan) return null;
 
+  // Exam-date countdown + taper plan (ROADMAP_M3 §2.3). Best-effort:
+  // exam_date column may not exist on old envs — degrade silently.
+  let countdownLine = '';
+  let taperNote = '';
+  try {
+    const u = await env.DB.prepare(
+      'SELECT exam_date, target_test FROM users WHERE id = ?'
+    ).bind(userId).first() as any;
+    if (u?.exam_date) {
+      const { getTaperPhase } = await import('./taper-plan');
+      const taper = getTaperPhase(u.exam_date);
+      if (taper) {
+        const testName = String(u.target_test || 'TOEFL_IBT').replace(/_/g, ' ');
+        countdownLine = taper.daysLeft > 0
+          ? `🗓 H-${taper.daysLeft} menuju ${testName} kamu!\n\n`
+          : `🗓 Hari tes ${testName} kamu!\n\n`;
+        if (taper.phase !== 'build') taperNote = `\n\n${taper.guidance}`;
+      }
+    }
+  } catch { /* exam_date column may not exist — ignore */ }
+  const withTaper = (msg: string) => `${countdownLine}${msg}${taperNote}`;
+
   const planData = JSON.parse(plan.plan_data || '[]');
   const currentDay = plan.current_day;
 
   if (currentDay >= planData.length) {
-    return '🎉 Study plan kamu sudah selesai! Ketik /diagnostic untuk tes ulang dan lihat progress.';
+    return withTaper('🎉 Study plan kamu sudah selesai! Ketik /diagnostic untuk tes ulang dan lihat progress.');
   }
 
   const today = planData[currentDay];
@@ -289,15 +311,15 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
   }
 
   if (today.type === 'rest') {
-    return `😴 Hari ini istirahat. Otak butuh waktu untuk memproses yang sudah dipelajari. Besok kita lanjut!${reviewReminder}`;
+    return withTaper(`😴 Hari ini istirahat. Otak butuh waktu untuk memproses yang sudah dipelajari. Besok kita lanjut!${reviewReminder}`);
   }
 
   if (today.type === 'review') {
-    return `🔄 Hari ini: REVIEW\n\nCoba buka /study dan ulangi topik yang kemarin salah. Atau ketik soal yang masih bingung, nanti aku jelaskan.${reviewReminder || '\n\nKetik /review untuk latihan spaced repetition.'}`;
+    return withTaper(`🔄 Hari ini: REVIEW\n\nCoba buka /study dan ulangi topik yang kemarin salah. Atau ketik soal yang masih bingung, nanti aku jelaskan.${reviewReminder || '\n\nKetik /review untuk latihan spaced repetition.'}`);
   }
 
   if (today.type === 'mini_test') {
-    return `🧠 Hari ini: MINI TEST\n\nBuka "Latihan Tes" dan kerjakan 10 soal dari section manapun. Ini untuk cek progress mingguan kamu.${reviewReminder}`;
+    return withTaper(`🧠 Hari ini: MINI TEST\n\nBuka "Latihan Tes" dan kerjakan 10 soal dari section manapun. Ini untuk cek progress mingguan kamu.${reviewReminder}`);
   }
 
   // Context that makes /today feel personal: streak, mastery on today's
@@ -329,9 +351,9 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
   const filled = Math.round((done / total) * 10);
   const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
 
-  return `📖 Pelajaran hari ini — Hari ${done}/${total}\n${bar}\n\n` +
+  return withTaper(`📖 Pelajaran hari ini — Hari ${done}/${total}\n${bar}\n\n` +
     streakLine + masteryLine +
     `Topik: ${today.topic.replace(/_/g, ' ')}\n` +
     `Tipe: ${today.type === 'drill' ? 'Latihan drill' : 'Pelajaran baru'}\n\n` +
-    `Ketik /study lalu pilih "${today.topic.replace(/_/g, ' ')}" untuk mulai.${reviewReminder}`;
+    `Ketik /study lalu pilih "${today.topic.replace(/_/g, ' ')}" untuk mulai.${reviewReminder}`);
 }

@@ -1940,6 +1940,7 @@ async function handleMessage(message: any, env: Env) {
           `/mystyle — Atur gaya belajar & komunikasi\n` +
           `/role — Lihat XP, level, badges\n` +
           `/settings — Ubah target tes & level\n` +
+          `/examdate — Set tanggal tes (countdown + taper plan)\n` +
           `/certificate — Download sertifikat\n\n` +
           `📈 *Tracking:* Skor kamu terus dipantau otomatis!`;
 
@@ -2359,9 +2360,54 @@ async function handleMessage(message: any, env: Env) {
               { text: '🌿 Intermediate', callback_data: 'setting_level_intermediate' },
               { text: '🌳 Advanced', callback_data: 'setting_level_advanced' },
             ],
+            [
+              { text: '🗓 Set tanggal tes', callback_data: 'setting_examdate' },
+            ],
           ],
         });
         return;
+
+      case '/examdate': {
+        // Set/clear real exam date → countdown + taper plan (ROADMAP_M3 §2.3)
+        const arg = (text.split(' ')[1] || '').trim().toLowerCase();
+        try {
+          if (!arg) {
+            await sendMessage(env, chatId,
+              `🗓 *Tanggal Tes*\n\n` +
+              `Kasih tahu aku kapan tes kamu, nanti rencana belajarmu aku sesuaikan otomatis (taper plan menjelang hari H).\n\n` +
+              `Format: /examdate YYYY-MM-DD\n` +
+              `Contoh: /examdate 2026-08-15\n\n` +
+              `Hapus tanggal: /examdate hapus`);
+            return;
+          }
+          if (arg === 'hapus' || arg === 'clear') {
+            await env.DB.prepare('UPDATE users SET exam_date = NULL WHERE id = ?').bind(user.id).run();
+            await sendMessage(env, chatId, `✅ Tanggal tes kamu sudah dihapus. Set lagi kapan aja dengan /examdate YYYY-MM-DD.`);
+            return;
+          }
+          const { daysUntilExam, formatExamDateID } = await import('../services/taper-plan');
+          const daysLeft = daysUntilExam(arg);
+          if (daysLeft === null) {
+            await sendMessage(env, chatId, `⚠️ Format tanggal nggak valid. Pakai format YYYY-MM-DD, contoh: /examdate 2026-08-15`);
+            return;
+          }
+          if (daysLeft <= 0) {
+            await sendMessage(env, chatId, `⚠️ Tanggalnya harus di masa depan ya. Contoh: /examdate 2026-08-15`);
+            return;
+          }
+          if (daysLeft > 365) {
+            await sendMessage(env, chatId, `⚠️ Maksimal 365 hari ke depan. Kalau tesmu masih lama, set lagi nanti pas udah lebih dekat ya.`);
+            return;
+          }
+          await env.DB.prepare('UPDATE users SET exam_date = ? WHERE id = ?').bind(arg, user.id).run();
+          await sendMessage(env, chatId,
+            `✅ Tanggal tes kamu: ${formatExamDateID(arg)} (H-${daysLeft}). Aku bakal sesuaikan rencana belajarmu.`);
+        } catch (e) {
+          console.error('/examdate error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal menyimpan tanggal tes. Coba lagi nanti ya.');
+        }
+        return;
+      }
 
       case '/study':
 await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_IBT'), studyTopicKeyboard(user.target_test || 'TOEFL_IBT', user.proficiency_level || 'B1'));
@@ -6012,6 +6058,17 @@ async function handleCallbackQuery(query: any, env: Env) {
     return;
   }
 
+  if (data === 'setting_examdate') {
+    await editMessage(env, chatId, messageId,
+      `🗓 *Tanggal Tes*\n\n` +
+      `Ketik tanggal tes kamu dengan format:\n` +
+      `/examdate YYYY-MM-DD\n\n` +
+      `Contoh: /examdate 2026-08-15\n` +
+      `Hapus tanggal: /examdate hapus\n\n` +
+      `Begitu di-set, aku sesuaikan rencana belajarmu menjelang hari H.`);
+    return;
+  }
+
   // ═══════════════════════════════════════════════════════
   // LEARNING STYLE CALLBACKS
   // ═══════════════════════════════════════════════════════
@@ -8526,6 +8583,7 @@ async function handleCallbackQuery(query: any, env: Env) {
         `📊 *Progress & Profile*\n\n` +
         `/role — Lihat XP, level, badges\n` +
         `/settings — Ubah target tes & level\n` +
+        `/examdate — Set tanggal tes (countdown + taper plan)\n` +
         `/certificate — Download sertifikat\n\n` +
         `📈 Skor kamu terus dipantau!`,
         { inline_keyboard: [[{ text: '◀️ Kembali', callback_data: 'help_main' }]] }
