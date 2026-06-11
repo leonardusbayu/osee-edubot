@@ -2706,8 +2706,18 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
               'INSERT OR REPLACE INTO review_sessions (user_id, current_review_id) VALUES (?, ?)'
             ).bind(user.id, item.id).run();
             const remaining = stats.due > 1 ? `\n\nMasih ada ${stats.due - 1} soal lagi setelah ini.` : '';
+            // Review-debt pressure (ROADMAP_M3 §1.5): heavy/critical debt →
+            // open with the debt nudge + promise bonus XP for clearing it.
+            let debtIntro = '';
+            try {
+              const { getReviewDebt, formatDebtNudge } = await import('../services/review-debt');
+              const debt = await getReviewDebt(env, user.id);
+              if (debt.level === 'heavy' || debt.level === 'critical') {
+                debtIntro = `${formatDebtNudge(debt)}\n💎 Clear semuanya sekarang = bonus XP dobel!\n\n`;
+              }
+            } catch { /* best-effort */ }
             const review = await formatReviewDisplay(env, item);
-            await sendMessage(env, chatId, `Yuk review! 📝\n\nSoal ${review.section}:\n"${review.prompt}"\n\nJawaban kamu sebelumnya: ${review.studentAnswer}\nJawaban yang benar: ${review.correctAnswer}\n\nSekarang rasanya gimana? Balas: lupa, susah, paham, atau gampang.${remaining}\n\nKetik /cancel untuk keluar.`);
+            await sendMessage(env, chatId, `${debtIntro}Yuk review! 📝\n\nSoal ${review.section}:\n"${review.prompt}"\n\nJawaban kamu sebelumnya: ${review.studentAnswer}\nJawaban yang benar: ${review.correctAnswer}\n\nSekarang rasanya gimana? Balas: lupa, susah, paham, atau gampang.${remaining}\n\nKetik /cancel untuk keluar.`);
           }
         }
         return;
@@ -4728,11 +4738,27 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
         }
       }
 
-      // No more reviews
+      // No more reviews — queue cleared to zero.
+      // Review-debt bonus (ROADMAP_M3 §1.5): if this session started at
+      // heavy/critical debt (>=6 cards reviewed in the last 2 hours, the
+      // heavy threshold), award a flat XP bonus for clearing the backlog.
+      let debtBonusLine = '';
+      try {
+        const cleared = await env.DB.prepare(
+          "SELECT COUNT(*) as cnt FROM spaced_repetition WHERE user_id = ? AND last_reviewed_at >= datetime('now', '-2 hours')"
+        ).bind(user.id).first() as any;
+        if (Number(cleared?.cnt || 0) >= 6) {
+          const { addXP } = await import('../services/commercial');
+          const xp = await addXP(env, user.id, 50, 'review_debt_cleared');
+          debtBonusLine = `\n💎 Bonus +50 XP karena clear semua review yang numpuk!` +
+            (xp.levelUp ? `\n🆙 Level up! Sekarang level ${xp.newLevel} — ${xp.newLevelName}.` : '');
+        }
+      } catch { /* best-effort — never block the completion message */ }
+
       await sendMessage(env, chatId,
         `🎉 *Sesi Review Selesai!*\n\n` +
         `Kamu sudah review semua soal yang perlu diulang.\n` +
-        `${stats.mastered} soal udah kamu kuasai. Pertahankan! 💪\n\n` +
+        `${stats.mastered} soal udah kamu kuasai. Pertahankan! 💪${debtBonusLine}\n\n` +
         `Sesi berikutnya akan muncul lagi nanti sesuai jadwal.`
       );
       return;

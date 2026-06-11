@@ -281,7 +281,10 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
       }
     }
   } catch { /* exam_date column may not exist — ignore */ }
-  const withTaper = (msg: string) => `${countdownLine}${msg}${taperNote}`;
+  // Review-debt header (ROADMAP_M3 §1.5): filled in below; when debt is
+  // heavy/critical the nudge goes at the very TOP, before the lesson.
+  let debtHeader = '';
+  const withTaper = (msg: string) => `${debtHeader}${countdownLine}${msg}${taperNote}`;
 
   const planData = JSON.parse(plan.plan_data || '[]');
   const currentDay = plan.current_day;
@@ -297,14 +300,19 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
     "UPDATE study_plans SET current_day = ? WHERE id = ?"
   ).bind(currentDay + 1, plan.id).run();
 
-  // Check for overdue spaced repetition items
+  // Review-debt pressure (ROADMAP_M3 §1.5): light debt → reminder at the
+  // bottom; heavy/critical debt → escalating nudge at the TOP via debtHeader.
   let reviewReminder = '';
   try {
-    const overdueCount = await env.DB.prepare(
-      "SELECT COUNT(*) as cnt FROM spaced_repetition WHERE user_id = ? AND next_review <= datetime('now') AND status = 'active'"
-    ).bind(userId).first() as any;
-    if (overdueCount?.cnt > 0) {
-      reviewReminder = `\n\n🔄 Kamu punya ${overdueCount.cnt} soal review yang menunggu. Ketik /review untuk mengulangnya.`;
+    const { getReviewDebt, formatDebtNudge } = await import('./review-debt');
+    const debt = await getReviewDebt(env, userId);
+    const nudge = formatDebtNudge(debt);
+    if (nudge) {
+      if (debt.level === 'heavy' || debt.level === 'critical') {
+        debtHeader = `${nudge}\n\n`;
+      } else {
+        reviewReminder = `\n\n${nudge}`;
+      }
     }
   } catch {
     // spaced_repetition table might not exist — ignore
@@ -322,6 +330,26 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
     return withTaper(`🧠 Hari ini: MINI TEST\n\nBuka "Latihan Tes" dan kerjakan 10 soal dari section manapun. Ini untuk cek progress mingguan kamu.${reviewReminder}`);
   }
 
+  // ── Gap router (ROADMAP_M3 §1.3): serve the highest score-leverage
+  // topic instead of the static syllabus item, with a logged reason.
+  // Best-effort: any error falls back to the planned topic.
+  let topicToday: string = today.topic;
+  let routedLine = '';
+  try {
+    const u2 = await env.DB.prepare(
+      'SELECT target_test FROM users WHERE id = ?'
+    ).bind(userId).first() as any;
+    const testType = String(u2?.target_test || 'TOEFL_IBT');
+    const { computeTopGaps, logRouting } = await import('./gap-router');
+    const gaps = await computeTopGaps(env, userId, testType, 3);
+    const top = gaps[0];
+    if (top && top.topic !== topicToday && top.accuracyPct < 60 && top.gapScore > 0) {
+      topicToday = top.topic;
+      routedLine = `🎯 Aku prioritasin *${top.topic.replace(/_/g, ' ')}* hari ini — ${top.reason}.\n`;
+      await logRouting(env, userId, top.topic, top.reason);
+    }
+  } catch { /* gap router is best-effort — keep planned topic */ }
+
   // Context that makes /today feel personal: streak, mastery on today's
   // topic, and progress bar. All best-effort — missing tables degrade to
   // the plain message.
@@ -336,10 +364,11 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
   } catch { /* ignore */ }
   try {
     const m = await env.DB.prepare(
-      'SELECT mastery_score FROM topic_mastery WHERE user_id = ? AND topic = ?'
-    ).bind(userId, today.topic).first() as any;
-    if (m && m.mastery_score != null) {
-      const pct = Math.round(Number(m.mastery_score) * 100);
+      'SELECT mastery_level FROM topic_mastery WHERE user_id = ? AND topic = ?'
+    ).bind(userId, topicToday).first() as any;
+    if (m && m.mastery_level != null) {
+      // mastery_level is stored 0-100
+      const pct = Math.round(Number(m.mastery_level));
       masteryLine = pct < 70
         ? `🎯 Kamu masih ${pct}% di topik ini — hari ini kita naikin.\n`
         : `🎯 Kamu udah ${pct}% di topik ini — tinggal dipoles.\n`;
@@ -352,8 +381,8 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
   const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
 
   return withTaper(`📖 Pelajaran hari ini — Hari ${done}/${total}\n${bar}\n\n` +
-    streakLine + masteryLine +
-    `Topik: ${today.topic.replace(/_/g, ' ')}\n` +
+    routedLine + streakLine + masteryLine +
+    `Topik: ${topicToday.replace(/_/g, ' ')}\n` +
     `Tipe: ${today.type === 'drill' ? 'Latihan drill' : 'Pelajaran baru'}\n\n` +
-    `Ketik /study lalu pilih "${today.topic.replace(/_/g, ' ')}" untuk mulai.${reviewReminder}`);
+    `Ketik /study lalu pilih "${topicToday.replace(/_/g, ' ')}" untuk mulai.${reviewReminder}`);
 }
