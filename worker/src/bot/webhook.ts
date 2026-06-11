@@ -1926,6 +1926,7 @@ async function handleMessage(message: any, env: Env) {
           `/pronounce — Drill pronunciation 254 kata\n` +
           `/listen — Listening library (TTS + comprehension)\n` +
           `/strategi — Strategi tes per ujian (time management, playbook soal)\n` +
+          `/vocab — 5 kata high-frequency hari ini (+ masuk review)\n` +
           `/template — Writing templates (IELTS, TOEFL, TOEIC)\n` +
           `/video — Video comprehension (TED + lectures + Q&A)\n` +
           `/phase — Cek study phase kamu + rekomendasi\n` +
@@ -2335,6 +2336,28 @@ async function handleMessage(message: any, env: Env) {
             }
           } catch (e) {
             console.error('Score estimate error:', e);
+          }
+          // Mock-test delta (ROADMAP_M3 §1.2) — best-effort before/after proof.
+          try {
+            const mocks = await env.DB.prepare(
+              `SELECT estimated_score, score_scale FROM mock_test_history
+               WHERE user_id = ? ORDER BY taken_at DESC, id DESC LIMIT 2`
+            ).bind(user.id).all();
+            const rows = (mocks.results || []) as any[];
+            if (rows.length >= 2) {
+              const latest = Number(rows[0].estimated_score);
+              const prev = Number(rows[1].estimated_score);
+              const isBand = rows[0].score_scale === 'ielts_band';
+              const fmt = (n: number) => (isBand ? n.toFixed(1) : String(Math.round(n)));
+              const delta = latest - prev;
+              const deltaStr = `${delta >= 0 ? '+' : ''}${isBand ? delta.toFixed(1) : Math.round(delta)}`;
+              progressText += `\n\n📈 Mock test: ${fmt(prev)} → ${fmt(latest)} (${deltaStr})`;
+              if (delta > 0) {
+                progressText += `\n🎉 Mantap, skor mock kamu naik! Pertahankan ritme belajarnya.`;
+              }
+            }
+          } catch (e) {
+            console.error('Mock delta error:', e);
           }
           await sendMessage(env, chatId, progressText, mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id));
         } catch (e) {
@@ -2977,6 +3000,24 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
         } catch (e) {
           console.error('/strategi error:', e);
           await sendMessage(env, chatId, '⚠️ Gagal memuat strategi. Coba lagi ya.');
+        }
+        return;
+      }
+
+      case '/vocab': {
+        // Daily 5-card vocab drip — hardcoded high-frequency packs (M3 §3.4)
+        try {
+          const { getTodaysCards, formatVocabMessage } = await import('../services/vocab-packs');
+          const tt = user.target_test || 'TOEFL_IBT';
+          const cards = getTodaysCards(tt);
+          await sendMessage(env, chatId, formatVocabMessage(tt, cards), {
+            inline_keyboard: [[
+              { text: '➕ Masukkan ke review harian', callback_data: 'vocab:add_today' },
+            ]],
+          });
+        } catch (e) {
+          console.error('/vocab error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat kartu vocab. Coba lagi ya.');
         }
         return;
       }
@@ -5754,6 +5795,44 @@ async function handleCallbackQuery(query: any, env: Env) {
     } catch (e) {
       console.error('strategy callback error:', e);
       await sendMessage(env, chatId, '⚠️ Gagal memuat strategi. Coba lagi ya.');
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // VOCAB PACK CALLBACKS (/vocab — M3 §3.4)
+  //   vocab:add_today — enqueue today's 5 cards into FSRS review
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('vocab:')) {
+    try {
+      const action = data.slice('vocab:'.length);
+      if (action === 'add_today') {
+        const { getTodaysCards, buildVocabQuestion } = await import('../services/vocab-packs');
+        const { addToReview } = await import('../services/fsrs-engine');
+        const tt = user.target_test || 'TOEFL_IBT';
+        const cards = getTodaysCards(tt);
+        let added = 0;
+        for (const card of cards) {
+          // Dedup by word: vocab cards have no content_id, so check
+          // question_data for "Apa arti '<word>'?" before inserting.
+          const existing = await env.DB.prepare(
+            `SELECT id FROM spaced_repetition
+             WHERE user_id = ? AND section = 'vocabulary' AND question_data LIKE ? LIMIT 1`
+          ).bind(user.id, `%'${card.word}'%`).first();
+          if (existing) continue;
+          const q = buildVocabQuestion(card, tt);
+          await addToReview(env, user.id, 'vocabulary', 'vocab_card', q.question_data, q.correct_answer, '');
+          added++;
+        }
+        if (added > 0) {
+          await sendMessage(env, chatId, `✅ ${added} kartu vocab masuk ke review harian kamu. Nanti muncul di /review sesuai jadwal FSRS ya!`);
+        } else {
+          await sendMessage(env, chatId, 'Kartu-kartu hari ini udah ada di review kamu semua. Besok ada 5 kata baru lagi — cek /vocab ya!');
+        }
+      }
+    } catch (e) {
+      console.error('vocab callback error:', e);
+      await sendMessage(env, chatId, '⚠️ Gagal menambahkan kartu. Coba lagi ya.');
     }
     return;
   }
@@ -8598,6 +8677,7 @@ async function handleCallbackQuery(query: any, env: Env) {
         `/today — Pelajaran hari ini\n` +
         `/review — Review soal yang salah\n` +
         `/strategi — Strategi tes per ujian\n` +
+        `/vocab — 5 kata high-frequency hari ini\n` +
         `/challenge @user — Duel 5 soal\n\n` +
         `💡 Kirim voice message = latihan speaking!`,
         { inline_keyboard: [[{ text: '◀️ Kembali', callback_data: 'help_main' }]] }

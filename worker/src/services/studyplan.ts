@@ -384,5 +384,6 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
     routedLine + streakLine + masteryLine +
     `Topik: ${topicToday.replace(/_/g, ' ')}\n` +
     `Tipe: ${today.type === 'drill' ? 'Latihan drill' : 'Pelajaran baru'}\n\n` +
-    `Ketik /study lalu pilih "${topicToday.replace(/_/g, ' ')}" untuk mulai.${reviewReminder}`);
+    `Ketik /study lalu pilih "${topicToday.replace(/_/g, ' ')}" untuk mulai.\n\n` +
+    `📚 5 vocab hari ini siap — /vocab${reviewReminder}`);
 }

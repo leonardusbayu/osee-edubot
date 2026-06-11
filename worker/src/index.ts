@@ -1822,6 +1822,50 @@ async function handleScoreSnapshotCron(env: Env): Promise<void> {
   console.log('[score-snapshots]', JSON.stringify({ candidates: users.results?.length || 0, saved, skipped }));
 }
 
+// ROADMAP_M3 §1.2 — monthly mock-test invite. Targets students active in the
+// last 14 days whose latest mock is older than 28 days (or who have never
+// taken one but signed up 14+ days ago). Dedup via mock_prompt_log (21 days).
+async function handleMockPromptCron(env: Env): Promise<void> {
+  const users = await env.DB.prepare(
+    `SELECT u.id, u.telegram_id
+     FROM users u
+     LEFT JOIN mock_prompt_log mpl ON mpl.user_id = u.id
+     WHERE u.role = 'student' AND u.is_active = 1
+       AND u.last_study_date >= date('now', '-14 days')
+       AND (mpl.last_prompted_at IS NULL OR mpl.last_prompted_at < datetime('now', '-21 days'))
+       AND (
+         (SELECT MAX(m.taken_at) FROM mock_test_history m WHERE m.user_id = u.id) < datetime('now', '-28 days')
+         OR (
+           NOT EXISTS (SELECT 1 FROM mock_test_history m WHERE m.user_id = u.id)
+           AND u.created_at <= datetime('now', '-14 days')
+         )
+       )
+     LIMIT 100`
+  ).all();
+
+  let sent = 0;
+  for (const u of (users.results || []) as any[]) {
+    try {
+      const tgId = parseInt(String(u.telegram_id).replace('.0', ''));
+      if (!Number.isFinite(tgId)) continue;
+      const ok = await safeSendMessage(env, tgId, {
+        text: '🧪 Waktunya mock test bulanan! 40 menit, biar kelihatan progress skor kamu. Buka /test dan pilih Quick Test.',
+      });
+      if (ok) {
+        sent++;
+        await env.DB.prepare(
+          `INSERT INTO mock_prompt_log (user_id, last_prompted_at)
+           VALUES (?, datetime('now'))
+           ON CONFLICT(user_id) DO UPDATE SET last_prompted_at = datetime('now')`
+        ).bind(u.id).run();
+      }
+    } catch (e) {
+      console.error(`[mock-prompts] user ${u.id} failed:`, (e as any)?.message || e);
+    }
+  }
+  console.log('[mock-prompts]', JSON.stringify({ candidates: users.results?.length || 0, sent }));
+}
+
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
@@ -1894,6 +1938,8 @@ export default {
       // in the last 14 days, oldest snapshot first, capped to respect the
       // subrequest budget.
       ctx.waitUntil(safeTask('score-snapshots', () => handleScoreSnapshotCron(env)));
+      // Monthly mock-test invite (ROADMAP_M3 §1.2) — see handleMockPromptCron.
+      ctx.waitUntil(safeTask('mock-prompts', () => handleMockPromptCron(env)));
       // Weekly full content audit — scans every published row via validator
       ctx.waitUntil(
         (async () => {

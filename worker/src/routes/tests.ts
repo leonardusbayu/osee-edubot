@@ -843,6 +843,35 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
 
     // ─── IRT + Learning Curve updates (non-blocking) ────────────
     const userId = attempt.user_id as number;
+
+    // ROADMAP_M3 §1.2 — mock-test proof loop. A finished attempt with >= 20
+    // answered questions counts as a "mock": record a normalized score on
+    // the exam's reporting scale so /progress can show before/after deltas.
+    // Best-effort: never block the finish response on this.
+    if (userId > 0) {
+      try {
+        const scored = answers.filter((a: any) => a.is_correct !== null);
+        if (scored.length >= 20) {
+          const { abilityToScale } = await import('../services/score-predictor');
+          const scaleByTest: Record<string, 'ielts_band' | 'toefl_ibt' | 'toefl_itp' | 'toeic'> = {
+            IELTS: 'ielts_band',
+            TOEFL_IBT: 'toefl_ibt',
+            TOEFL_ITP: 'toefl_itp',
+            TOEIC: 'toeic',
+          };
+          const scale = scaleByTest[attempt.test_type as string] || 'toefl_ibt';
+          const correct = scored.filter((a: any) => !!a.is_correct).length;
+          const ability = correct / scored.length;
+          const mockScore = abilityToScale(ability, scale);
+          await c.env.DB.prepare(
+            `INSERT INTO mock_test_history (user_id, test_type, attempt_id, estimated_score, score_scale)
+             VALUES (?, ?, ?, ?, ?)`
+          ).bind(userId, attempt.test_type, attemptId, mockScore, scale).run();
+        }
+      } catch (e: any) {
+        console.error('[finish] mock_test_history insert failed (non-fatal):', e?.message || e);
+      }
+    }
     if (userId > 0) {
       try {
         // 1. Build IRT responses from answers
