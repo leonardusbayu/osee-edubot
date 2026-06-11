@@ -1,4 +1,9 @@
-const CACHE_NAME = 'edubot-v1';
+// Bump CACHE_NAME on every deploy to invalidate the cached /index.html.
+// Without this, Telegram's webview SW keeps serving the old index.html
+// (with the previous bundle's content hash) and users see stale
+// frontend bugs after a deploy. The activate handler deletes the
+// previous cache automatically.
+const CACHE_NAME = 'edubot-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
