@@ -604,11 +604,21 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
       }
     } catch (e) { /* silent — encouragement is nice-to-have */ }
 
+    // Fatigue detection — suggest a break when the last 5 answers collapse
+    // in accuracy or slow to 2x. Client shows the hint once per session.
+    let fatigueHint: string | null = null;
+    try {
+      const { checkFatigue } = await import('../services/fatigue-detector');
+      const fatigue = await checkFatigue(c.env, userId, attemptId);
+      if (fatigue.fatigued && fatigue.hint) fatigueHint = fatigue.hint;
+    } catch { /* non-fatal */ }
+
     return c.json({
       saved: true,
       is_correct: isCorrect,
       next_question_index: question_index + 1,
       ...(encouragement ? { encouragement } : {}),
+      ...(fatigueHint ? { fatigue_hint: fatigueHint } : {}),
     });
   } catch (e: any) {
     console.error('Answer submission error:', e);

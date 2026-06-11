@@ -228,6 +228,8 @@ export default function TestRunner() {
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [offlineMode, setOfflineMode] = useState(false);
   const [encouragement, setEncouragement] = useState<string | null>(null);
+  // Fatigue hint fires at most once per test session
+  const fatigueShownRef = useRef(false);
   const questionStartTimeRef = useRef<number>(Date.now());
   // Tracks whether the component is still mounted. Used to guard async
   // setState calls (notably the speaking evaluation pipeline, which awaits a
@@ -1330,6 +1332,12 @@ export default function TestRunner() {
             if (resData.encouragement) {
               setEncouragement(resData.encouragement);
               setTimeout(() => setEncouragement(null), 8000); // Auto-dismiss after 8s
+            }
+            // Fatigue hint: shown at most once per session via the same banner
+            if (resData.fatigue_hint && !fatigueShownRef.current) {
+              fatigueShownRef.current = true;
+              setEncouragement(resData.fatigue_hint);
+              setTimeout(() => setEncouragement(null), 12000);
             }
           } catch { /* ignore parse error */ }
           break;
