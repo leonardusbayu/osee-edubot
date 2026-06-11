@@ -1,22 +1,34 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { useAuthStore } from './stores/auth';
 import { getTelegramUserId } from './api/authedFetch';
+// Landing page stays eager — it's what students see first.
 import TestSelection from './pages/TestSelection';
-import TestRunner from './pages/TestRunner';
-import TestResults from './pages/TestResults';
-import Progress from './pages/Progress';
-import ReportCard from './pages/ReportCard';
-import Dashboard from './pages/Dashboard';
-import AdminContent from './pages/AdminContent';
-import AdminStudents from './pages/AdminStudents';
-import AdminAnalytics from './pages/AdminAnalytics';
-import SkillPractice from './pages/SkillPractice';
-import WeaknessDashboard from './pages/WeaknessDashboard';
-import AdminPanel from './pages/AdminPanel';
-import TeacherDashboard from './pages/TeacherDashboard';
-import ResellerDashboard from './pages/ResellerDashboard';
 import ErrorBoundary from './components/ErrorBoundary';
+
+// Everything else is route-split so a student opening the mini app doesn't
+// download the admin dashboards. Each page becomes its own chunk.
+const TestRunner = lazy(() => import('./pages/TestRunner'));
+const TestResults = lazy(() => import('./pages/TestResults'));
+const Progress = lazy(() => import('./pages/Progress'));
+const ReportCard = lazy(() => import('./pages/ReportCard'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const AdminContent = lazy(() => import('./pages/AdminContent'));
+const AdminStudents = lazy(() => import('./pages/AdminStudents'));
+const AdminAnalytics = lazy(() => import('./pages/AdminAnalytics'));
+const SkillPractice = lazy(() => import('./pages/SkillPractice'));
+const WeaknessDashboard = lazy(() => import('./pages/WeaknessDashboard'));
+const AdminPanel = lazy(() => import('./pages/AdminPanel'));
+const TeacherDashboard = lazy(() => import('./pages/TeacherDashboard'));
+const ResellerDashboard = lazy(() => import('./pages/ResellerDashboard'));
+
+function RouteFallback() {
+  return (
+    <div className="flex items-center justify-center min-h-screen">
+      <div className="animate-pulse text-tg-hint">Memuat…</div>
+    </div>
+  );
+}
 
 declare global {
   interface Window {
@@ -170,6 +182,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-tg-bg text-tg-text">
+      <Suspense fallback={<RouteFallback />}>
       <Routes>
         <Route path="/" element={<TestSelection />} />
         <Route path="/test" element={<TestSelection />} />
@@ -198,6 +211,7 @@ function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/admin/panel" element={<AdminPanel />} />
       </Routes>
+      </Suspense>
     </div>
   );
 }

@@ -352,7 +352,14 @@ app.post('/api/bot/webhook', async (c) => {
   }
 
   const update = await c.req.json();
-  await handleWebhook(update, c.env);
+  // ACK Telegram immediately and process in the background. Awaiting the
+  // handler here held the 200 hostage to OpenAI calls (5-15s), which made
+  // the bot feel slow and triggered Telegram webhook retries on timeout.
+  c.executionCtx.waitUntil(
+    handleWebhook(update, c.env).catch((e) => {
+      console.error('[webhook] background handler error:', e);
+    })
+  );
   return c.json({ ok: true });
 });
 
