@@ -59,6 +59,14 @@ const SECTION_LABELS: Record<string, { name: string; icon: string; color: string
   writing: { name: 'Writing', icon: '✍️', color: 'bg-purple-500' },
 };
 
+interface Badge {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  earned_at: string;
+}
+
 interface QuotaInfo {
   allowed: boolean;
   is_premium: boolean;
@@ -73,11 +81,25 @@ export default function Progress() {
   const [data, setData] = useState<ProgressData | null>(null);
   const [loading, setLoading] = useState(true);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
+  const [badges, setBadges] = useState<Badge[]>([]);
 
   useEffect(() => {
     loadProgress();
     loadQuota();
+    loadBadges();
   }, []);
+
+  async function loadBadges() {
+    try {
+      const response = await authedFetch('/api/progress/badges');
+      if (response.ok) {
+        const result = await response.json();
+        setBadges(result.badges || []);
+      }
+    } catch (err) {
+      console.error('Failed to load badges:', err);
+    }
+  }
 
   async function loadProgress() {
     try {
@@ -159,6 +181,30 @@ export default function Progress() {
           <span className="text-sm font-medium text-yellow-500">👑 Premium User — Akses Unlimited</span>
         </div>
       )}
+
+      {/* Badges */}
+      <div className="mb-6">
+        <h2 className="font-semibold mb-3">Badges 🏅</h2>
+        {badges.length > 0 ? (
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {badges.map((badge) => (
+              <div key={badge.id} className="bg-tg-secondary rounded-xl p-3 text-center min-w-[96px] flex-shrink-0">
+                <p className="text-2xl mb-1">{badge.icon}</p>
+                <p className="text-xs font-medium leading-tight">{badge.name}</p>
+                <p className="text-[10px] text-tg-hint mt-1">
+                  {badge.earned_at ? new Date(badge.earned_at).toLocaleDateString('id-ID', {
+                    day: 'numeric', month: 'short', year: 'numeric'
+                  }) : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="bg-tg-secondary rounded-xl p-4 text-center">
+            <p className="text-sm text-tg-hint">Belum ada badge — selesaikan tes pertamamu! 🏅</p>
+          </div>
+        )}
+      </div>
 
       {!hasActivity ? (
         <div className="text-center py-12">

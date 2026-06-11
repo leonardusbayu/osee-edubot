@@ -4,6 +4,27 @@ import { getAuthUser } from '../services/auth';
 
 export const progressRoutes = new Hono<{ Bindings: Env }>();
 
+// Earned badges for the current user
+progressRoutes.get('/badges', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user?.id) {
+    return c.json({ badges: [] });
+  }
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT b.id, b.name, b.description, b.icon, ub.earned_at
+       FROM user_badges ub
+       JOIN badges b ON b.id = ub.badge_id
+       WHERE ub.user_id = ?
+       ORDER BY ub.earned_at DESC`
+    ).bind(user.id).all();
+    return c.json({ badges: results || [] });
+  } catch (e: any) {
+    console.error('Badges error:', e);
+    return c.json({ error: 'Failed to load badges' }, 500);
+  }
+});
+
 progressRoutes.get('/overview', async (c) => {
   const user = await getAuthUser(c.req.raw, c.env);
   if (!user?.id) {
