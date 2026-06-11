@@ -224,8 +224,14 @@ Set via `npx wrangler secret put <NAME>`:
 | /teacher CODE | Anyone | Become teacher (invite code) |
 | /promote @user role | Admin | Change user role |
 | /stats | Admin | System statistics |
-| /gencodes N DAYS [batch] | Admin | Generate N premium redemption codes (1-500 codes, 1-730 days each) |
+| /gencodes N DAYS [batch] [@owner] | Admin | Generate N premium redemption codes (1-500, 1-730 days). @owner attributes the batch to a reseller — each redemption earns them 20% commission (instantly confirmed) |
 | /codestatus [batch] | Admin | Check redemption rate for a code batch (or list recent) |
+| /gencode @user CODE | Admin | Create a reseller referral code (auto-promotes user to reseller) |
+| /myreferrals | Reseller | Commission stats (pending/confirmed/paid/clawback) |
+| /myreseller | Reseller | Reseller dashboard mini app |
+| /payout_request | Reseller | Bundle confirmed commissions into a bank payout batch |
+| /payouts | Admin | List pending bank payouts |
+| /payouts_mark_paid ID [ref] | Admin | Mark a bank payout completed |
 
 ## API Endpoints
 
@@ -308,9 +314,16 @@ Set via `npx wrangler secret put <NAME>`:
 
 ### Premium Redemption Codes
 Teachers can generate redemption codes to sell or give to students.
-- `/gencodes N DAYS [batch]` — Generate N codes with expiration
+- `/gencodes N DAYS [batch] [@owner]` — Generate N codes; @owner = reseller who earns 20% commission per redemption (migration 092)
 - `/codestatus [batch]` — Check redemption rate
-- `/redeem CODE` — Student redeems a code
+- `/redeem CODE` — Student redeems a code (creates a confirmed commission attribution if the batch has an owner)
+
+### Reseller Commission System (migrations 088–092)
+- Referral codes (`/gencode`) → customer applies code → buys premium → pending attribution (20%, 7-day anti-fraud hold) → confirmed → paid via Stars or bank batch.
+- Owned premium-code batches skip the hold (prepaid) — attribution is confirmed instantly.
+- Soft caps enforced: >5 attributions/day or >50% clawback rate flags the reseller (`users.reseller_flagged`).
+- Refund after payout → attribution flips to clawback with a `paid_reversal_required` audit row; net the debt against the next payout.
+- Every status change is logged to `commission_audit`.
 
 ## Gamification
 

@@ -193,8 +193,19 @@ const TOEIC_EXTRA = [
   },
 ];
 
-// Build test-specific question banks
-function getQuestionsForTest(testType: string) {
+type DiagnosticQuestion = {
+  id: number;
+  section: string;
+  topic: string;
+  question: string;
+  answer: string;
+  explanation: string;
+  audio_text?: string;
+};
+
+// Hardcoded fallback (dipakai kalau tabel diagnostic_question_bank belum ada
+// atau kosong — env lama sebelum migration 093, atau sesi lama tanpa question_ids)
+function getHardcodedQuestions(testType: string): DiagnosticQuestion[] {
   const base = [...COMMON_GRAMMAR, ...COMMON_VOCAB, ...COMMON_READING, ...COMMON_LISTENING];
 
   switch (testType) {
@@ -210,6 +221,126 @@ function getQuestionsForTest(testType: string) {
   }
 }
 
+// Urutan topic per test type — menjaga struktur section yang sama dengan
+// array hardcoded lama. Satu soal per topic, dipilih acak dari varian di D1.
+const COMMON_TOPIC_PLAN: Array<{ section: string; topic: string }> = [
+  { section: 'grammar', topic: 'articles' },
+  { section: 'grammar', topic: 'tenses' },
+  { section: 'grammar', topic: 'sv_agreement' },
+  { section: 'grammar', topic: 'prepositions' },
+  { section: 'grammar', topic: 'passive_voice' },
+  { section: 'vocabulary', topic: 'academic_words' },
+  { section: 'vocabulary', topic: 'collocations' },
+  { section: 'reading', topic: 'main_idea' },
+  { section: 'reading', topic: 'detail' },
+  { section: 'reading', topic: 'vocabulary_context' },
+  { section: 'listening', topic: 'conversation' },
+  { section: 'listening', topic: 'inference' },
+  { section: 'listening', topic: 'purpose' },
+];
+
+const EXTRA_TOPIC_PLAN: Record<string, Array<{ section: string; topic: string }>> = {
+  TOEFL_IBT: [
+    { section: 'writing', topic: 'email' },
+    { section: 'grammar', topic: 'word_formation' },
+  ],
+  IELTS: [
+    { section: 'reading', topic: 'true_false_not_given' },
+    { section: 'speaking', topic: 'cue_card' },
+  ],
+  TOEFL_ITP: [
+    { section: 'grammar', topic: 'error_identification' },
+    { section: 'grammar', topic: 'sentence_completion' },
+  ],
+  TOEIC: [
+    { section: 'vocabulary', topic: 'business_vocabulary' },
+    { section: 'reading', topic: 'business_reading' },
+  ],
+};
+
+function mapBankRow(row: any): DiagnosticQuestion {
+  return {
+    id: row.id,
+    section: row.section,
+    topic: row.topic,
+    question: row.question,
+    answer: row.correct_answer,
+    explanation: row.explanation || '',
+    audio_text: row.audio_text || undefined,
+  };
+}
+
+// Ambil soal diagnostic dari D1: satu soal acak per topic (ORDER BY RANDOM()
+// per topic), urutan topic dijaga sesuai struktur lama. Fallback ke array
+// hardcoded kalau tabel belum ada / kosong.
+async function getQuestionsForTest(env: Env, testType: string): Promise<DiagnosticQuestion[]> {
+  const tt = EXTRA_TOPIC_PLAN[testType] ? testType : 'TOEFL_IBT';
+  const plan = [
+    ...COMMON_TOPIC_PLAN.map(p => ({ ...p, scope: 'COMMON' })),
+    ...EXTRA_TOPIC_PLAN[tt].map(p => ({ ...p, scope: tt })),
+  ];
+
+  try {
+    const stmts = plan.map(p =>
+      env.DB.prepare(
+        `SELECT * FROM diagnostic_question_bank
+         WHERE test_type = ? AND topic = ? AND is_active = 1
+         ORDER BY RANDOM() LIMIT 1`
+      ).bind(p.scope, p.topic)
+    );
+    const results = await env.DB.batch(stmts);
+    const questions: DiagnosticQuestion[] = [];
+    for (const r of results) {
+      const row = (r.results || [])[0];
+      if (!row) {
+        // Topic kosong di bank → pakai fallback supaya struktur tetap utuh
+        return getHardcodedQuestions(tt);
+      }
+      questions.push(mapBankRow(row));
+    }
+    if (questions.length === 0) return getHardcodedQuestions(tt);
+    return questions;
+  } catch (e: any) {
+    console.error('diagnostic_question_bank query failed, using hardcoded fallback:', e?.message || e);
+    return getHardcodedQuestions(tt);
+  }
+}
+
+// Ambil set soal yang TERKUNCI untuk satu sesi. Soal dipilih acak sekali di
+// startDiagnostic dan id-nya disimpan di session JSON, supaya soal yang
+// ditampilkan getNextQuestion sama persis dengan yang dinilai submitAnswer.
+async function getQuestionsForSession(env: Env, session: any): Promise<DiagnosticQuestion[]> {
+  const testType = extractTestType(session.answers);
+  const ids = extractQuestionIds(session.answers);
+
+  if (ids.length > 0) {
+    try {
+      const placeholders = ids.map(() => '?').join(',');
+      const { results } = await env.DB.prepare(
+        `SELECT * FROM diagnostic_question_bank WHERE id IN (${placeholders})`
+      ).bind(...ids).all();
+      const byId = new Map((results || []).map((r: any) => [r.id, mapBankRow(r)]));
+      const questions = ids.map(id => byId.get(id)).filter(Boolean) as DiagnosticQuestion[];
+      if (questions.length === ids.length) return questions;
+    } catch (e: any) {
+      console.error('diagnostic session question fetch failed, using hardcoded fallback:', e?.message || e);
+    }
+  }
+
+  // Sesi lama (tanpa question_ids) atau bank tidak tersedia
+  return getHardcodedQuestions(testType);
+}
+
+function extractQuestionIds(answersJson: string): number[] {
+  try {
+    const parsed = JSON.parse(answersJson || '{}');
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.question_ids)) {
+      return parsed.question_ids;
+    }
+  } catch {}
+  return [];
+}
+
 // Target scores per test type
 const TARGET_SCORES: Record<string, { label: string; value: number }> = {
   'TOEFL_IBT': { label: 'Band 4', value: 4 },
@@ -219,7 +350,7 @@ const TARGET_SCORES: Record<string, { label: string; value: number }> = {
 };
 
 // Keep backward compat
-export const DIAGNOSTIC_QUESTIONS = getQuestionsForTest('TOEFL_IBT');
+export const DIAGNOSTIC_QUESTIONS = getHardcodedQuestions('TOEFL_IBT');
 
 export async function startDiagnostic(env: Env, user: User): Promise<string> {
   const existing = await env.DB.prepare(
@@ -234,23 +365,33 @@ export async function startDiagnostic(env: Env, user: User): Promise<string> {
 
   const testType = user.target_test || 'TOEFL_IBT';
 
-  // Store test_type in the session so we use the right questions throughout
+  // Pilih soal sekali di awal (acak per topic dari D1), kunci id-nya di
+  // session JSON supaya getNextQuestion/submitAnswer pakai set yang sama.
+  const questions = await getQuestionsForTest(env, testType);
+
+  // Store test_type + question_ids in the session so we use the right questions throughout
   await env.DB.prepare(
     "INSERT INTO diagnostic_sessions (user_id, current_question, answers, status) VALUES (?, 0, ?, 'in_progress')"
-  ).bind(user.id, JSON.stringify({ test_type: testType })).run();
+  ).bind(user.id, JSON.stringify({ test_type: testType, question_ids: questions.map(q => q.id) })).run();
 
   const { TEST_NAMES } = await import('./teaching');
   const testName = TEST_NAMES[testType] || 'English Test';
 
-  const questions = getQuestionsForTest(testType);
-  const lastQ = questions[questions.length - 1];
-  const sections = testType === 'TOEIC'
-    ? 'Soal 1-8: Grammar\nSoal 9-12: Vocabulary\nSoal 13-15: Reading\nSoal 16-18: Listening\nSoal 19: Business Vocabulary\nSoal 20: Business Reading'
-    : testType === 'IELTS'
-    ? 'Soal 1-8: Grammar\nSoal 9-12: Vocabulary\nSoal 13-15: Reading\nSoal 16-18: Listening\nSoal 19: True/False/Not Given\nSoal 20: Speaking (Cue Card)'
-    : testType === 'TOEFL_ITP'
-    ? 'Soal 1-8: Grammar\nSoal 9-12: Vocabulary\nSoal 13-15: Reading\nSoal 16-18: Listening\nSoal 19: Error Identification\nSoal 20: Sentence Completion'
-    : 'Soal 1-8: Grammar\nSoal 9-12: Vocabulary\nSoal 13-15: Reading\nSoal 16-18: Listening\nSoal 19: Writing\nSoal 20: Word Formation';
+  // Bangun ringkasan section dinamis dari soal yang terpilih
+  const SECTION_LABELS: Record<string, string> = {
+    grammar: 'Grammar', vocabulary: 'Vocabulary', reading: 'Reading',
+    listening: 'Listening', writing: 'Writing', speaking: 'Speaking',
+  };
+  const sectionLines: string[] = [];
+  let start = 0;
+  for (let i = 0; i <= questions.length; i++) {
+    if (i === questions.length || questions[i].section !== questions[start].section) {
+      const label = SECTION_LABELS[questions[start].section] || questions[start].section;
+      sectionLines.push(start === i - 1 ? `Soal ${start + 1}: ${label}` : `Soal ${start + 1}-${i}: ${label}`);
+      start = i;
+    }
+  }
+  const sections = sectionLines.join('\n');
 
   return `Diagnostic Test ${testName}
 
@@ -271,9 +412,8 @@ export async function getNextQuestion(env: Env, userId: number): Promise<{ quest
     return { question: 'Belum ada sesi diagnostic. Ketik /diagnostic untuk mulai.', questionNum: 0, total: 20, done: true };
   }
 
-  // Extract test_type from answers JSON (first item might be {test_type: ...})
-  const testType = extractTestType(session.answers);
-  const questions = getQuestionsForTest(testType);
+  // Soal sesi: dari D1 via question_ids yang terkunci, fallback hardcoded
+  const questions = await getQuestionsForSession(env, session);
   const qIndex = session.current_question;
 
   if (qIndex >= questions.length) {
@@ -333,7 +473,8 @@ export async function submitAnswer(env: Env, userId: number, answer: string): Pr
   }
 
   const testType = extractTestType(session.answers);
-  const questions = getQuestionsForTest(testType);
+  const questionIds = extractQuestionIds(session.answers);
+  const questions = await getQuestionsForSession(env, session);
   const qIndex = session.current_question;
   const q = questions[qIndex];
   const answers = extractAnswers(session.answers);
@@ -353,7 +494,8 @@ export async function submitAnswer(env: Env, userId: number, answer: string): Pr
 
   // Update session — store test_type + answers
   const nextIndex = qIndex + 1;
-  const sessionData = { test_type: testType, answers };
+  const sessionData: any = { test_type: testType, answers };
+  if (questionIds.length > 0) sessionData.question_ids = questionIds; // jaga set soal terkunci
   await env.DB.prepare(
     "UPDATE diagnostic_sessions SET current_question = ?, answers = ? WHERE id = ?"
   ).bind(nextIndex, JSON.stringify(sessionData), session.id).run();

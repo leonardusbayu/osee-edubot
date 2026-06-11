@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Env } from '../types';
 import { getAuthUser } from '../services/auth';
 import { checkPremium } from '../services/premium';
+import { normalizeTokens, alignTokens, accuracyToBand } from '../services/speech-match';
 
 export const speakingRoutes = new Hono<{ Bindings: Env }>();
 
@@ -385,8 +386,61 @@ speakingRoutes.get('/prosody/trend', async (c) => {
   });
 });
 
-// Listen & Repeat: word-by-word accuracy comparison
+// Listen & Repeat: tolerant word-level accuracy comparison.
+// Normalizes filler words / contractions / digits, then aligns tokens
+// with fuzzy matching (catches small Whisper artifacts like colour/color).
+// Falls back to the legacy exact-match scorer if anything throws.
 function scoreListenAndRepeat(transcription: string, original: string, maxBand: number = 6) {
+  let accuracy: number;
+  let band: number;
+  let matchCount: number;
+  let wordResults: { word: string; matched: boolean }[];
+  let totalWords: number;
+
+  try {
+    const originalTokens = normalizeTokens(original);
+    const spokenTokens = normalizeTokens(transcription);
+    const alignment = alignTokens(originalTokens, spokenTokens);
+    accuracy = Math.round(alignment.accuracy * 100);
+    band = accuracyToBand(alignment.accuracy, maxBand);
+    matchCount = alignment.matchCount;
+    wordResults = alignment.wordResults;
+    totalWords = originalTokens.length;
+  } catch (e: any) {
+    console.error('[listen_and_repeat] tolerant scorer failed, using legacy:', e?.message || e);
+    return scoreListenAndRepeatLegacy(transcription, original, maxBand);
+  }
+
+  const missedWords = wordResults.filter(w => !w.matched).map(w => w.word);
+
+  let feedback = '';
+  if (accuracy >= 90) {
+    feedback = 'Sangat bagus! Hampir sempurna.';
+  } else if (accuracy >= 70) {
+    feedback = `Bagus! Beberapa kata yang terlewat: ${missedWords.slice(0, 5).join(', ')}`;
+  } else if (accuracy >= 50) {
+    feedback = `Cukup. Kata yang perlu diperbaiki: ${missedWords.slice(0, 5).join(', ')}. Coba dengarkan lagi dan ulangi.`;
+  } else {
+    feedback = `Perlu latihan lagi. Dengarkan audio pelan-pelan, lalu ulangi kata per kata.`;
+  }
+
+  return {
+    transcription,
+    score: band,
+    accuracy,
+    feedback,
+    criteria: {
+      word_accuracy: accuracy,
+      matched: matchCount,
+      total: totalWords,
+    },
+    missed_words: missedWords,
+    word_results: wordResults,
+  };
+}
+
+// Legacy exact-match scorer — kept as fallback for scoreListenAndRepeat.
+function scoreListenAndRepeatLegacy(transcription: string, original: string, maxBand: number = 6) {
   const originalWords = original.toLowerCase().replace(/[^a-z\s']/g, '').split(/\s+/).filter(Boolean);
   const spokenWords = transcription.toLowerCase().replace(/[^a-z\s']/g, '').split(/\s+/).filter(Boolean);
 
