@@ -55,6 +55,48 @@ const BUILTIN_ANALOGIES: Record<string, string[]> = {
   'reported_speech': [
     'Reported speech itu kayak nerusin pesan berantai. Dia bilang "Aku lapar" → Dia bilang kalau dia lapar. Tense-nya mundur satu step.',
   ],
+  'modals': [
+    'Modal verbs itu kayak level keyakinan di grup chat. "He must be home" = yakin banget (read 1 menit lalu). "He might be home" = mungkin aja (last seen 2 jam). "He can\'t be home" = mustahil (lagi share loc di mall).',
+  ],
+  'inference': [
+    'Inference itu kayak baca chat gebetan. Dia bilang "duluan ya, besok ujian" — nggak ada kata "bosen", tapi kamu BISA simpulkan. Reading inference sama: jawabannya nggak tertulis, tapi semua petunjuknya ada.',
+  ],
+  'main_idea': [
+    'Main idea itu kayak nentuin judul video YouTube. Isinya 10 menit, tapi judulnya satu kalimat yang nyakup semuanya. Bukan detail menit ke-3, bukan intro — inti keseluruhan.',
+  ],
+  'paraphrasing': [
+    'Paraphrase itu kayak jelasin film ke teman tanpa spoiler kata-kata aslinya. Maknanya sama, bajunya beda. TOEFL/IELTS suka banget nge-test ini: jawaban benar biasanya paraphrase, bukan copy-paste dari teks.',
+  ],
+  'vocabulary_in_context': [
+    'Nebak kata dari konteks itu kayak denger kata baru di tongkrongan. Nggak buka kamus kan? Kamu lihat reaksi orang dan situasinya. Di reading juga: lihat kalimat sekitarnya, bukan panik.',
+  ],
+  'word_forms': [
+    'Word forms itu kayak satu orang dengan banyak outfit. "Succeed" (kerja), "success" (kondangan), "successful" (foto LinkedIn), "successfully" (caption-nya). Orangnya sama, fungsinya beda.',
+  ],
+  'comparatives': [
+    'Comparative itu kayak banding-bandingin harga di e-commerce. "Cheaper than" = lebih murah dari toko sebelah. "The cheapest" = paling murah se-marketplace. Dua barang pakai -er, tiga ke atas pakai -est.',
+  ],
+  'countable_uncountable': [
+    'Countable vs uncountable itu kayak beras vs bungkus nasi. "Nasi" nggak kamu hitung butirannya (uncountable: rice), tapi "bungkus" bisa dihitung (countable: two packs). Makanya "much rice" tapi "many packs".',
+  ],
+  'skimming_scanning': [
+    'Skimming itu kayak scroll feed — nangkep vibe semua post tanpa baca detail. Scanning itu kayak Ctrl+F — nyari satu nama di thread panjang. Reading section butuh dua-duanya, di waktu yang beda.',
+  ],
+  'error_identification': [
+    'Error identification (ITP) itu kayak jadi editor caption teman sebelum dia post. Kamu nggak nulis ulang — kamu nunjuk satu kata yang bikin janggal. Latih mata, bukan hafalan.',
+  ],
+  'business_vocabulary': [
+    'Vocab TOEIC itu bahasa kantor. "Invoice" = tagihan ke client, "deadline" = tanggal keramat, "schedule a meeting" = nge-block kalender orang. Bayangin kamu intern minggu pertama — kata-kata ini yang seliweran di email.',
+  ],
+  'integrated_writing': [
+    'Integrated writing (iBT) itu kayak bikin rangkuman rapat buat bos: bahan dari dua sumber (reading + lecture), tugasmu nunjukin hubungannya — setuju, nentang, atau melengkapi. Bukan opini kamu.',
+  ],
+  'cue_card': [
+    'IELTS cue card itu kayak ditodong MC kondangan buat kasih sambutan 2 menit. Ada topik, ada 1 menit nyiapin. Rahasianya: struktur (kapan, di mana, kenapa berkesan) — bukan grammar sempurna.',
+  ],
+  'true_false_not_given': [
+    'TF/NG itu kayak fact-check berita di grup keluarga. TRUE = ada sumbernya di teks. FALSE = teks bilang sebaliknya. NOT GIVEN = teksnya diam — dan "diam" itu BUKAN berarti salah. Jebakan paling sering: kamu pakai logika sendiri, bukan teks.',
+  ],
 };
 
 /**

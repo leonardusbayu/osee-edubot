@@ -300,5 +300,38 @@ export async function getTodayLesson(env: Env, userId: number): Promise<string |
     return `🧠 Hari ini: MINI TEST\n\nBuka "Latihan Tes" dan kerjakan 10 soal dari section manapun. Ini untuk cek progress mingguan kamu.${reviewReminder}`;
   }
 
-  return `📖 Pelajaran hari ini (Hari ${currentDay + 1}/${planData.length}):\n\nTopik: ${today.topic.replace(/_/g, ' ')}\nTipe: ${today.type === 'drill' ? 'Latihan drill' : 'Pelajaran baru'}\n\nKetik /study lalu pilih "${today.topic.replace(/_/g, ' ')}" untuk mulai.${reviewReminder}`;
+  // Context that makes /today feel personal: streak, mastery on today's
+  // topic, and progress bar. All best-effort — missing tables degrade to
+  // the plain message.
+  let streakLine = '';
+  let masteryLine = '';
+  try {
+    const u = await env.DB.prepare(
+      'SELECT current_streak FROM users WHERE id = ?'
+    ).bind(userId).first() as any;
+    const streak = Number(u?.current_streak || 0);
+    if (streak >= 2) streakLine = `🔥 Streak ${streak} hari — jangan putus hari ini!\n`;
+  } catch { /* ignore */ }
+  try {
+    const m = await env.DB.prepare(
+      'SELECT mastery_score FROM topic_mastery WHERE user_id = ? AND topic = ?'
+    ).bind(userId, today.topic).first() as any;
+    if (m && m.mastery_score != null) {
+      const pct = Math.round(Number(m.mastery_score) * 100);
+      masteryLine = pct < 70
+        ? `🎯 Kamu masih ${pct}% di topik ini — hari ini kita naikin.\n`
+        : `🎯 Kamu udah ${pct}% di topik ini — tinggal dipoles.\n`;
+    }
+  } catch { /* ignore */ }
+
+  const done = currentDay + 1;
+  const total = planData.length;
+  const filled = Math.round((done / total) * 10);
+  const bar = '▓'.repeat(filled) + '░'.repeat(10 - filled);
+
+  return `📖 Pelajaran hari ini — Hari ${done}/${total}\n${bar}\n\n` +
+    streakLine + masteryLine +
+    `Topik: ${today.topic.replace(/_/g, ' ')}\n` +
+    `Tipe: ${today.type === 'drill' ? 'Latihan drill' : 'Pelajaran baru'}\n\n` +
+    `Ketik /study lalu pilih "${today.topic.replace(/_/g, ' ')}" untuk mulai.${reviewReminder}`;
 }

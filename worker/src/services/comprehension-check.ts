@@ -288,9 +288,58 @@ export async function updateMentalModelFromCq(
           `Repeated CQ misses on "${active.question.slice(0, 80)}"`,
         );
       }
+      // Failed CQ → FSRS review deck. Previously the check was forgotten the
+      // moment the lesson ended; now the exact question the student missed
+      // resurfaces in /review until mastered.
+      await enqueueCqForReview(env, userId, active, attemptNum);
     }
   } catch (e) {
     console.error('updateMentalModelFromCq failed:', e);
+  }
+}
+
+/**
+ * Push a failed comprehension check into the FSRS spaced-repetition deck.
+ * question_data uses the same JSON shape /review renders for test questions
+ * (question_text + options + correct_answer). Best-effort.
+ */
+async function enqueueCqForReview(
+  env: Env,
+  userId: number,
+  active: ActiveCqRow,
+  attemptNum: number,
+): Promise<void> {
+  try {
+    // Dedup: addToReview only dedups on content_id, which CQ cards don't
+    // have. A second failed attempt on the same question must not clone the
+    // card — match on the stored question text instead.
+    const existing = await env.DB.prepare(
+      `SELECT id FROM spaced_repetition
+       WHERE user_id = ? AND question_type = 'comprehension_check'
+         AND question_data LIKE ? LIMIT 1`
+    ).bind(userId, `%${JSON.stringify(active.question.slice(0, 200)).slice(1, -1)}%`).first();
+    if (existing) return;
+
+    const { addToReview } = await import('./fsrs-engine');
+    const idx = active.correct_letter.charCodeAt(0) - 'A'.charCodeAt(0);
+    const correctText = active.options[idx] || active.correct_letter;
+    await addToReview(
+      env, userId,
+      'lesson',                              // section: distinguishes CQ cards
+      'comprehension_check',
+      JSON.stringify({
+        question_text: active.question,
+        options: active.options,
+        correct_answer: active.correct_letter,
+        concept: active.concept || null,
+      }),
+      correctText,
+      '',                                    // student answer not useful here
+      undefined,                             // no content_id — CQ is generated
+      false,                                 // wasCorrect=false → review soon
+    );
+  } catch (e) {
+    console.error(`enqueueCqForReview failed (attempt ${attemptNum}):`, e);
   }
 }
 
