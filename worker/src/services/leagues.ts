@@ -211,7 +211,7 @@ export async function notifyLeagueChanges(env: Env, botToken: string): Promise<{
 export async function getLeagueLeaderboard(env: Env, league: string, limit = 20) {
   const ws = weekStart();
   const { results } = await env.DB.prepare(
-    `SELECT ul.user_id, u.full_name, u.username, ul.weekly_xp
+    `SELECT ul.user_id, u.name, u.username, ul.weekly_xp
        FROM user_leagues ul JOIN users u ON u.id = ul.user_id
       WHERE ul.league = ? AND ul.week_start = ?
       ORDER BY ul.weekly_xp DESC LIMIT ?`,

@@ -35,7 +35,7 @@ gameRoutes.get('/leaderboard', async (c) => {
   const dateFilter = period === 'day' ? '-1 day' : period === 'month' ? '-30 days' : '-7 days';
 
   const { results } = await c.env.DB.prepare(
-    `SELECT gs.user_id, u.full_name, u.username,
+    `SELECT gs.user_id, u.name, u.username,
             MAX(gs.score) AS best_score,
             COUNT(*) AS games_played,
             SUM(gs.xp_earned) AS total_xp_earned
@@ -622,7 +622,7 @@ gameRoutes.get('/friend-quest/active', async (c) => {
   const quests = [];
   for (const q of results || []) {
     const { results: members } = await c.env.DB.prepare(
-      `SELECT fqm.*, u.full_name, u.username
+      `SELECT fqm.*, u.name, u.username
          FROM friend_quest_members fqm JOIN users u ON u.id = fqm.user_id
         WHERE fqm.quest_id = ?`,
     ).bind(q.id).all<any>();

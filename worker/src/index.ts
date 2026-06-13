@@ -32,6 +32,7 @@ import { visualRoutes } from './routes/visual';
 import { runContentAudit } from './services/content-auditor';
 import { runAiQualitySampler } from './services/ai-quality-sampler';
 import { calibrationRoutes } from './routes/calibration';
+import { shareRoutes } from './routes/share';
 import { computeCalibration } from './services/calibration';
 import { runRetestReliability } from './services/retest-reliability';
 import { runWhisperQa } from './services/whisper-qa';
@@ -390,6 +391,7 @@ app.route('/api/anomalies', anomaliesRoutes);
 app.route('/api/audit', auditRoutes);
 app.route('/api/visual', visualRoutes);
 app.route('/api/calibration', calibrationRoutes);
+app.route('/api/share', shareRoutes);
 
 // Lightweight content-issue report endpoint — used by the in-test "🚩 Lapor"
 // button. Writes to error_logs (source='client', error_type='content_report')

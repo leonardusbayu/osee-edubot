@@ -109,7 +109,7 @@ certificateRoutes.post('/issue', async (c) => {
       score,
       target_score: targetScore,
       verify_url: `https://edubot-api.edubot-leonardus.workers.dev/api/certificates/verify/${hashId}`,
-      student_name: user.full_name || user.username || 'Student',
+      student_name: user.name || user.username || 'Student',
     },
   });
 });
@@ -118,7 +118,7 @@ certificateRoutes.post('/issue', async (c) => {
 certificateRoutes.get('/verify/:hash', async (c) => {
   const hash = c.req.param('hash');
   const cert = await c.env.DB.prepare(
-    `SELECT c.*, u.full_name, u.username
+    `SELECT c.*, u.name, u.username
        FROM certificates c
        JOIN users u ON u.id = c.user_id
       WHERE c.hash_id = ?`,
@@ -129,7 +129,7 @@ certificateRoutes.get('/verify/:hash', async (c) => {
 
   return c.json({
     valid: true,
-    student_name: cert.full_name || cert.username || 'Student',
+    student_name: cert.name || cert.username || 'Student',
     test_type: cert.test_type,
     score: cert.score,
     issued_at: cert.issued_at,

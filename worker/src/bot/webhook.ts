@@ -1967,6 +1967,9 @@ async function handleMessage(message: any, env: Env) {
           `/template — Writing templates (IELTS, TOEFL, TOEIC)\n` +
           `/video — Video comprehension (TED + lectures + Q&A)\n` +
           `/phase — Cek study phase kamu + rekomendasi\n` +
+          `/squad — Study squad bareng teman (saling jaga streak)\n` +
+          `/beasiswa — Jalur beasiswa + strategi skornya\n` +
+          `/sharecard — Kartu skor buat dishare ke IG/WA\n` +
           `/challenge @user — Duel 5 soal\n\n` +
           `💡 *Tips:* Kirim voice message untuk tutor 24/7!`;
 
@@ -2125,7 +2128,7 @@ async function handleMessage(message: any, env: Env) {
             const rows = leaderboard as any[];
             for (let i = 0; i < rows.length; i++) {
               const r = rows[i];
-              const name = r.full_name || r.username || `User ${r.user_id}`;
+              const name = r.name || r.username || `User ${r.user_id}`;
               const marker = r.user_id === user.id ? '👉 ' : '';
               const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `  ${i + 1}.`;
               msg += `${marker}${medal} ${name} — ${r.weekly_xp} XP\n`;
@@ -3063,6 +3066,102 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
         } catch (e) {
           console.error('/vocab error:', e);
           await sendMessage(env, chatId, '⚠️ _Gagal memuat kartu vocab. Coba lagi ya._');
+        }
+        return;
+      }
+
+      case '/squad': {
+        // Study squads — accountability groups of 3-5 friends (Phase 5.3)
+        try {
+          const { createSquad, joinSquad, leaveSquad, getSquadStatus, formatSquadMessage } = await import('../services/squads');
+          const parts = text.trim().split(/\s+/);
+          const sub = (parts[1] || '').toLowerCase();
+
+          if (sub === 'buat') {
+            const res = await createSquad(env, user.id, parts.slice(2).join(' '));
+            await sendMessage(env, chatId, res.message);
+            return;
+          }
+          if (sub === 'gabung') {
+            const res = await joinSquad(env, user.id, parts[2] || '');
+            await sendMessage(env, chatId, res.message);
+            return;
+          }
+          if (sub === 'keluar') {
+            const res = await leaveSquad(env, user.id);
+            await sendMessage(env, chatId, res.message);
+            return;
+          }
+
+          // No subcommand → status view, or onboarding pitch if squadless.
+          const status = await getSquadStatus(env, user.id);
+          if (status) {
+            await sendMessage(env, chatId, formatSquadMessage(status), {
+              inline_keyboard: [[
+                { text: '📤 Share kode undangan', callback_data: 'squad:share' },
+                { text: '🚪 Keluar squad', callback_data: 'squad:leave' },
+              ]],
+            });
+          } else {
+            await sendMessage(env, chatId,
+              `👥 *Study Squad*\n\n` +
+              `Belajar bareng 2-4 teman itu cara paling ampuh biar nggak kabur dari jadwal — kalian bisa saling lihat *streak* dan siapa yang udah latihan hari ini.\n\n` +
+              `Bikin squad baru:\n` +
+              `/squad buat NamaSquad\n\n` +
+              `Atau gabung squad teman:\n` +
+              `/squad gabung KODE`);
+          }
+        } catch (e) {
+          console.error('/squad error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat squad. Coba lagi ya.');
+        }
+        return;
+      }
+
+      case '/sharecard': {
+        // Shareable 1080x1080 score card with referral deep link (Phase 5.1)
+        try {
+          const tgId = String(user.telegram_id).replace('.0', '');
+          const cardUrl = `https://edubot-api.edubot-leonardus.workers.dev/api/share/card?tg_id=${tgId}`;
+          await sendMessage(env, chatId,
+            `🖼 *Kartu Skor Kamu*\n\n` +
+            `Aku udah bikinin kartu skor kamu — ada estimasi skor, streak belajar, dan *kode referral kamu* langsung di kartunya.\n\n` +
+            `Caranya gampang:\n` +
+            `1. Buka kartunya lewat tombol di bawah\n` +
+            `2. *Screenshot*\n` +
+            `3. Share ke IG Story atau status WA\n\n` +
+            `Tiap teman yang daftar lewat link di kartu = bonus *+5 soal gratis* buat kamu! 🎁`,
+            { inline_keyboard: [[{ text: '🖼 Lihat Kartu Skor Kamu', url: cardUrl }]] }
+          );
+        } catch (e) {
+          console.error('/sharecard error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat kartu skor. Coba lagi ya.');
+        }
+        return;
+      }
+
+      case '/beasiswa': {
+        // Jalur Beasiswa — curated scholarship tracks + score matching (Phase 6.2)
+        try {
+          const { getScholarshipMenu, formatScholarshipMatches } = await import('../services/scholarship-track');
+
+          // Best-effort: prepend personalized matches when we have an estimate.
+          let matchBlock = '';
+          try {
+            const { estimateScore } = await import('../services/score-predictor');
+            const est = await estimateScore(env, user.id, user.target_test || 'TOEFL_IBT');
+            if (est) {
+              matchBlock = formatScholarshipMatches({ scale: est.scale, score: est.estimatedScore }) + '\n\n';
+            }
+          } catch (e) {
+            console.error('/beasiswa match error:', e);
+          }
+
+          const menu = getScholarshipMenu();
+          await sendMessage(env, chatId, matchBlock + menu.text, menu.keyboard);
+        } catch (e) {
+          console.error('/beasiswa error:', e);
+          await sendMessage(env, chatId, '⚠️ Gagal memuat info beasiswa. Coba lagi ya.');
         }
         return;
       }
@@ -5879,6 +5978,62 @@ async function handleCallbackQuery(query: any, env: Env) {
     } catch (e) {
       console.error('vocab callback error:', e);
       await sendMessage(env, chatId, '⚠️ Gagal menambahkan kartu. Coba lagi ya.');
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // SQUAD CALLBACKS (/squad — Phase 5.3)
+  //   squad:share — forwardable invite message with the code
+  //   squad:leave — leave current squad
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('squad:')) {
+    try {
+      const action = data.slice('squad:'.length);
+      const { getSquadStatus, leaveSquad } = await import('../services/squads');
+
+      if (action === 'share') {
+        const status = await getSquadStatus(env, user.id);
+        if (!status) {
+          await sendMessage(env, chatId, 'Kamu belum gabung squad mana pun. Bikin dulu pakai /squad buat NAMA ya!');
+          return;
+        }
+        await sendMessage(env, chatId, 'Forward pesan di bawah ini ke temanmu ya 👇');
+        await sendMessage(env, chatId,
+          `Aku lagi belajar bareng squad *${status.name}* di EduBot — yuk gabung, kita saling jaga streak! 🔥\n\n` +
+          `1. Buka https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot\n` +
+          `2. Ketik: /squad gabung ${status.invite_code}`);
+        return;
+      }
+      if (action === 'leave') {
+        const res = await leaveSquad(env, user.id);
+        await sendMessage(env, chatId, res.message);
+        return;
+      }
+    } catch (e) {
+      console.error('squad callback error:', e);
+      await sendMessage(env, chatId, '⚠️ Gagal memproses squad. Coba lagi ya.');
+    }
+    return;
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // SCHOLARSHIP CALLBACKS (/beasiswa — Phase 6.2)
+  //   beasiswa:<id> — thread-style detail for one scholarship
+  // ═══════════════════════════════════════════════════════
+  if (data.startsWith('beasiswa:')) {
+    try {
+      const { formatScholarshipDetail } = await import('../services/scholarship-track');
+      const id = data.slice('beasiswa:'.length);
+      const detail = formatScholarshipDetail(id);
+      if (!detail) {
+        await sendMessage(env, chatId, 'Hmm, beasiswa itu nggak ketemu. Coba buka lagi lewat /beasiswa ya.');
+        return;
+      }
+      await sendMessage(env, chatId, detail);
+    } catch (e) {
+      console.error('beasiswa callback error:', e);
+      await sendMessage(env, chatId, '⚠️ Gagal memuat info beasiswa. Coba lagi ya.');
     }
     return;
   }
@@ -8724,6 +8879,9 @@ async function handleCallbackQuery(query: any, env: Env) {
         `/review — Review soal yang salah\n` +
         `/strategi — Strategi tes per ujian\n` +
         `/vocab — 5 kata high-frequency hari ini\n` +
+        `/squad — Study squad bareng teman\n` +
+        `/beasiswa — Jalur beasiswa + strategi skor\n` +
+        `/sharecard — Kartu skor buat dishare\n` +
         `/challenge @user — Duel 5 soal\n\n` +
         `💡 Kirim voice message = latihan speaking!`,
         { inline_keyboard: [[{ text: '◀️ Kembali', callback_data: 'help_main' }]] }
