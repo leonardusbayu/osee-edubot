@@ -4,6 +4,14 @@ import { getAuthUser } from '../services/auth';
 
 export const ttsRoutes = new Hono<{ Bindings: Env }>();
 
+// Reject audio responses smaller than this. OpenAI tts-1 emits near-silent
+// MP3s in the 5-10KB range for very short / punctuation-only / malformed
+// input. Those load into <audio> but play nothing — the user sees a
+// black bar that "didn't load". 12KB is a tight enough floor to catch
+// the silent cases (the smallest real TTS in our cache is ~24KB for
+// "Welcome to the museum.") while still rejecting near-silent stubs.
+const MIN_AUDIO_BYTES = 12 * 1024;
+
 // Require any authenticated user (free tier included) — prevents anonymous OpenAI credit burn
 async function requireAuthedTTS(c: any): Promise<boolean> {
   const user = await getAuthUser(c.req.raw, c.env);
@@ -301,6 +309,15 @@ ttsRoutes.get('/speak', async (c) => {
   // Just trim what Hono gave us.
   const decoded = text.trim();
   if (decoded.length === 0) return c.json({ error: 'Empty text' }, 400);
+  // Reject very short or punctuation-only text. OpenAI tts-1 emits a
+  // near-silent ~10KB MP3 for these — the audio element "loads" but
+  // plays nothing, leaving the student stuck on the "Sudah dengar"
+  // gate. 10 chars + at least one ASCII letter is a safer floor; the
+  // frontend (TestRunner) gates identically to keep both layers in
+  // sync.
+  if (decoded.length < 10 || !/[A-Za-z]/.test(decoded)) {
+    return c.json({ error: 'Text too short for TTS', min_length: 10 }, 400);
+  }
   // Truncation handled below via .substring(0, 4096) before the OpenAI call.
   // Delimited key so "Hellotrue|alloy" vs "Hello|true|alloy" don't collide.
   // Format is hardcoded to mp3 here (GET /speak always serves MP3 for <audio>).
@@ -343,6 +360,15 @@ ttsRoutes.get('/speak', async (c) => {
 
         if (buffers.length > 0) {
           const total = buffers.reduce((n, b) => n + b.byteLength, 0);
+          // OpenAI tts-1 sometimes returns a near-silent ~5-10KB MP3 for
+          // edge-case input (very short text, all punctuation, malformed
+          // unicode, etc.). Those load into <audio> but play nothing,
+          // which feels like "audio didn't load" to the user. Reject
+          // here so the frontend's AudioWithError HEAD preflight can
+          // catch it on retry, and don't pollute the cache.
+          if (total < MIN_AUDIO_BYTES) {
+            return c.json({ error: 'Audio too small (likely silent)', bytes: total, min: MIN_AUDIO_BYTES }, 502);
+          }
           const merged = new Uint8Array(total);
           let offset = 0;
           for (const b of buffers) { merged.set(new Uint8Array(b), offset); offset += b.byteLength; }
@@ -363,6 +389,9 @@ ttsRoutes.get('/speak', async (c) => {
         const fullText = segments.map(s => s.text).join(' ... ');
         const audioData = await fetchTTSAudioWithRetry(c.env.OPENAI_API_KEY, fullText, voice, 'mp3');
         if (!audioData) return c.json({ error: 'TTS generation failed' }, 500);
+        if (audioData.byteLength < MIN_AUDIO_BYTES) {
+          return c.json({ error: 'Audio too small (likely silent)', bytes: audioData.byteLength, min: MIN_AUDIO_BYTES }, 502);
+        }
 
         c.executionCtx.waitUntil(cacheAudio(c.env.DB, cacheKey, audioData, 'multi-fallback'));
 
@@ -405,6 +434,12 @@ ttsRoutes.get('/speak', async (c) => {
 
     // Cache single voice result + log cost
     const audioData = await response.arrayBuffer();
+    // Same guard as multi-speaker: if the response is suspiciously small
+    // it's almost certainly silence, not speech. Don't poison the cache
+    // with it; return 502 so the frontend shows the text fallback.
+    if (audioData.byteLength < MIN_AUDIO_BYTES) {
+      return c.json({ error: 'Audio too small (likely silent)', bytes: audioData.byteLength, min: MIN_AUDIO_BYTES }, 502);
+    }
     c.executionCtx.waitUntil(cacheAudio(c.env.DB, cacheKey, audioData, voice));
     try {
       const charCount = decoded.length;

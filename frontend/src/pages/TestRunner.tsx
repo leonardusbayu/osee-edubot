@@ -744,7 +744,13 @@ export default function TestRunner() {
           // Fall through to the first non-empty one so we don't silently ship
           // an empty card with no audio AND no prompt.
           const script = stripHtml(sq.script || sq.question_text || '');
-          const ttsUrl = script.length > 3
+          // Reject very short / punctuation-only text: TTS returns a
+          // near-silent ~10KB MP3 for these that looks like the audio
+          // element "isn't loading" to the user. 10 chars is a safer
+          // floor — it's the threshold below which OpenAI tts-1 starts
+          // emitting silence + headers. The TTS endpoint ALSO rejects
+          // short text (400) for double safety.
+          const ttsUrl = script.length > 10 && /[A-Za-z]/.test(script)
             ? buildTtsUrl(script, { multi: true, maxChars: 2000 })
             : null;
 
@@ -2167,7 +2173,7 @@ export default function TestRunner() {
           </div>
         )}
 
-        {/* Speaking — Listen and Repeat + Interview */}
+         {/* Speaking — Listen and Repeat + Interview */}
         {(currentQuestion.type === 'listen_and_repeat' || currentQuestion.type === 'take_interview') && (
           <div className="mb-4">
             {currentQuestion.group_name && (
@@ -2179,7 +2185,7 @@ export default function TestRunner() {
                 the student can still read the sentence and record their
                 attempt instead of being blocked. */}
             {currentQuestion.audio_url && !speakingResult && (
-              <div className="bg-tg-secondary rounded-xl p-4 mb-4 text-center">
+              <div className="bg-tg-secondary rounded-xl p-4 mb-3 text-center">
                 <p className="text-3xl mb-2">{currentQuestion.type === 'listen_and_repeat' ? '🔊' : '🎙️'}</p>
                 <p className="text-sm font-medium mb-3">
                   {currentQuestion.type === 'listen_and_repeat' ? 'Dengarkan kalimat ini:' : 'Dengarkan pertanyaan:'}
@@ -2189,13 +2195,30 @@ export default function TestRunner() {
                   className="w-full mb-3"
                   fallbackText={currentQuestion.prompt}
                 />
+                {/* Skip-audio escape hatch. Some Telegram webviews (esp.
+                    iOS Safari) don't fire <audio> play events reliably,
+                    leaving the student stuck on the "Sudah dengar" gate.
+                    This button explicitly fires setAudioPlayed(true) so
+                    they can always advance. */}
+                <button
+                  type="button"
+                  onClick={() => setAudioPlayed(true)}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-tg-button/10 text-tg-button font-medium"
+                >
+                  ⏭️ Lewati audio
+                </button>
               </div>
             )}
 
-            {/* Text prompt (fallback or interview) */}
-            {currentQuestion.prompt && !currentQuestion.audio_url && !speakingResult && (
-              <div className="bg-tg-secondary rounded-xl p-4 mb-4">
-                <p className="font-medium">{currentQuestion.prompt}</p>
+            {/* Text prompt — ALWAYS shown alongside audio (so the student
+                can read the sentence even while audio loads, or when TTS
+                returns a near-silent MP3). Previously this only rendered
+                when audio_url was null, which meant students depending on
+                the text couldn't see it on questions with TTS. */}
+            {currentQuestion.prompt && !speakingResult && (
+              <div className="bg-tg-bg border border-tg-secondary rounded-xl p-3 mb-3 text-sm leading-relaxed">
+                <p className="text-xs text-tg-hint mb-1">Teks kalimat:</p>
+                <p className="font-medium text-tg-text">{currentQuestion.prompt}</p>
               </div>
             )}
 
