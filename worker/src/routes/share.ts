@@ -107,8 +107,12 @@ shareRoutes.get('/card', async (c) => {
         console.error('[share-card] live estimate failed:', (e as any)?.message || e);
       }
     }
+    // Brand-new students have no score data yet — render a "pejuang" card
+    // (streak + CTA) instead of failing. The share loop matters more than
+    // the number on day one.
+    let fallbackLabel: string | null = null;
     if (estimatedScore == null) {
-      return c.json({ error: 'No score data yet for this user' }, 404);
+      fallbackLabel = `Pejuang ${String(testType).replace(/_/g, ' ')}`;
     }
 
     // ── Mock-test delta: last two mocks for this test type ──
@@ -163,7 +167,7 @@ shareRoutes.get('/card', async (c) => {
     const svg = generateScoreCardSvg({
       name: firstName,
       testType: TEST_LABELS[testType] || testType,
-      scoreLabel: formatScoreLabel(estimatedScore, scoreScale, testType),
+      scoreLabel: fallbackLabel ?? formatScoreLabel(estimatedScore!, scoreScale, testType),
       deltaLabel,
       streak: Number(user.current_streak) || 0,
       refCode: refLink,
