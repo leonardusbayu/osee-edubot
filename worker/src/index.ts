@@ -954,6 +954,18 @@ async function handleMorningChannelCron(env: Env) {
     const quizText = formatQuizPost(quiz, 'https://t.me/osee_IBT_IELTS_tutor_bot?start=quiz_channel');
     const quizOk = await postToChannel(env, quizText, 'quiz');
     console.log('Channel quiz post:', quizOk ? 'OK' : 'FAILED');
+
+    // Native quiz poll: additive, far more engaging than the "comment your
+    // answer" text quiz above. Telegram renders an inline tap-to-vote widget
+    // with instant correct/wrong feedback + explanation. Best-effort — a poll
+    // failure must never block the vocab/quiz posts (or vice versa).
+    try {
+      const { postDailyPollQuiz } = await import('./services/channel-poll');
+      const pollResult = await postDailyPollQuiz(env);
+      console.log('Channel poll quiz post:', pollResult.ok ? 'OK' : 'FAILED');
+    } catch (e) {
+      console.error('Channel poll quiz post error (non-fatal):', e);
+    }
   } catch (e) {
     console.error('Morning channel post error:', e);
   }
@@ -1093,6 +1105,21 @@ async function handleEveningCron(env: Env) {
     const cta = generatePromoCTA();
     const ctaOk = await postToChannel(env, cta, 'cta');
     console.log('Channel CTA post:', ctaOk ? 'OK' : 'FAILED');
+
+    // Micro-series: one part per day, posted in the fixed evening slot. This is
+    // the habit-loop anchor — each part ends on a cliffhanger ("Besok: ...") so
+    // followers come back tomorrow for the payoff. Best-effort — if the series
+    // engine fails it must not block the grammar/idiom/spotlight/CTA posts.
+    try {
+      const { getNextSeriesPost } = await import('./services/channel-series');
+      const seriesText = await getNextSeriesPost(env);
+      if (seriesText) {
+        const seriesOk = await postToChannel(env, seriesText, 'series');
+        console.log('Channel series post:', seriesOk ? 'OK' : 'FAILED');
+      }
+    } catch (e) {
+      console.error('Channel series post error (non-fatal):', e);
+    }
   } catch (e) {
     console.error('Evening channel post error:', e);
   }
