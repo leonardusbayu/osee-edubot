@@ -601,28 +601,54 @@ export function generateSpeakingCTA(): string {
   return ctas[Math.floor(Math.random() * ctas.length)];
 }
 
+// Channel posts are authored with *bold* / _italic_ markers but sent with
+// parse_mode:'HTML' — without conversion Telegram renders literal asterisks.
+// Escape HTML specials first (content has no raw tags), then convert markers.
+export function channelMarkdownToHtml(text: string): string {
+  let t = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  t = t
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/\*([^*\n]+)\*/g, '<b>$1</b>')
+    .replace(/_([^_\n]+)_/g, '<i>$1</i>');
+  return t;
+}
+
 export async function postToChannel(env: Env, text: string, contentType = 'cta'): Promise<boolean> {
   const channelId = env.TELEGRAM_BOT_TOKEN.includes('test')
     ? '@TOEFL_IELTS_Indonesia_Test'
     : '-1003884450070';
 
+  const htmlText = channelMarkdownToHtml(text);
   let messageId: string | null = null;
   let status = 'failed';
   let errorMsg: string | null = null;
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    let response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: channelId,
-        text: text,
+        text: htmlText,
         parse_mode: 'HTML',
         disable_web_page_preview: false,
       }),
     });
 
-    const result = await response.json() as any;
+    let result = await response.json() as any;
+    if (!result.ok) {
+      // HTML parse rejection → retry as plain text so the post still lands.
+      response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: channelId,
+          text: text.replace(/[*_]/g, ''),
+          disable_web_page_preview: false,
+        }),
+      });
+      result = await response.json() as any;
+    }
     if (result.ok) {
       messageId = String(result.result?.message_id || null);
       status = 'sent';

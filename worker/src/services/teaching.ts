@@ -493,11 +493,11 @@ Soal: "She studied hard. ___, she passed the exam." (Therefore/However) Jawab?`,
 
   return `${content}
 
-INGAT: Maks 8 baris. Plain text. Tanpa heading/bold/markdown. 1 soal saja. Langsung ke inti, jangan basa-basi.`;
+INGAT: Maks 8 baris. Pakai *bold* untuk istilah English kunci & jawaban benar, _italik_ untuk penekanan. Tanpa heading. 1 soal saja. Langsung ke inti, jangan basa-basi.`;
 }
 
 function buildDrillPrompt(user: User, section: string, drillType: string, testName: string): string {
   return `Buat 1 soal ${section} (${drillType}) untuk level ${user.proficiency_level || 'beginner'} buat latihan ${testName}.
 
-Plain text. Maks 6 baris. Langsung soalnya, jangan basa-basi. Akhiri dengan "Jawab?"`;
+Maks 6 baris. Pakai *bold* untuk kata kunci soal. Langsung soalnya, jangan basa-basi. Akhiri dengan "Jawab?"`;
 }
