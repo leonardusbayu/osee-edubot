@@ -947,12 +947,12 @@ async function handleMorningChannelCron(env: Env) {
     }
 
     const vocab = await generateVocabularyOfTheDay(env);
-    const vocabOk = await postToChannel(env, vocab.text, 'vocab');
+    const vocabOk = await postToChannel(env, vocab.text, 'vocab', { image: vocab.channelImage });
     console.log('Channel vocab post:', vocabOk ? 'OK' : 'FAILED');
 
     const quiz = await generateDailyQuiz(env);
     const quizText = formatQuizPost(quiz, 'https://t.me/osee_IBT_IELTS_tutor_bot?start=quiz_channel');
-    const quizOk = await postToChannel(env, quizText, 'quiz');
+    const quizOk = await postToChannel(env, quizText, 'quiz', { image: quiz.channelImage });
     console.log('Channel quiz post:', quizOk ? 'OK' : 'FAILED');
 
     // Native quiz poll: additive, far more engaging than the "comment your
@@ -1062,9 +1062,9 @@ async function handleHourlyChannelCron(env: Env) {
     // 5 content types × 4 hour cycle = 20 hours coverage, slight overlap at top of hour
     const utcHour = new Date().getUTCHours();
     const contentTypes = [
-      { type: 'grammar_tip', generate: () => generateGrammarTip(env) },
+      { type: 'grammar_tip', generate: () => generateGrammarTip(env).then(v => v.text) },
       { type: 'speaking_cta', generate: () => generateSpeakingCTA() },
-      { type: 'idiom', generate: () => generateIdiom(env) },
+      { type: 'idiom', generate: () => generateIdiom(env).then(v => v.text) },
       { type: 'vocab', generate: () => generateVocabularyOfTheDay(env).then(v => v.text) },
       { type: 'cta', generate: () => generatePromoCTA() },
     ];
@@ -1086,12 +1086,12 @@ async function handleEveningCron(env: Env) {
 
     // Grammar tip
     const grammarTip = await generateGrammarTip(env);
-    const tipOk = await postToChannel(env, grammarTip, 'grammar_tip');
+    const tipOk = await postToChannel(env, grammarTip.text, 'grammar_tip', { image: grammarTip.channelImage });
     console.log('Channel grammar tip post:', tipOk ? 'OK' : 'FAILED');
 
     // Idiom
     const idiom = await generateIdiom(env);
-    const idiomOk = await postToChannel(env, idiom, 'idiom');
+    const idiomOk = await postToChannel(env, idiom.text, 'idiom', { image: idiom.channelImage });
     console.log('Channel idiom post:', idiomOk ? 'OK' : 'FAILED');
 
     // Student spotlight (sometimes)

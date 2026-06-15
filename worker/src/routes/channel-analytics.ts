@@ -129,8 +129,8 @@ channelAnalyticsRoutes.post('/test-post', async (c) => {
   const generators: Record<string, GenFn> = {
     speaking_cta: () => generateSpeakingCTA(),
     cta: () => generatePromoCTA(),
-    grammar_tip: () => generateGrammarTip(c.env),
-    idiom: () => generateIdiom(c.env),
+    grammar_tip: () => generateGrammarTip(c.env).then(v => v.text),
+    idiom: () => generateIdiom(c.env).then(v => v.text),
   };
 
   const generator = generators[body.type || 'cta'];
