@@ -2,14 +2,17 @@
 //
 // Channel posts used to be text-only — the existing `imagePrompt` field
 // in generateVocabularyOfTheDay was a TEXT prompt that was never used.
-// This module generates real DALL-E 3 images for channel posts and caches
+// This module generates real OpenAI images for channel posts and caches
 // them in R2 by prompt-hash so the same prompt never costs twice.
 //
-// DALL-E 3 pricing: $0.040/image at 1024x1024 standard. The cache makes
-// each unique image a one-time cost; subsequent channel posts reuse
-// the same artifact. For the daily vocabulary post, a stable
-// prompt (3 word names + minimal style hint) means the same image is
-// generated once per word set, served forever after.
+// We use the `gpt-image-1` model (not `dall-e-3` which is deprecated
+// for many OpenAI accounts and returns "model does not exist" on this
+// one). gpt-image-1 returns b64_json (not a url), at $0.011-$0.167
+// per image depending on size/quality. The cache makes each unique
+// image a one-time cost; subsequent channel posts reuse the same
+// artifact. For the daily vocabulary post, a stable prompt (3 word
+// names + minimal style hint) means the same image is generated once
+// per word set, served forever after.
 //
 // On any failure (missing key, OpenAI 4xx/5xx, R2 outage) the caller
 // falls back to text-only. Image generation is best-effort — never
@@ -17,9 +20,8 @@
 
 import type { Env } from '../types';
 
-const DALLE_MODEL = 'dall-e-3';
-const DALLE_SIZE = '1024x1024';
-const DALLE_QUALITY = 'standard';
+const IMAGE_MODEL = 'gpt-image-1';
+const IMAGE_SIZE = '1024x1024';
 
 // ─── Prompt builder ─────────────────────────────────────────────────────
 
@@ -43,8 +45,9 @@ async function sha1(input: string): Promise<string> {
 
 /**
  * Append style guide rails so all channel-post images look like part of
- * the same series. DALL-E 3 tends to be literal — without these rails
- * the same prompt produces wildly different visual styles.
+ * the same series. gpt-image-1 (and image models generally) tend to be
+ * literal — without these rails the same prompt produces wildly
+ * different visual styles.
  */
 function applyChannelStyleGuide(prompt: string): string {
   return (
@@ -128,34 +131,31 @@ export async function getOrGenerateChannelImage(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: DALLE_MODEL,
+        model: IMAGE_MODEL,
         prompt: styledPrompt,
         n: 1,
-        size: DALLE_SIZE,
-        quality: DALLE_QUALITY,
-        response_format: 'url',
+        size: IMAGE_SIZE,
       }),
     });
 
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
-      console.error(`[channel-image] DALL-E ${res.status}: ${errBody.substring(0, 300)}`);
-      return fallbackImage(`dalle-${res.status}`);
+      console.error(`[channel-image] OpenAI ${res.status}: ${errBody.substring(0, 300)}`);
+      return fallbackImage(`openai-${res.status}`);
     }
 
-    const data = (await res.json()) as { data?: Array<{ url?: string }> };
-    const imgUrl = data.data?.[0]?.url;
-    if (!imgUrl) {
-      console.error('[channel-image] DALL-E returned no image url');
-      return fallbackImage('no-url');
+    const data = (await res.json()) as { data?: Array<{ b64_json?: string }> };
+    const b64 = data.data?.[0]?.b64_json;
+    if (!b64) {
+      console.error('[channel-image] OpenAI returned no b64_json');
+      return fallbackImage('no-b64');
     }
 
-    const imgRes = await fetch(imgUrl);
-    if (!imgRes.ok) {
-      console.error(`[channel-image] DALL-E CDN returned ${imgRes.status}`);
-      return fallbackImage('cdn-failed');
-    }
-    const bytes = await imgRes.arrayBuffer();
+    // b64_json → ArrayBuffer
+    const binary = atob(b64);
+    const bytes = new ArrayBuffer(binary.length);
+    const view = new Uint8Array(bytes);
+    for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
 
     // 4. Persist to R2 (best-effort; current request still succeeds).
     if (env.VISUAL_BUCKET) {

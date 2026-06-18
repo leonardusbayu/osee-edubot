@@ -141,3 +141,27 @@ channelAnalyticsRoutes.post('/test-post', async (c) => {
 
   return c.json({ sent, content_type: body.type || 'cta', preview: content.substring(0, 100) });
 });
+
+// Self-test: exercise the channel-image pipeline (DALL-E + R2) end-to-end
+// without posting to the channel. Returns the image bytes + source so we
+// can verify the integration against live secrets. Admin-gated.
+channelAnalyticsRoutes.get('/test-image', async (c) => {
+  const topic = c.req.query('topic') || 'vocab';
+  const subject = c.req.query('subject') || 'ubiquitous, meticulous, elucidate';
+  const variant = c.req.query('variant') || 'TOEFL_IBT';
+
+  const { getOrGenerateChannelImage } = await import('../services/channel-image');
+  const result = await getOrGenerateChannelImage(c.env, {
+    topic: topic as any,
+    subject,
+    variant,
+  });
+
+  return c.json({
+    ok: true,
+    source: result.source,
+    mime_type: result.mime_type,
+    cache_key: result.cache_key,
+    bytes: result.bytes.byteLength,
+  });
+});
