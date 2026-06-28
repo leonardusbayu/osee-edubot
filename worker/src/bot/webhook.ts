@@ -13,6 +13,40 @@ import {
 } from './onboarding';
 import { maybeAppendNudge, toggleTips } from '../services/companion-nudge';
 
+// ─── Admin notification helper ────────────────────────────────────────
+// Used by payment handlers (Stars + manual transfer) and any other path
+// where admin needs a realtime ping. Iterates users with role='admin'
+// and DMs each one. Best-effort — failures are logged, not thrown.
+async function notifyAdmins(env: Env, text: string): Promise<void> {
+  try {
+    const admins = await env.DB.prepare(
+      "SELECT telegram_id FROM users WHERE role = 'admin'"
+    ).all() as any;
+    for (const admin of admins.results || []) {
+      const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
+      if (!tgId) continue;
+      try {
+        await fetch(
+          `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: tgId,
+              text,
+              parse_mode: 'Markdown',
+            }),
+          }
+        );
+      } catch (e: any) {
+        console.error(`[notifyAdmins] DM to ${tgId} failed:`, e?.message || e);
+      }
+    }
+  } catch (e: any) {
+    console.error('[notifyAdmins] query failed:', e?.message || e);
+  }
+}
+
 // Speaking practice prompts
 const SPEAKING_PROMPTS: Record<string, string[]> = {
   TOEFL_IBT: [
@@ -1121,12 +1155,44 @@ export async function handleWebhook(update: any, env: Env) {
       if (update.message.successful_payment) {
         const payment = update.message.successful_payment;
         const chatId = update.message.chat.id;
-        const parts = payment.invoice_payload.split('_');
+        const parts = (payment.invoice_payload || '').split('_');
         const userId = parseInt(parts[1] || '0');
         const days = parseInt(parts[2] || '30');
-        if (userId > 0) {
-          // Get current premium_until to extend instead of overwrite
-          const current = await env.DB.prepare('SELECT premium_until FROM users WHERE id = ?').bind(userId).first() as any;
+        const chargeId = payment.telegram_payment_charge_id || 'unknown';
+        const providerChargeId = payment.provider_payment_charge_id || null;
+        const starsAmount = payment.total_amount || 0;
+        const buyerTgUser = update.message.from;
+
+        if (userId <= 0) {
+          console.error('[successful-payment] no userId in invoice_payload:', payment.invoice_payload);
+          return;
+        }
+
+        try {
+          // 1. Write payment_history audit row FIRST — before anything
+          // that can fail. This is the permanent record that lets us
+          // reconcile against Telegram's charge ID even if the
+          // subsequent UPDATE is_premium blows up.
+          try {
+            await env.DB.prepare(
+              `INSERT INTO payment_history
+                 (user_id, amount, currency, method, stars_amount, days_granted, status, payment_id, notes)
+               VALUES (?, 0, 'XTR', 'stars', ?, ?, 'completed', ?, ?)`
+            ).bind(
+              userId,
+              starsAmount,
+              days,
+              chargeId,
+              providerChargeId ? `provider: ${providerChargeId}` : null,
+            ).run();
+          } catch (e: any) {
+            console.error('[successful-payment] payment_history insert failed (non-fatal, continuing):', e?.message || e);
+          }
+
+          // 2. Get current premium_until to extend instead of overwrite
+          const current = await env.DB.prepare(
+            'SELECT premium_until, name, username, telegram_id FROM users WHERE id = ?'
+          ).bind(userId).first() as any;
           let expiresAt = new Date();
           if (current?.premium_until) {
             const existing = new Date(current.premium_until);
@@ -1135,14 +1201,14 @@ export async function handleWebhook(update: any, env: Env) {
             }
           }
           expiresAt.setDate(expiresAt.getDate() + days);
-          await env.DB.prepare('UPDATE users SET is_premium = 1, premium_until = ? WHERE id = ?')
-            .bind(expiresAt.toISOString(), userId).run();
 
-          // Referral commission: insert a payment_requests row (so the
-          // 7-day cron can find it and confirm the attribution), then
-          // call attributeOnPurchase which creates a pending referral
-          // attribution if the user had a reseller code applied. If
-          // no code applied, this is a no-op.
+          // 3. Flip is_premium + premium_until
+          await env.DB.prepare(
+            'UPDATE users SET is_premium = 1, premium_until = ? WHERE id = ?'
+          ).bind(expiresAt.toISOString(), userId).run();
+
+          // 4. Referral commission (best-effort — never block the
+          // premium grant on attribution).
           try {
             const prResult = await env.DB.prepare(
               `INSERT INTO payment_requests
@@ -1150,27 +1216,25 @@ export async function handleWebhook(update: any, env: Env) {
                VALUES (?, ?, ?, 'stars', 'completed', datetime('now'), ?)`
             ).bind(
               userId,
-              payment.total_amount,  // Stars (XTR), not rupiah
+              starsAmount,
               days,
-              `Stars payment: ${payment.telegram_payment_charge_id}`
+              `Stars payment: ${chargeId}`
             ).run();
             const paymentReqId = prResult.meta.last_row_id as number;
 
             const { attributeOnPurchase, PLAN_PRICING } = await import('../services/referral-commission');
-            // Use the plan amount in Stars from PLAN_PRICING (matches the
-            // /buy options shown to the user). Fall back to total_amount
-            // from the actual charge if the days aren't in PLAN_PRICING.
-            const planAmountStars = PLAN_PRICING[days] || payment.total_amount;
+            const planAmountStars = PLAN_PRICING[days] || starsAmount;
             await attributeOnPurchase(env, {
               customerId: userId,
               paymentId: paymentReqId,
               planDays: days,
               planAmountStars,
             });
-          } catch (e) {
-            console.error('[successful-payment] referral attribution error (non-fatal):', e);
+          } catch (e: any) {
+            console.error('[successful-payment] referral attribution error (non-fatal):', e?.message || e);
           }
 
+          // 5. DM the buyer
           await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1179,6 +1243,39 @@ export async function handleWebhook(update: any, env: Env) {
               parse_mode: 'Markdown'
             }),
           });
+
+          // 6. DM admins — the missing notification. Buyer display
+          // name falls back to username then telegram_id then id.
+          const buyerLabel = current?.username
+            ? `@${current.username}`
+            : current?.name
+            ? current.name
+            : `tg:${current?.telegram_id || buyerTgUser?.id || '?'}`;
+          await notifyAdmins(
+            env,
+            `💰 *Premium Stars Masuk*\n\n` +
+              `User: ${buyerLabel} (id ${userId})\n` +
+              `Plan: ${days} hari\n` +
+              `Stars: ${starsAmount} XTR\n` +
+              `Charge: \`${chargeId}\`\n` +
+              `Berakhir: ${expiresAt.toLocaleDateString('id-ID')}`
+          );
+        } catch (e: any) {
+          // The outer safety net. If D1 was down when the handler ran,
+          // we still want to know about it so we can manually flip
+          // is_premium and reconcile against the Telegram charge.
+          console.error('[successful-payment] handler failed:', e?.message || e, {
+            userId, days, chargeId, starsAmount,
+          });
+          await notifyAdmins(
+            env,
+            `⚠️ *Stars Payment Handler Gagal*\n\n` +
+              `User id: ${userId}\n` +
+              `Days: ${days}\n` +
+              `Stars: ${starsAmount}\n` +
+              `Charge: \`${chargeId}\`\n\n` +
+              `Cek \`payment_history\` dan \`users.is_premium\` secara manual — user sudah bayar ke Telegram.`
+          );
         }
         return;
       }
@@ -4419,6 +4516,127 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
         msg += `Ketik /confirm [ID] untuk konfirmasi\natau /reject [ID] untuk tolak`;
 
         await sendMessage(env, chatId, msg);
+        return;
+      }
+
+      case '/payment_lookup': {
+        if (user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Hanya admin.');
+          return;
+        }
+        // Usage: /payment_lookup <charge_id|payment_requests.id>
+        // Looks up by Telegram charge ID (preferred) or by numeric
+        // payment_requests.id. Returns the audit row + the user's
+        // current premium status so admin can decide whether to
+        // manually flip is_premium.
+        const arg = (text.split(' ')[1] || '').trim();
+        if (!arg) {
+          await sendMessage(
+            env,
+            chatId,
+            'Cara pakai: /payment_lookup <charge_id>\n' +
+              'Contoh: /payment_lookup tg_payment_charge_id_abc123\n\n' +
+              'Atau cari by ID payment_requests: /payment_lookup 42'
+          );
+          return;
+        }
+
+        try {
+          let historyRow: any = null;
+          if (/^\d+$/.test(arg)) {
+            // Numeric → look up payment_requests by id
+            const pr = await env.DB.prepare(
+              `SELECT pr.id, pr.user_id, pr.amount, pr.days, pr.method,
+                      pr.status, pr.notes, pr.confirmed_at, pr.created_at,
+                      u.name, u.username, u.telegram_id, u.is_premium, u.premium_until
+               FROM payment_requests pr
+               LEFT JOIN users u ON pr.user_id = u.id
+               WHERE pr.id = ?`
+            ).bind(parseInt(arg)).first();
+            if (pr) {
+              const until = pr.premium_until ? new Date(pr.premium_until as string) : null;
+              const untilStr = until ? until.toLocaleDateString('id-ID') : '—';
+              await sendMessage(
+                env,
+                chatId,
+                `🔍 *Payment #${pr.id}*\n\n` +
+                  `User: @${pr.username || pr.name || '—'} (tg ${pr.telegram_id || '—'})\n` +
+                  `User id: ${pr.user_id}\n` +
+                  `Method: ${pr.method}\n` +
+                  `Days: ${pr.days}\n` +
+                  `Amount: ${pr.amount} ${pr.method === 'stars' ? 'XTR' : 'IDR'}\n` +
+                  `Status: ${pr.status}\n` +
+                  `Created: ${pr.created_at}\n` +
+                  `Confirmed: ${pr.confirmed_at || '—'}\n` +
+                  `Notes: ${pr.notes || '—'}\n\n` +
+                  `User premium: ${pr.is_premium ? 'YA' : 'tidak'} (until ${untilStr})`
+              );
+              return;
+            }
+          } else {
+            // String → look up payment_history by payment_id (charge id)
+            historyRow = await env.DB.prepare(
+              `SELECT ph.*, u.name, u.username, u.telegram_id, u.is_premium, u.premium_until
+               FROM payment_history ph
+               LEFT JOIN users u ON ph.user_id = u.id
+               WHERE ph.payment_id = ?
+               ORDER BY ph.created_at DESC
+               LIMIT 1`
+            ).bind(arg).first();
+          }
+
+          if (historyRow) {
+            const until = historyRow.premium_until ? new Date(historyRow.premium_until as string) : null;
+            const untilStr = until ? until.toLocaleDateString('id-ID') : '—';
+            await sendMessage(
+              env,
+              chatId,
+              `🔍 *Charge ditemukan di payment_history*\n\n` +
+                `User: @${historyRow.username || historyRow.name || '—'} (tg ${historyRow.telegram_id || '—'})\n` +
+                `User id: ${historyRow.user_id}\n` +
+                `Method: ${historyRow.method}\n` +
+                `Days granted: ${historyRow.days_granted}\n` +
+                `Stars: ${historyRow.stars_amount || '—'}\n` +
+                `Status: ${historyRow.status}\n` +
+                `Charge: \`${historyRow.payment_id}\`\n` +
+                `Created: ${historyRow.created_at}\n` +
+                `Notes: ${historyRow.notes || '—'}\n\n` +
+                `User premium: ${historyRow.is_premium ? 'YA' : 'tidak'} (until ${untilStr})`
+            );
+            return;
+          }
+
+          // Also try a LIKE search on payment_requests.notes (legacy
+          // rows where we only stored the charge id in notes before
+          // the payment_history table existed).
+          const likeMatch = await env.DB.prepare(
+            `SELECT id, user_id, amount, days, method, status, notes, created_at
+             FROM payment_requests
+             WHERE notes LIKE ?
+             ORDER BY id DESC LIMIT 1`
+          ).bind(`%${arg}%`).first();
+          if (likeMatch) {
+            await sendMessage(
+              env,
+              chatId,
+              `🔍 *Ditemukan di payment_requests.notes (legacy)*\n\n` +
+                `ID: ${likeMatch.id}\n` +
+                `User id: ${likeMatch.user_id}\n` +
+                `Method: ${likeMatch.method}\n` +
+                `Days: ${likeMatch.days}\n` +
+                `Status: ${likeMatch.status}\n` +
+                `Notes: ${likeMatch.notes}\n` +
+                `Created: ${likeMatch.created_at}\n\n` +
+                `Cek user ini: /payment_lookup ${likeMatch.user_id}`
+            );
+            return;
+          }
+
+          await sendMessage(env, chatId, `❌ Tidak nemu charge id: ${arg}`);
+        } catch (e: any) {
+          console.error('[payment_lookup] error:', e);
+          await sendMessage(env, chatId, `⚠️ Error lookup: ${e?.message || e}`);
+        }
         return;
       }
 
