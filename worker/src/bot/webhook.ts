@@ -1302,36 +1302,44 @@ export async function handleWebhook(update: any, env: Env) {
             'UPDATE payment_requests SET payment_proof = ? WHERE id = ? AND status = ?'
           ).bind(`photo:${fileId}`, pending.id, 'pending').run();
 
-          // Notify admin
-          const admins = await env.DB.prepare("SELECT telegram_id FROM users WHERE role = 'admin'").all() as any;
-          for (const admin of admins.results || []) {
-            const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
-            if (tgId) {
-              await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  chat_id: tgId,
-                  text: `💰 *Bukti Transfer Baru!*\n\n` +
-                    `User: @${user.username || user.name}\n` +
-                    `Amount: Rp ${pending.amount.toLocaleString('id-ID')}\n` +
-                    `Days: ${pending.days}\n\n` +
-                    `Request #${pending.id}\n` +
-                    `Ketik /confirm ${pending.id} untuk konfirmasi`,
-                  parse_mode: 'Markdown',
-                }),
-              });
-              // Send the photo to admin
-              await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  chat_id: tgId,
-                  photo: fileId,
-                  caption: `Bukti transfer untuk Payment #${pending.id}`,
-                }),
-              });
+          // Notify admin (text DM via helper — resilient)
+          await notifyAdmins(
+            env,
+            `💰 *Bukti Transfer Baru!*\n\n` +
+              `User: @${user.username || user.name} (id ${user.id})\n` +
+              `Amount: Rp ${pending.amount.toLocaleString('id-ID')}\n` +
+              `Days: ${pending.days}\n\n` +
+              `Request #${pending.id}\n` +
+              `Ketik /confirm ${pending.id} untuk konfirmasi`
+          );
+
+          // Send the photo to each admin (best-effort)
+          try {
+            const admins = await env.DB.prepare(
+              "SELECT telegram_id FROM users WHERE role = 'admin'"
+            ).all() as any;
+            for (const admin of admins.results || []) {
+              const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
+              if (!tgId) continue;
+              try {
+                await fetch(
+                  `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
+                  {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      chat_id: tgId,
+                      photo: fileId,
+                      caption: `Bukti transfer untuk Payment #${pending.id}`,
+                    }),
+                  }
+                );
+              } catch (e: any) {
+                console.error(`[photo-proof] sendPhoto to admin ${tgId} failed:`, e?.message || e);
+              }
             }
+          } catch (e: any) {
+            console.error('[photo-proof] admin photo forward error (non-fatal):', e?.message || e);
           }
 
           await sendMessage(env, chatId,
@@ -1344,14 +1352,54 @@ export async function handleWebhook(update: any, env: Env) {
           return;
         }
 
-        // No pending payment — show default message
+        // No pending payment request — but the user just sent a photo.
+        // They may have transferred GoPay without running /requestpayment
+        // first, or they're sending proof before creating the request.
+        // Forward the photo to admin so the money isn't silently lost.
+        const photo = update.message.photo[update.message.photo.length - 1];
+        const fileId = photo.file_id;
+        await notifyAdmins(
+          env,
+          `📷 *Photo tanpa Pending Request*\n\n` +
+            `User: @${user.username || user.name} (id ${user.id})\n` +
+            `Tidak ada payment_requests pending untuk user ini.\n\n` +
+            `User mungkin transfer GoPay tanpa /requestpayment, atau kirim photo sebelum request dibuat. Cek GoPay + balas user secara manual.`
+        );
+        // Best-effort forward the photo itself to admin
+        try {
+          const admins = await env.DB.prepare(
+            "SELECT telegram_id FROM users WHERE role = 'admin'"
+          ).all() as any;
+          for (const admin of admins.results || []) {
+            const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
+            if (!tgId) continue;
+            try {
+              await fetch(
+                `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: tgId,
+                    photo: fileId,
+                    caption: `📷 Photo dari @${user.username || user.name} (id ${user.id}) — no pending request`,
+                  }),
+                }
+              );
+            } catch (e: any) {
+              console.error(`[photo-no-pending] sendPhoto to admin ${tgId} failed:`, e?.message || e);
+            }
+          }
+        } catch (e: any) {
+          console.error('[photo-no-pending] admin photo forward error (non-fatal):', e?.message || e);
+        }
+
         await sendMessage(env, chatId,
-          `📷 Fitur analisis gambar belum tersedia.\n\n` +
-          `Saat ini aku bisa bantu dengan:\n` +
-          `• Text chat — ketik pertanyaanmu\n` +
-          `• Voice message — kirim untuk latihan speaking\n` +
-          `• /diagnostic — tes penempatan\n\n` +
-          `Apa yang ingin kamu pelajari?`
+          `📷 *Photo diterima — tapi tidak ada pending payment*\n\n` +
+          `Kalau kamu sudah transfer GoPay, ketik:\n` +
+          `/requestpayment <days> <amount>\n\n` +
+          `Contoh: /requestpayment 30 99000\n\n` +
+          `Lalu kirim ulang photo bukti transfer-nya ya! 🙏`
         );
         return;
       }
@@ -4815,6 +4863,19 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           `/paid Sudah transfer GoPay 085643597072 a.n. Leonardus Bayu Ari P\n\n` +
           `atau hubungi @oseeadmin untuk konfirmasi.`
         );
+
+        // Notify admin — so they know a transfer is incoming even
+        // before the user types /paid. Closes the "user forgot to
+        // /paid, money arrived in GoPay, admin never knew" gap.
+        await notifyAdmins(
+          env,
+          `📋 *Payment Request Baru*\n\n` +
+            `User: @${user.username || user.name} (id ${user.id})\n` +
+            `Amount: Rp ${amount.toLocaleString('id-ID')}\n` +
+            `Days: ${days}\n` +
+            `Request #${request.id}\n\n` +
+            `Belum perlu /confirm — tunggu user transfer + /paid.`
+        );
         return;
       }
 
@@ -4846,19 +4907,54 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           'UPDATE payment_requests SET payment_proof = ? WHERE id = ? AND status = ?'
         ).bind(proof, pending.id, 'pending').run();
 
-        // Notify admin
-        const admins = await env.DB.prepare("SELECT telegram_id FROM users WHERE role = 'admin'").all() as any;
-        for (const admin of admins.results || []) {
-          const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
-          if (tgId) {
-            await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: tgId,
-                text: `💰 *New Payment Submitted!*\n\nUser: @${user.username || user.name}\nAmount: Rp ${pending.amount.toLocaleString('id-ID')}\nDays: ${pending.days}\n\nBukti: ${proof}\n\nRequest #${pending.id}`,
-              }),
-            });
+        // Notify admin — resilient (try/catch + result.ok check inside
+        // notifyAdmins). If the user previously sent a photo as proof,
+        // also forward that photo so admin can see the transfer receipt.
+        await notifyAdmins(
+          env,
+          `💰 *New Payment Submitted!*\n\n` +
+            `User: @${user.username || user.name} (id ${user.id})\n` +
+            `Amount: Rp ${pending.amount.toLocaleString('id-ID')}\n` +
+            `Days: ${pending.days}\n\n` +
+            `Bukti: ${proof}\n\n` +
+            `Request #${pending.id}\n` +
+            `Ketik /confirm ${pending.id} untuk konfirmasi`
+        );
+
+        // Forward the photo proof to admin if one was already attached
+        // to this pending row (user sent photo before typing /paid).
+        const priorProof = await env.DB.prepare(
+          'SELECT payment_proof FROM payment_requests WHERE id = ?'
+        ).bind(pending.id).first() as any;
+        const priorProofStr = priorProof?.payment_proof || '';
+        if (priorProofStr.startsWith('photo:')) {
+          const fileId = priorProofStr.substring('photo:'.length);
+          try {
+            const admins = await env.DB.prepare(
+              "SELECT telegram_id FROM users WHERE role = 'admin'"
+            ).all() as any;
+            for (const admin of admins.results || []) {
+              const tgId = parseInt(String(admin.telegram_id).replace('.0', ''));
+              if (!tgId) continue;
+              try {
+                await fetch(
+                  `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`,
+                  {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      chat_id: tgId,
+                      photo: fileId,
+                      caption: `📷 Bukti transfer #${pending.id} — @${user.username || user.name}`,
+                    }),
+                  }
+                );
+              } catch (e: any) {
+                console.error(`[/paid] sendPhoto to admin ${tgId} failed:`, e?.message || e);
+              }
+            }
+          } catch (e: any) {
+            console.error('[/paid] photo forward error (non-fatal):', e?.message || e);
           }
         }
 
