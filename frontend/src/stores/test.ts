@@ -32,6 +32,11 @@ interface TestState {
   isPrefetchingQuestions: boolean;
   pendingAnswers: PendingAnswer[]; // Queued answers awaiting sync
   networkAvailable: boolean;
+  // Whether the student has an IRT theta estimate for this section.
+  // Set from questions-batch response. When false (new user), the
+  // TestRunner shows a "warm-up" banner on the first 3 questions so the
+  // student knows the easy questions are intentional, not a bug.
+  hasTheta: boolean;
 
   startTest: (attemptId: number, testType: string, sections: SectionInfo[], currentSection: string, questionType?: string | null, drill?: { concept: string; count: number } | null) => void;
   setCurrentSection: (section: string) => void;
@@ -71,6 +76,7 @@ export const useTestStore = create<TestState>((set, get) => ({
   isPrefetchingQuestions: false,
   pendingAnswers: [],
   networkAvailable: typeof navigator !== 'undefined' ? navigator.onLine : true,
+  hasTheta: false,
 
   startTest: (attemptId, testType, sections, currentSection, questionType, drill) =>
     set({
@@ -88,6 +94,7 @@ export const useTestStore = create<TestState>((set, get) => ({
       prefetchedQuestions: {},
       pendingAnswers: [],
       networkAvailable: typeof navigator !== 'undefined' ? navigator.onLine : true,
+      hasTheta: false,
     }),
 
   setCurrentSection: (section) => set({ currentSection: section, currentQuestionIndex: 0 }),
@@ -151,8 +158,9 @@ export const useTestStore = create<TestState>((set, get) => ({
       set({
         prefetchedQuestions: data.questions_by_section || {},
         isPrefetchingQuestions: false,
+        hasTheta: data.has_theta === true,
       });
-      console.log('[TestStore] Prefetched questions:', Object.keys(data.questions_by_section || {}).map(s => `${s}: ${(data.questions_by_section[s] || []).length}`));
+      console.log('[TestStore] Prefetched questions:', Object.keys(data.questions_by_section || {}).map(s => `${s}: ${(data.questions_by_section[s] || []).length}`), 'has_theta=', data.has_theta);
       return true;
     } catch (err) {
       console.error('[TestStore] Prefetch error:', err);

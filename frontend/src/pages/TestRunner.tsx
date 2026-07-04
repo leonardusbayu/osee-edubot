@@ -182,7 +182,7 @@ export default function TestRunner() {
     setCurrentSection, setQuestionIndex, saveAnswer, answers,
     prefetchedQuestions, isPrefetchingQuestions, prefetchQuestions,
     networkAvailable, setNetworkAvailable,
-    pendingAnswers,
+    pendingAnswers, hasTheta,
   } = useTestStore();
 
   // Student-facing pending-sync state. Previously offline-sync dropped
@@ -1717,6 +1717,18 @@ export default function TestRunner() {
         </div>
       </div>
 
+      {/* Warm-up banner — first 3 questions for new users (no theta yet).
+          Tells the student the easy questions are intentional, not a bug.
+          Removes the "why is this so easy, is the bot broken?" confusion
+          and primes them for the difficulty ramp. */}
+      {!hasTheta && currentQuestionIndex < 3 && currentQuestion && (
+        <div className="bg-blue-50 border-b border-blue-200 px-4 py-2 text-center">
+          <p className="text-xs text-blue-700">
+            🔥 <span className="font-semibold">Pertanyaan pemanasan</span> — santai dulu, ini buat ngukur level kamu. Soal beratnya nanti di pertanyaan selanjutnya.
+          </p>
+        </div>
+      )}
+
       {/* Content */}
       <div className={`flex-1 p-4 overflow-y-auto ${transitioning ? 'opacity-0' : 'opacity-100 animate-fadeIn'}`} style={{transition: 'opacity 0.15s ease'}}>
         {/* Listening passage — audio only, listen first */}
@@ -1801,6 +1813,21 @@ export default function TestRunner() {
 
             {currentQuestion.passage && (
               <div className="bg-tg-secondary rounded-lg p-4 mb-4 text-sm leading-relaxed whitespace-pre-line">
+                {/* Passage meta — word count + est. reading time. Sets
+                    expectations so the student knows what they're about
+                    to read. Removes the "wait, how long is this?" panic
+                    that drives q0 abandonment on long passages. */}
+                {(() => {
+                  const wordCount = (currentQuestion.passage || '').trim().split(/\s+/).filter(Boolean).length;
+                  const readingMinutes = Math.max(1, Math.round(wordCount / 200));
+                  if (wordCount < 50) return null;  // short instruction, skip
+                  return (
+                    <div className="flex items-center gap-3 text-xs text-tg-hint mb-2 pb-2 border-b border-tg-button/20">
+                      <span>📖 {wordCount.toLocaleString('id-ID')} kata</span>
+                      <span>⏱️ ~{readingMinutes} menit baca</span>
+                    </div>
+                  );
+                })()}
                 {currentQuestion.passage}
               </div>
             )}

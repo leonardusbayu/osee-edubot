@@ -1367,6 +1367,23 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
 
   const allQuestions: Record<string, any[]> = {};
 
+  // Fetch the student's IRT theta once for difficulty-ramp sorting. New
+  // users (no theta) get easiest-first; users with theta get challenge-
+  // zone-first. This is the single biggest abandonment fix — previously
+  // the first question was random difficulty, often difficulty 4 (since
+  // 86% of TOEFL iBT reading is difficulty 4), and 88% of students
+  // abandoned at q0. Now the first question is always approachable.
+  let userTheta: number | null = null;
+  try {
+    const ability = await c.env.DB.prepare(
+      'SELECT theta FROM student_ability WHERE user_id = ? AND section = ?'
+    ).bind(user.id, sections[0]?.id).first<{ theta: number }>();
+    if (ability && Number.isFinite(Number(ability.theta))) {
+      userTheta = Number(ability.theta);
+    }
+  } catch { /* student_ability missing — treat as new user */ }
+  const hasTheta = userTheta !== null;
+
   // Load questions for each section — exposure-aware so the whole bank gets used.
   for (const section of sections) {
     const rows = await selectUnderExposedQuestions<any>(c.env, {
@@ -1377,7 +1394,23 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
       columns: 'id, question_type, title, content, media_url, difficulty',
     });
 
-    allQuestions[section.id] = rows.map((r: any) => {
+    // ─── Difficulty ramp: sort so the easiest approachable question
+    // comes first. Two modes:
+    //   1. New user (no theta): sort by difficulty ASC. Q0 = easiest
+    //      available. Q1 = next easiest. Etc. Gives a warm-up ramp.
+    //   2. User with theta: sort by |difficulty - theta| ASC so the
+    //      challenge-zone question comes first, then stretch, then
+    //      easier review. The student starts at their level.
+    const sortedRows = [...rows].sort((a: any, b: any) => {
+      const da = Number(a.difficulty) || 3;
+      const db_ = Number(b.difficulty) || 3;
+      if (hasTheta && userTheta !== null) {
+        return Math.abs(da - userTheta) - Math.abs(db_ - userTheta);
+      }
+      return da - db_;
+    });
+
+    allQuestions[section.id] = sortedRows.map((r: any) => {
       let content: any = {};
       try { content = JSON.parse(r.content || '{}'); } catch {}
       const mediaUrl = r.media_url;
@@ -1424,6 +1457,10 @@ testRoutes.get('/attempt/:id/questions-batch', async (c) => {
       question_count: (allQuestions[s.id] || []).length,
     })),
     questions_by_section: allQuestions,
+    // Frontend uses this to decide whether to show the "warm-up" banner
+    // on the first 3 questions. New users (has_theta=false) get the banner
+    // to set expectations that the first questions are intentionally easy.
+    has_theta: hasTheta,
   });
 });
 
