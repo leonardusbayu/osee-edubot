@@ -7,6 +7,7 @@ export interface Env {
   TELEGRAM_BOT_SECRET: string;
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY: string;
+  ELEVENLABS_API_KEY?: string;
   FAL_API_KEY?: string;
   TEACHER_CODE?: string;
   JWT_SECRET: string;

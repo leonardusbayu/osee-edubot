@@ -36,6 +36,14 @@ crons = ["3 1 * * *", "10 1 * * *", "0 11 * * *", "7 1 * * 1", "30 * * * *"]
 binding = "AUDIO_BUCKET"
 bucket_name = "edubot-audio"
 
+# MEDIA alias — the /api/media route reads from c.env.MEDIA but the
+# binding was missing here, so all existing TOEFL iBT listening audio
+# URLs returned 501 "R2 not configured". Same bucket as AUDIO_BUCKET
+# (TTS cache + listening audio share the edubot-audio bucket).
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "edubot-audio"
+
 [[r2_buckets]]
 binding = "VISUAL_BUCKET"
 bucket_name = "edubot-visuals"
@@ -73,6 +81,10 @@ database_id = "71b1ecac-52d5-4688-aad6-77d7265450d3"
 # If QA experiments cause pollution, switch to dedicated staging buckets later.
 [[env.staging.r2_buckets]]
 binding = "AUDIO_BUCKET"
+bucket_name = "edubot-audio"
+
+[[env.staging.r2_buckets]]
+binding = "MEDIA"
 bucket_name = "edubot-audio"
 
 [[env.staging.r2_buckets]]
