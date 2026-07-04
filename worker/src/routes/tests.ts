@@ -229,13 +229,18 @@ testRoutes.get('/attempt/resume', async (c) => {
     const user = await getAuthUser(c.req.raw, c.env);
     if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
-    // Find most recent in_progress attempt less than 4 hours old
+    // Find most recent in_progress attempt less than 24 hours old.
+    // Window matches the auto-complete stale-attempts cron at L163 —
+    // before this alignment, a student who paused for 5-23 hours would
+    // find their attempt still in_progress but the resume endpoint
+    // returned has_active=false, forcing them to start a new test and
+    // lose their progress.
     const attempt = await c.env.DB.prepare(
       `SELECT ta.*, COUNT(aa.id) as answer_count
        FROM test_attempts ta
        LEFT JOIN attempt_answers aa ON aa.attempt_id = ta.id
        WHERE ta.user_id = ? AND ta.status = 'in_progress'
-       AND ta.started_at > datetime('now', '-4 hours')
+       AND ta.started_at > datetime('now', '-24 hours')
        GROUP BY ta.id
        ORDER BY ta.started_at DESC LIMIT 1`
     ).bind(user.id).first();
