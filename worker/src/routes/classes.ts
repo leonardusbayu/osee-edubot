@@ -82,6 +82,132 @@ classRoutes.post('/join', async (c) => {
   return c.json({ status: 'joined', class_name: cls.name });
 });
 
+// ─── Teacher-direct enrollment management ───────────────────────────
+// These endpoints let a teacher add/remove students from a class
+// without the student needing to type /join CODE themselves. Mirrors
+// the /addstudent + /removestudent bot commands but for the web app.
+
+// POST /api/classes/:id/students — add a student to a class by
+// user_id or username. Body: { user_id?: number, username?: string }
+// Only the class's teacher (or any admin) can add students.
+classRoutes.post('/:id/students', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+  if (user.role !== 'teacher' && user.role !== 'admin') {
+    return c.json({ error: 'Teacher/Admin access required' }, 403);
+  }
+
+  const classId = parseInt(c.req.param('id'));
+  if (isNaN(classId)) return c.json({ error: 'Invalid class ID' }, 400);
+
+  const body = await c.req.json().catch(() => ({}));
+  const userIdArg = body.user_id ? Number(body.user_id) : null;
+  const usernameArg = (body.username || '').toString().replace('@', '').trim();
+
+  if (!userIdArg && !usernameArg) {
+    return c.json({ error: 'Provide user_id or username' }, 400);
+  }
+
+  // Verify the class exists + the caller is the teacher (or admin)
+  const cls = await c.env.DB.prepare(
+    'SELECT * FROM classes WHERE id = ? AND is_active = 1'
+  ).bind(classId).first() as any;
+  if (!cls) return c.json({ error: 'Class not found' }, 404);
+  if (cls.teacher_id !== user.id && user.role !== 'admin') {
+    return c.json({ error: 'Only the class teacher or admin can add students' }, 403);
+  }
+
+  // Look up the student
+  let student: any = null;
+  if (userIdArg) {
+    student = await c.env.DB.prepare(
+      'SELECT id, name, username FROM users WHERE id = ? LIMIT 1'
+    ).bind(userIdArg).first();
+  }
+  if (!student && usernameArg) {
+    student = await c.env.DB.prepare(
+      'SELECT id, name, username FROM users WHERE username = ? OR telegram_id = ? LIMIT 1'
+    ).bind(usernameArg, usernameArg).first();
+  }
+  if (!student) {
+    return c.json({
+      error: 'Student not found',
+      message: 'User belum pernah pakai bot. Minta mereka buka bot dan ketik /start dulu.',
+    }, 404);
+  }
+
+  // Check existing enrollment
+  const existing = await c.env.DB.prepare(
+    'SELECT id, status FROM class_enrollments WHERE user_id = ? AND class_id = ?'
+  ).bind(student.id, cls.id).first() as any;
+
+  if (existing && existing.status === 'active') {
+    return c.json({ error: 'Already enrolled', student }, 409);
+  }
+
+  if (existing) {
+    // Re-activate a previously-removed student
+    await c.env.DB.prepare(
+      "UPDATE class_enrollments SET status = 'active', enrolled_at = datetime('now') WHERE id = ?"
+    ).bind(existing.id).run();
+  } else {
+    await c.env.DB.prepare(
+      'INSERT INTO class_enrollments (user_id, class_id) VALUES (?, ?)'
+    ).bind(student.id, cls.id).run();
+  }
+
+  const count = await c.env.DB.prepare(
+    "SELECT COUNT(*) as c FROM class_enrollments WHERE class_id = ? AND status = 'active'"
+  ).bind(cls.id).first<{ c: number }>();
+
+  return c.json({
+    status: 'enrolled',
+    class_id: cls.id,
+    class_name: cls.name,
+    student,
+    active_count: Number(count?.c) || 0,
+  });
+});
+
+// DELETE /api/classes/:id/students/:userId — remove a student from
+// a class. Soft-delete: flips status from 'active' to 'removed' so
+// historical analytics still see past participation. The student
+// can be re-added later via POST or /addstudent (which re-activates).
+classRoutes.delete('/:id/students/:userId', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+  if (user.role !== 'teacher' && user.role !== 'admin') {
+    return c.json({ error: 'Teacher/Admin access required' }, 403);
+  }
+
+  const classId = parseInt(c.req.param('id'));
+  const userIdToRemove = parseInt(c.req.param('userId'));
+  if (isNaN(classId) || isNaN(userIdToRemove)) {
+    return c.json({ error: 'Invalid class ID or user ID' }, 400);
+  }
+
+  const cls = await c.env.DB.prepare(
+    'SELECT * FROM classes WHERE id = ? AND is_active = 1'
+  ).bind(classId).first() as any;
+  if (!cls) return c.json({ error: 'Class not found' }, 404);
+  if (cls.teacher_id !== user.id && user.role !== 'admin') {
+    return c.json({ error: 'Only the class teacher or admin can remove students' }, 403);
+  }
+
+  const enrollment = await c.env.DB.prepare(
+    "SELECT id, status FROM class_enrollments WHERE user_id = ? AND class_id = ? AND status = 'active'"
+  ).bind(userIdToRemove, cls.id).first() as any;
+  if (!enrollment) {
+    return c.json({ error: 'Student not enrolled (or already removed)' }, 404);
+  }
+
+  await c.env.DB.prepare(
+    "UPDATE class_enrollments SET status = 'removed' WHERE id = ?"
+  ).bind(enrollment.id).run();
+
+  return c.json({ status: 'removed', class_id: cls.id, user_id: userIdToRemove });
+});
+
 // Get ALL students system-wide (admin/teacher)
 classRoutes.get('/all/students', async (c) => {
   const isSecret = isAdminRequest(c);

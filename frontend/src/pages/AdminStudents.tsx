@@ -4,13 +4,16 @@ import { useAuthStore } from '../stores/auth';
 const WORKER_BASE = 'https://edubot-api.edubot-leonardus.workers.dev';
 const ADMIN_SECRET = (import.meta.env.VITE_ADMIN_SECRET as string) || '';
 
-async function adminFetch(url: string): Promise<Response> {
+async function adminFetch(url: string, init?: RequestInit): Promise<Response> {
   const fullUrl = url.startsWith('/api') ? `${WORKER_BASE}${url}` : url;
-  return fetch(fullUrl, {
-    headers: {
-      'x-admin-secret': ADMIN_SECRET,
-    },
-  });
+  // Send both x-admin-secret (for admin-api v1 endpoints that check it)
+  // and Authorization Bearer (for teacher endpoints like /api/classes
+  // that use getAuthUser). The backend ignores whichever doesn't apply.
+  const headers = new Headers(init?.headers);
+  headers.set('x-admin-secret', ADMIN_SECRET);
+  const token = useAuthStore.getState().accessToken;
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  return fetch(fullUrl, { ...init, headers });
 }
 
 interface ClassInfo {
@@ -91,6 +94,17 @@ export default function AdminStudents() {
   const [sortBy, setSortBy] = useState<'name' | 'last_active' | 'questions' | 'accuracy' | 'xp'>('last_active');
   const [targetTestFilter, setTargetTestFilter] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // Add-student modal state. When addModalClass is non-null, the modal
+  // is open for that class. The teacher enters a username or user_id,
+  // we POST to /api/classes/:id/students, and refresh the roster.
+  const [addModalClass, setAddModalClass] = useState<ClassInfo | null>(null);
+  const [addInput, setAddInput] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addMsg, setAddMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Remove-student confirmation. When non-null, shows a confirm dialog
+  // before DELETE-ing /api/classes/:id/students/:userId.
+  const [removeConfirm, setRemoveConfirm] = useState<{ classId: number; studentId: number; studentName: string } | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
     loadClasses();
@@ -165,6 +179,67 @@ export default function AdminStudents() {
       setError(`Export error: ${e?.message || String(e)}`);
     } finally {
       setExporting(false);
+    }
+  }
+
+  // Add a student to a class via POST /api/classes/:id/students.
+  // Accepts either a username (with or without @) or a numeric user_id.
+  // Refreshes the roster on success.
+  async function addStudentToClass() {
+    if (!addModalClass || !addInput.trim()) return;
+    setAdding(true);
+    setAddMsg(null);
+    try {
+      const trimmed = addInput.trim().replace('@', '');
+      const body: any = {};
+      if (/^\d+$/.test(trimmed)) body.user_id = parseInt(trimmed);
+      else body.username = trimmed;
+      const res = await adminFetch(`/api/classes/${addModalClass.id}/students`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setAddMsg({ ok: true, text: `✅ ${json.student?.name || trimmed} ditambahkan ke ${json.class_name}. Total: ${json.active_count} siswa.` });
+        setAddInput('');
+        // Refresh the roster
+        loadStudents(addModalClass.id);
+        // Refresh class list to update student_count
+        loadClasses();
+      } else {
+        setAddMsg({ ok: false, text: json.message || json.error || `Gagal (${res.status})` });
+      }
+    } catch (e: any) {
+      setAddMsg({ ok: false, text: `Network error: ${e?.message || String(e)}` });
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  // Remove a student from a class via DELETE /api/classes/:id/students/:userId.
+  // Soft-delete on the backend (status: 'active' → 'removed') so analytics
+  // still see past participation.
+  async function removeStudent() {
+    if (!removeConfirm) return;
+    setRemoving(true);
+    try {
+      const res = await adminFetch(`/api/classes/${removeConfirm.classId}/students/${removeConfirm.studentId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        setRemoveConfirm(null);
+        // Refresh the roster
+        if (typeof selectedClassId === 'number') loadStudents(selectedClassId);
+        loadClasses();
+      } else {
+        const json = await res.json().catch(() => ({}));
+        setError(json.error || `Gagal mengeluarkan siswa (${res.status})`);
+      }
+    } catch (e: any) {
+      setError(`Network error: ${e?.message || String(e)}`);
+    } finally {
+      setRemoving(false);
     }
   }
 
@@ -302,6 +377,25 @@ export default function AdminStudents() {
               >
                 {exporting ? 'Exporting...' : 'Export CSV'}
               </button>
+              {/* Add Student button — only for a specific class, not 'all'.
+                  Opens the add-student modal where the teacher enters a
+                  username or user_id to enroll without the student needing
+                  to type /join CODE themselves. */}
+              {typeof selectedClassId === 'number' && (
+                <button
+                  onClick={() => {
+                    const cls = classes.find(c => c.id === selectedClassId);
+                    if (cls) {
+                      setAddModalClass(cls);
+                      setAddInput('');
+                      setAddMsg(null);
+                    }
+                  }}
+                  className="px-2 py-1 bg-green-500/20 text-green-400 rounded-lg text-xs font-medium"
+                >
+                  + Tambah Siswa
+                </button>
+              )}
             </div>
           </div>
 
@@ -578,6 +672,23 @@ export default function AdminStudents() {
                             </>
                           )}
                         </div>
+                        {/* Remove from class button — only shows when
+                            viewing a specific class (not 'all'). Soft-
+                            delete on the backend: status active → removed.
+                            Student can be re-added later via /addstudent
+                            or the + Tambah Siswa button. */}
+                        {typeof selectedClassId === 'number' && (
+                          <button
+                            onClick={() => setRemoveConfirm({
+                              classId: selectedClassId,
+                              studentId: student.id,
+                              studentName: student.name,
+                            })}
+                            className="w-full mt-2 px-3 py-2 bg-red-500/10 text-red-400 rounded-lg text-xs font-medium border border-red-500/20"
+                          >
+                            🗑️ Keluarkan dari kelas
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -586,6 +697,82 @@ export default function AdminStudents() {
             </div>
           )}
         </>
+      )}
+
+      {/* Add Student modal — teacher enters a username or user_id to
+          enroll into the selected class. Calls POST /api/classes/:id/students. */}
+      {addModalClass && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-tg-bg rounded-2xl p-6 max-w-md w-full">
+            <h3 className="text-lg font-bold mb-1">Tambah Siswa</h3>
+            <p className="text-sm text-tg-hint mb-4">
+              Kelas: <span className="font-semibold">{addModalClass.name}</span> (kode: {addModalClass.invite_code})
+            </p>
+            <input
+              type="text"
+              value={addInput}
+              onChange={(e) => setAddInput(e.target.value)}
+              placeholder="@username atau user ID"
+              className="w-full px-3 py-2 bg-tg-secondary rounded-lg text-sm mb-3 border border-tg-hint/30 focus:outline-none focus:border-tg-button"
+              autoFocus
+              onKeyDown={(e) => { if (e.key === 'Enter' && !adding) addStudentToClass(); }}
+            />
+            <p className="text-xs text-tg-hint mb-4">
+              User harus sudah pernah pakai bot (start bot minimal 1x). Kalau belum, share kode kelas
+              <span className="font-mono font-semibold"> {addModalClass.invite_code}</span> ke mereka — mereka ketik
+              <span className="font-mono"> /join {addModalClass.invite_code}</span>.
+            </p>
+            {addMsg && (
+              <div className={`rounded-lg p-3 text-sm mb-3 ${addMsg.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                {addMsg.text}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={addStudentToClass}
+                disabled={adding || !addInput.trim()}
+                className="flex-1 px-4 py-2 bg-tg-button text-tg-button-text rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                {adding ? 'Menambahkan...' : 'Tambah'}
+              </button>
+              <button
+                onClick={() => { setAddModalClass(null); setAddInput(''); setAddMsg(null); }}
+                className="px-4 py-2 bg-tg-secondary text-tg-hint rounded-lg text-sm font-medium"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remove Student confirmation modal — soft-delete on confirm. */}
+      {removeConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-tg-bg rounded-2xl p-6 max-w-md w-full">
+            <h3 className="text-lg font-bold mb-2">Keluarkan Siswa?</h3>
+            <p className="text-sm text-tg-hint mb-4">
+              Yakin mau mengeluarkan <span className="font-semibold text-tg-text">{removeConfirm.studentName}</span> dari kelas ini?
+              Mereka bisa ditambahkan lagi kapan saja dengan tombol "+ Tambah Siswa" atau /addstudent.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={removeStudent}
+                disabled={removing}
+                className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                {removing ? 'Mengeluarkan...' : 'Ya, keluarkan'}
+              </button>
+              <button
+                onClick={() => setRemoveConfirm(null)}
+                disabled={removing}
+                className="px-4 py-2 bg-tg-secondary text-tg-hint rounded-lg text-sm font-medium"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -12,7 +12,6 @@ import {
   onTrySubmit,
 } from './onboarding';
 import { maybeAppendNudge, toggleTips } from '../services/companion-nudge';
-
 // ─── Admin notification helper ────────────────────────────────────────
 // Used by payment handlers (Stars + manual transfer) and any other path
 // where admin needs a realtime ping. Iterates users with role='admin'
@@ -45,6 +44,17 @@ async function notifyAdmins(env: Env, text: string): Promise<void> {
   } catch (e: any) {
     console.error('[notifyAdmins] query failed:', e?.message || e);
   }
+}
+
+// Count active enrollments for a class. Used by /addstudent to report
+// the new total to the teacher so they can verify the roster grew.
+async function countActiveEnrollments(env: Env, classId: number): Promise<number> {
+  try {
+    const row = await env.DB.prepare(
+      "SELECT COUNT(*) as c FROM class_enrollments WHERE class_id = ? AND status = 'active'"
+    ).bind(classId).first<{ c: number }>();
+    return Number(row?.c) || 0;
+  } catch { return 0; }
 }
 
 // Speaking practice prompts
@@ -3601,6 +3611,189 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
           await sendMessage(env, chatId, `Berhasil bergabung ke kelas "${cls.name}"!`);
         } catch (e: any) {
           await sendMessage(env, chatId, 'Gagal bergabung: ' + (e.message || 'unknown'));
+        }
+        return;
+      }
+
+      // /addstudent @username KODE_KELAS — teacher directly enrolls a
+      // student into a class without the student needing to type /join
+      // themselves. Useful when the teacher knows their students'
+      // Telegram usernames but the students haven't started the bot yet,
+      // or lost the invite code, or are too shy to type a command.
+      // Fails gracefully if the student hasn't started the bot (no user
+      // row exists yet).
+      case '/addstudent': {
+        if (user.role !== 'teacher' && user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Hanya guru yang bisa menambahkan siswa ke kelas.');
+          return;
+        }
+        const parts = text.split(' ').slice(1);
+        const usernameArg = (parts[0] || '').replace('@', '').trim();
+        const codeArg = (parts[1] || '').trim().toUpperCase();
+        if (!usernameArg || !codeArg) {
+          await sendMessage(env, chatId,
+            'Cara pakai: /addstudent @username KODE_KELAS\n\n' +
+            'Contoh: /addstudent @budi ABC123\n\n' +
+            'User harus sudah pernah pakai bot ini (start bot minimal 1x) supaya bisa di-enroll.'
+          );
+          return;
+        }
+        try {
+          // Find the class by invite_code
+          const cls = await env.DB.prepare(
+            'SELECT * FROM classes WHERE invite_code = ? AND is_active = 1'
+          ).bind(codeArg).first() as any;
+          if (!cls) {
+            await sendMessage(env, chatId, `❌ Kode kelas "${codeArg}" tidak ditemukan atau tidak aktif.`);
+            return;
+          }
+          // Only the class's teacher (or any admin) can add students
+          if (cls.teacher_id !== user.id && user.role !== 'admin') {
+            await sendMessage(env, chatId, '⛔ Kamu bukan guru dari kelas ini. Hanya guru pemilik kelas atau admin yang bisa menambah siswa.');
+            return;
+          }
+          // Find the student by username
+          const student = await env.DB.prepare(
+            'SELECT id, name, username, role FROM users WHERE username = ? OR telegram_id = ? LIMIT 1'
+          ).bind(usernameArg, usernameArg).first() as any;
+          if (!student) {
+            await sendMessage(env, chatId,
+              `❌ User "@${usernameArg}" belum terdaftar di bot. Minta mereka buka bot dan ketik /start dulu, lalu coba lagi.\n\n` +
+              `Atau share kode kelas "${codeArg}" langsung ke mereka — mereka ketik /join ${codeArg}.`
+            );
+            return;
+          }
+          // Check existing enrollment (any status — re-activating a removed student is allowed)
+          const existing = await env.DB.prepare(
+            'SELECT id, status FROM class_enrollments WHERE user_id = ? AND class_id = ?'
+          ).bind(student.id, cls.id).first() as any;
+          if (existing && existing.status === 'active') {
+            await sendMessage(env, chatId, `ℹ️ @${usernameArg} sudah terdaftar di kelas "${cls.name}".`);
+            return;
+          }
+          if (existing) {
+            // Re-activate a previously-removed student
+            await env.DB.prepare(
+              "UPDATE class_enrollments SET status = 'active', enrolled_at = datetime('now') WHERE id = ?"
+            ).bind(existing.id).run();
+          } else {
+            await env.DB.prepare(
+              'INSERT INTO class_enrollments (user_id, class_id) VALUES (?, ?)'
+            ).bind(student.id, cls.id).run();
+          }
+          await sendMessage(env, chatId,
+            `✅ Berhasil menambahkan @${usernameArg} (${student.name || 'tanpa nama'}) ke kelas "${cls.name}".\n\n` +
+            `Total siswa: ${await countActiveEnrollments(env, cls.id)}`
+          );
+        } catch (e: any) {
+          await sendMessage(env, chatId, 'Gagal menambahkan siswa: ' + (e?.message || 'unknown'));
+        }
+        return;
+      }
+
+      // /removestudent @username KODE_KELAS — teacher removes a student
+      // from a class. Flips class_enrollments.status from 'active' to
+      // 'removed' (soft delete — keeps the history so analytics can
+      // still see past participation). The student can re-join later
+      // if re-invited, and /addstudent will re-activate them.
+      case '/removestudent': {
+        if (user.role !== 'teacher' && user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Hanya guru yang bisa mengeluarkan siswa dari kelas.');
+          return;
+        }
+        const parts = text.split(' ').slice(1);
+        const usernameArg = (parts[0] || '').replace('@', '').trim();
+        const codeArg = (parts[1] || '').trim().toUpperCase();
+        if (!usernameArg || !codeArg) {
+          await sendMessage(env, chatId,
+            'Cara pakai: /removestudent @username KODE_KELAS\n\n' +
+            'Contoh: /removestudent @budi ABC123'
+          );
+          return;
+        }
+        try {
+          const cls = await env.DB.prepare(
+            'SELECT * FROM classes WHERE invite_code = ? AND is_active = 1'
+          ).bind(codeArg).first() as any;
+          if (!cls) {
+            await sendMessage(env, chatId, `❌ Kode kelas "${codeArg}" tidak ditemukan.`);
+            return;
+          }
+          if (cls.teacher_id !== user.id && user.role !== 'admin') {
+            await sendMessage(env, chatId, '⛔ Kamu bukan guru dari kelas ini.');
+            return;
+          }
+          const student = await env.DB.prepare(
+            'SELECT id, name, username FROM users WHERE username = ? OR telegram_id = ? LIMIT 1'
+          ).bind(usernameArg, usernameArg).first() as any;
+          if (!student) {
+            await sendMessage(env, chatId, `❌ User "@${usernameArg}" tidak ditemukan di bot.`);
+            return;
+          }
+          const enrollment = await env.DB.prepare(
+            "SELECT id, status FROM class_enrollments WHERE user_id = ? AND class_id = ? AND status = 'active'"
+          ).bind(student.id, cls.id).first() as any;
+          if (!enrollment) {
+            await sendMessage(env, chatId, `ℹ️ @${usernameArg} tidak terdaftar di kelas "${cls.name}" (atau sudah di-remove).`);
+            return;
+          }
+          await env.DB.prepare(
+            "UPDATE class_enrollments SET status = 'removed' WHERE id = ?"
+          ).bind(enrollment.id).run();
+          await sendMessage(env, chatId,
+            `✅ @${usernameArg} dikeluarkan dari kelas "${cls.name}".\n\n` +
+            `Siswa bisa ditambahkan lagi kapan saja dengan /addstudent.`
+          );
+        } catch (e: any) {
+          await sendMessage(env, chatId, 'Gagal mengeluarkan siswa: ' + (e?.message || 'unknown'));
+        }
+        return;
+      }
+
+      // /classstudents KODE_KELAS — list students in a class so the
+      // teacher can verify their roster without opening the web app.
+      case '/classstudents': {
+        if (user.role !== 'teacher' && user.role !== 'admin') {
+          await sendMessage(env, chatId, '⛔ Hanya guru yang bisa melihat daftar siswa kelas.');
+          return;
+        }
+        const codeArg = (text.split(' ')[1] || '').trim().toUpperCase();
+        if (!codeArg) {
+          await sendMessage(env, chatId, 'Cara pakai: /classstudents KODE_KELAS\n\nContoh: /classstudents ABC123');
+          return;
+        }
+        try {
+          const cls = await env.DB.prepare(
+            'SELECT * FROM classes WHERE invite_code = ? AND is_active = 1'
+          ).bind(codeArg).first() as any;
+          if (!cls) {
+            await sendMessage(env, chatId, `❌ Kode kelas "${codeArg}" tidak ditemukan.`);
+            return;
+          }
+          if (cls.teacher_id !== user.id && user.role !== 'admin') {
+            await sendMessage(env, chatId, '⛔ Kamu bukan guru dari kelas ini.');
+            return;
+          }
+          const students = await env.DB.prepare(
+            `SELECT u.name, u.username, u.target_test, ce.enrolled_at
+             FROM class_enrollments ce
+             JOIN users u ON u.id = ce.user_id
+             WHERE ce.class_id = ? AND ce.status = 'active'
+             ORDER BY ce.enrolled_at DESC`
+          ).bind(cls.id).all() as any;
+          const count = students.results?.length || 0;
+          if (count === 0) {
+            await sendMessage(env, chatId, `📋 Kelas "${cls.name}" belum punya siswa aktif.\n\nShare kode kelas: ${codeArg}\nAtau tambah manual: /addstudent @username ${codeArg}`);
+            return;
+          }
+          const lines = students.results.map((s: any, i: number) =>
+            `${i + 1}. ${s.name || 'tanpa nama'}${s.username ? ' @' + s.username : ''}${s.target_test ? ' [' + s.target_test + ']' : ''}`
+          ).join('\n');
+          await sendMessage(env, chatId,
+            `📋 Kelas "${cls.name}" — ${count} siswa aktif:\n\n${lines}\n\nKode kelas: ${codeArg}\nTambah: /addstudent @username ${codeArg}\nHapus: /removestudent @username ${codeArg}`
+          );
+        } catch (e: any) {
+          await sendMessage(env, chatId, 'Gagal memuat daftar siswa: ' + (e?.message || 'unknown'));
         }
         return;
       }
