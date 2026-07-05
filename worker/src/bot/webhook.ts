@@ -768,26 +768,33 @@ const proficiencyKeyboard = {
   ],
 };
 
-function mainMenuKeyboard(webappUrl: string, tgId?: string | number) {
+function mainMenuKeyboard(webappUrl: string, tgId?: string | number, dueReviews?: number) {
   // Ensure tg_id is clean (no .0 suffix) for URL params
   const cleanTgId = tgId ? String(tgId).replace('.0', '') : '';
   const tgParam = cleanTgId ? `?tg_id=${cleanTgId}` : '';
-  return {
-    keyboard: [
-      [{ text: '📝 Latihan Tes', web_app: { url: `${webappUrl}/test${tgParam}` } }],
-      [
-        { text: '📖 Belajar' },
-        { text: '🩺 Diagnostic' },
-      ],
-      [
-        { text: '📊 Progress', web_app: { url: `${webappUrl}/progress${tgParam}` } },
-        { text: '📅 Hari Ini' },
-      ],
-      [
-        { text: '💬 Tanya Admin', url: 'https://wa.me/628112467784' },
-        { text: '💳 Upgrade Premium' },
-      ],
+  const reviewButton = dueReviews && dueReviews > 0
+    ? [{ text: `🧠 Review (${dueReviews} due)`, callback_data: 'start_review' }]
+    : null;
+  const rows: any[][] = [
+    [{ text: '📝 Latihan Tes', web_app: { url: `${webappUrl}/test${tgParam}` } }],
+  ];
+  if (reviewButton) rows.push(reviewButton);
+  rows.push(
+    [
+      { text: '📖 Belajar' },
+      { text: '🩺 Diagnostic' },
     ],
+    [
+      { text: '📊 Progress', web_app: { url: `${webappUrl}/progress${tgParam}` } },
+      { text: '📅 Hari Ini' },
+    ],
+    [
+      { text: '💬 Tanya Admin', url: 'https://wa.me/628112467784' },
+      { text: '💳 Upgrade Premium' },
+    ],
+  );
+  return {
+    keyboard: rows,
     resize_keyboard: true,
     is_persistent: true,
   };
@@ -2031,6 +2038,64 @@ async function handleMessage(message: any, env: Env) {
           return;
         }
 
+        // Deep link from the daily review nudge (?start=review). The
+        // nudge used to say "Ketik /review" which required typing —
+        // friction killed engagement (35 users with due cards, only 13
+        // ever reviewed, last review was a week ago). Now the nudge
+        // has an inline button that deep-links here, which routes
+        // straight into the /review flow.
+        if (startParam === 'review') {
+          // Trigger the /review flow by re-using the same logic. We
+          // can't call the /review case directly (it's a switch), so
+          // we re-fetch the FSRS stats and render the same message.
+          try {
+            const { getDueReviews, getReviewStats, getNextUpcomingReview, getFallbackPractice } = await import('../services/fsrs-engine');
+            const stats = await getReviewStats(env, user.id);
+            if (stats.due === 0) {
+              const upcoming = await getNextUpcomingReview(env, user.id);
+              let nextLine = '';
+              if (upcoming) {
+                const mins = upcoming.minutes_until;
+                if (mins < 60) nextLine = `\n\n⏰ Review berikutnya dalam ~${mins} menit.`;
+                else if (mins < 1440) nextLine = `\n\n⏰ Review berikutnya dalam ~${Math.round(mins / 60)} jam.`;
+                else nextLine = `\n\n⏰ Review berikutnya ${Math.round(mins / 1440)} hari lagi.`;
+              }
+              await sendMessage(env, chatId, `Belum ada yang perlu di-review sekarang. Santai dulu aja! 😎${nextLine}`);
+            } else {
+              const items = await getDueReviews(env, user.id, 1);
+              if (items.length > 0) {
+                const item = items[0] as any;
+                await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
+                await env.DB.prepare(
+                  'INSERT OR REPLACE INTO review_sessions (user_id, current_review_id) VALUES (?, ?)'
+                ).bind(user.id, item.id).run();
+                const remaining = stats.due > 1 ? `\n\nMasih ada ${stats.due - 1} soal lagi setelah ini.` : '';
+                await sendMessage(env, chatId,
+                  `🧠 *Saatnya Review!*\n\n` +
+                  `Ada ${stats.due} soal yang perlu kamu review. Yuk mulai!${remaining}\n\n` +
+                  `Ketik jawaban kamu untuk soal di bawah ini:`
+                );
+                // Render the first review item (same as /review case below)
+                const card = item;
+                let cardText = '';
+                try {
+                  const c = JSON.parse(card.question_data || '{}');
+                  cardText = c.question_text || c.passage || c.prompt || c.question || '';
+                } catch {}
+                await sendMessage(env, chatId,
+                  `*Soal 1:*\n\n${cardText || '(soal tidak bisa ditampilkan)'}\n\n` +
+                  `Ketik jawaban kamu:`,
+                  { parse_mode: 'Markdown' }
+                );
+              }
+            }
+          } catch (e: any) {
+            console.error('[start=review] error:', e?.message || e);
+            await sendMessage(env, chatId, 'Gagal memulai review. Coba ketik /review manual.');
+          }
+          return;
+        }
+
         // P1 #9: Auto-create first lesson plan on /start for returning users.
         // Previously a student had to type /lesson to discover the feature.
         // Now we check on /start and create one in the background. The next
@@ -2068,6 +2133,16 @@ async function handleMessage(message: any, env: Env) {
             streakLine = `\n_✨ Baru mulai streak — jaga terus biar ada api-nya!_ 🔥`;
           }
 
+          // Due-review count — surfaces the "🧠 Review (N due)" button in
+          // the main menu when the student has FSRS cards waiting. Zero
+          // means no button (cleaner menu, less notification fatigue).
+          let dueReviews = 0;
+          try {
+            const { getReviewStats } = await import('../services/fsrs-engine');
+            const stats = await getReviewStats(env, user.id);
+            dueReviews = stats.due || 0;
+          } catch { /* best-effort */ }
+
           // Warm greeting — uses rich + warm formatting (bold, italic, emoji rhythm)
           // Greeting varies by streak to keep returning users feeling recognized.
           const greetings = ['Hai', 'Halo', 'Welcome back', 'Senang lihat kamu lagi'];
@@ -2075,15 +2150,22 @@ async function handleMessage(message: any, env: Env) {
           const hour = new Date().getUTCHours() + 7; // WIB
           const timeOfDay = hour < 11 ? 'pagi' : hour < 15 ? 'siang' : hour < 18 ? 'sore' : 'malam';
 
+          // If due reviews exist, mention them in the greeting so the
+          // student notices the button. Without this prompt, the new
+          // button is easy to miss in the persistent keyboard.
+          const reviewLine = dueReviews > 0
+            ? `\n\n🧠 *${dueReviews} soal menunggu di-review* — tap tombol di bawah yuk!`
+            : '';
+
           await sendMessage(env, chatId,
             `${greeting} <b>${user.name}</b>! 👋\n` +
             `\n` +
-            `_Selamat ${timeOfDay}_ — siap lanjut ${tEmoji} *${tt.replace(/_/g, ' ')}*?${streakLine}\n` +
+            `_Selamat ${timeOfDay}_ — siap lanjut ${tEmoji} *${tt.replace(/_/g, ' ')}*?${streakLine}${reviewLine}\n` +
             `\n` +
             `=== Mau ngapain hari ini? ===\n` +
             `\n` +
             `Pilih salah satu di bawah, atau langsung ketik aja. Aku bantu sebisa mungkin! ✨`,
-            mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id),
+            mainMenuKeyboard(env.WEBAPP_URL, user.telegram_id, dueReviews),
           );
         } else {
           // Conversational 6-screen onboarding (welcome → target → deadline
@@ -8833,6 +8915,51 @@ async function handleCallbackQuery(query: any, env: Env) {
       }
 
       await editMessage(env, chatId, messageId, msg);
+      return;
+    }
+
+    // Start FSRS review session — triggered by the "🧠 Review (N due)"
+    // button in the main menu (added when the user has due cards) or by
+    // the inline button in the daily review nudge. Reuses the same flow
+    // as /review + ?start=review.
+    if (data === 'start_review') {
+      try {
+        const { getDueReviews, getReviewStats } = await import('../services/fsrs-engine');
+        const stats = await getReviewStats(env, user.id);
+        if (stats.due === 0) {
+          await sendMessage(env, chatId, 'Belum ada yang perlu di-review sekarang. Santai dulu aja! 😎');
+          return;
+        }
+        const items = await getDueReviews(env, user.id, 1);
+        if (items.length === 0) {
+          await sendMessage(env, chatId, 'Belum ada yang perlu di-review sekarang.');
+          return;
+        }
+        const item = items[0] as any;
+        await env.DB.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
+        await env.DB.prepare(
+          'INSERT OR REPLACE INTO review_sessions (user_id, current_review_id) VALUES (?, ?)'
+        ).bind(user.id, item.id).run();
+        const remaining = stats.due > 1 ? `\n\nMasih ada ${stats.due - 1} soal lagi setelah ini.` : '';
+        await sendMessage(env, chatId,
+          `🧠 *Saatnya Review!*\n\n` +
+          `Ada ${stats.due} soal yang perlu kamu review. Yuk mulai!${remaining}\n\n` +
+          `Ketik jawaban kamu untuk soal di bawah ini:`
+        );
+        let cardText = '';
+        try {
+          const c = JSON.parse(item.question_data || '{}');
+          cardText = c.question_text || c.passage || c.prompt || c.question || '';
+        } catch {}
+        await sendMessage(env, chatId,
+          `*Soal 1:*\n\n${cardText || '(soal tidak bisa ditampilkan)'}\n\n` +
+          `Ketik jawaban kamu:`,
+          { parse_mode: 'Markdown' }
+        );
+      } catch (e: any) {
+        console.error('[start_review callback] error:', e?.message || e);
+        await sendMessage(env, chatId, 'Gagal memulai review. Coba ketik /review manual.');
+      }
       return;
     }
 

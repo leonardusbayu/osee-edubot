@@ -819,9 +819,20 @@ async function handleCron(env: Env) {
       await safeSendMessage(env, tgId, { text: message });
     }
 
-    // Also remind users with due spaced repetition items
+    // Also remind users with due spaced repetition items. The nudge
+    // now includes an inline button that deep-links to ?start=review
+    // so the student doesn't have to type /review (friction was
+    // killing engagement — only 13/35 users with due cards ever
+    // reviewed, last review was a week ago before this fix).
     const srUsers = await env.DB.prepare(
-      `SELECT DISTINCT u.telegram_id, u.name, COUNT(sr.id) as due_count
+      `SELECT u.id, u.telegram_id, u.name, u.current_streak,
+              COUNT(sr.id) as due_count,
+              SUM(CASE WHEN sr.section = 'reading' THEN 1 ELSE 0 END) as reading_due,
+              SUM(CASE WHEN sr.section = 'listening' THEN 1 ELSE 0 END) as listening_due,
+              SUM(CASE WHEN sr.section = 'structure' THEN 1 ELSE 0 END) as structure_due,
+              SUM(CASE WHEN sr.section = 'speaking' THEN 1 ELSE 0 END) as speaking_due,
+              SUM(CASE WHEN sr.section = 'writing' THEN 1 ELSE 0 END) as writing_due,
+              SUM(CASE WHEN sr.section = 'vocabulary' THEN 1 ELSE 0 END) as vocabulary_due
        FROM users u JOIN spaced_repetition sr ON u.id = sr.user_id
        WHERE sr.next_review_at <= datetime('now')
        GROUP BY u.id`
@@ -829,6 +840,27 @@ async function handleCron(env: Env) {
 
     for (const user of srUsers.results as any[]) {
       const tgId = parseInt(String(user.telegram_id).replace('.0', ''));
+      if (!tgId) continue;
+      // Build a "what you're forgetting" breakdown by section so the
+      // nudge feels personal + shows the student what they'd lose.
+      const sectionBreakdown: string[] = [];
+      if (user.reading_due > 0) sectionBreakdown.push(`📖 Reading: ${user.reading_due}`);
+      if (user.listening_due > 0) sectionBreakdown.push(`🎧 Listening: ${user.listening_due}`);
+      if (user.structure_due > 0) sectionBreakdown.push(`📝 Structure: ${user.structure_due}`);
+      if (user.speaking_due > 0) sectionBreakdown.push(`🗣️ Speaking: ${user.speaking_due}`);
+      if (user.writing_due > 0) sectionBreakdown.push(`✍️ Writing: ${user.writing_due}`);
+      if (user.vocabulary_due > 0) sectionBreakdown.push(`📚 Vocab: ${user.vocabulary_due}`);
+      const breakdownLine = sectionBreakdown.length > 0
+        ? `\n\nYang perlu di-review:\n${sectionBreakdown.slice(0, 4).join('\n')}`
+        : '';
+
+      // Streak-protection framing — if the student has a 3+ day streak,
+      // warn them that skipping today breaks it. Stronger motivator
+      // than "review nih".
+      const streakLine = user.current_streak >= 3
+        ? `\n\n🔥 Streak kamu ${user.current_streak} hari — jangan putus hari ini!`
+        : '';
+
       const nudges = [
         `Ingat: tanpa review, otak kamu lupa 20% materi kemarin!`,
         `Review itu cuma 5 menit, tapi efeknya tahan berminggu-minggu!`,
@@ -838,7 +870,12 @@ async function handleCron(env: Env) {
       const nudge = nudges[Math.floor(Math.random() * nudges.length)];
 
       await safeSendMessage(env, tgId, {
-        text: `Ada ${user.due_count} soal yang perlu kamu review nih! Ketik /review untuk mulai. 🧠\n\n${nudge}`,
+        text: `🧠 Ada ${user.due_count} soal yang perlu kamu review!${breakdownLine}${streakLine}\n\n${nudge}`,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🧠 Review sekarang (1 tap)', url: 'https://t.me/OSEE_TOEFL_IELTS_TOEIC_study_bot?start=review' }],
+          ],
+        },
       });
     }
     // Emotional intelligence: exam countdown + monthly milestones
