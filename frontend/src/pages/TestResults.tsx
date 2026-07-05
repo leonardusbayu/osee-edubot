@@ -203,7 +203,7 @@ export default function TestResults() {
         <p className="text-5xl font-bold text-tg-button mb-2">
           {result.band_score || result.total_score}
         </p>
-        <p className="text-tg-hint text-xs">dari 6.0</p>
+        <p className="text-tg-hint text-xs">dari {(result as any).max_band ?? 6}</p>
       </div>
 
       {/* Section Scores */}
@@ -218,18 +218,22 @@ export default function TestResults() {
             // sections weren't attempted.
             const hasScore = typeof score === 'number' && !Number.isNaN(score);
             const numericScore = hasScore ? (score as number) : 0;
+            // Per-section max from the backend (sent alongside the score).
+            // Falls back to 6 for older responses that didn't include
+            // section_max_scores — keeps backwards compat.
+            const sectionMax = (result as any).section_max_scores?.[section] ?? 6;
             return (
               <div key={section} className="bg-tg-secondary rounded-xl p-4">
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-medium">{sectionNames[section] || section}</span>
                   <span className={`font-bold text-lg ${hasScore ? '' : 'text-tg-hint'}`}>
-                    {hasScore ? score : '—'}
+                    {hasScore ? `${score} / ${sectionMax}` : '—'}
                   </span>
                 </div>
                 <div className="w-full bg-tg-bg rounded-full h-2">
                   <div
                     className={`h-2 rounded-full ${sectionColors[section] || 'bg-tg-button'}`}
-                    style={{ width: `${(numericScore / 6) * 100}%` }}
+                    style={{ width: `${(numericScore / sectionMax) * 100}%` }}
                   />
                 </div>
                 {!hasScore && (

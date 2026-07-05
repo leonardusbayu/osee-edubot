@@ -10,16 +10,20 @@ const TEST_CONFIGS: Record<string, any> = {
   TOEFL_IBT: {
     test_type: 'TOEFL_IBT',
     display_name: 'TOEFL iBT Practice Test (2026 Format)',
-    description: 'Full-length TOEFL iBT practice with adaptive sections and CEFR band scoring (1-6).',
+    description: 'Full-length TOEFL iBT practice. Speaking scored 0-4 per task (ETS Independent Speaking Rubric), Writing 0-5 per task (ETS Independent/Integrated Writing Rubric).',
     total_duration_minutes: 90,
-    max_band: 6,
-    // All four iBT sections share the same 1-6 CEFR band scale, so
-    // max_score === max_band for each section here.
+    max_band: 30, // official iBT section scores 0-30
+    // Official iBT per-task scales: speaking 0-4, writing 0-5. The
+    // AI scorer (speaking.ts scoreInterview / writing.ts /evaluate)
+    // now returns scores on these scales. Reading/listening stay 0-30
+    // (raw correct × 30 / total). The per-section max_score here is
+    // what scoreAttempt multiplies the correctness ratio by — for
+    // AI-scored sections it caps the AI raw score.
     sections: [
-      { id: 'reading', name: 'Reading', duration_minutes: 30, max_score: 6 },
-      { id: 'listening', name: 'Listening', duration_minutes: 29, max_score: 6 },
-      { id: 'speaking', name: 'Speaking', duration_minutes: 8, max_score: 6 },
-      { id: 'writing', name: 'Writing', duration_minutes: 23, max_score: 6 },
+      { id: 'reading', name: 'Reading', duration_minutes: 30, max_score: 30 },
+      { id: 'listening', name: 'Listening', duration_minutes: 29, max_score: 30 },
+      { id: 'speaking', name: 'Speaking', duration_minutes: 8, max_score: 4 },
+      { id: 'writing', name: 'Writing', duration_minutes: 23, max_score: 5 },
     ],
   },
   IELTS: {
@@ -695,10 +699,11 @@ export function scoreAttempt(
     const sectionAnswers = answers.filter((a: any) => a.section === section.id);
 
     if (AI_SCORED.has(section.id)) {
-      // AI-scored: pull the band score out of answer_data.score (1..max_band).
-      // Skip answers without a valid numeric score (e.g. speaking audio that
-      // never reached Whisper + scoring pipeline — these are "missing", not
-      // "zero").
+      // AI-scored: pull the band score out of answer_data.score.
+      // Per-section max_score is the clamp ceiling — iBT speaking is
+      // 0-4 per task, iBT writing 0-5 per task, IELTS 0-9. The test-
+      // level maxBand is NOT the right clamp for AI sections.
+      const sectionMax = typeof section.max_score === 'number' ? section.max_score : maxBand;
       const bands: number[] = [];
       for (const a of sectionAnswers) {
         let score: number | null = null;
@@ -708,13 +713,13 @@ export function scoreAttempt(
             : (a.answer_data || {});
           const raw = data?.score;
           if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
-            if (raw > maxBand) {
+            if (raw > sectionMax) {
               // AI returned out-of-range score — log so we can detect a
               // misbehaving prompt/model before analytics quietly compound.
-              console.warn('[score-clamp] AI score exceeds maxBand:',
-                { raw, maxBand, test_type: testType, section: section.id });
+              console.warn('[score-clamp] AI score exceeds sectionMax:',
+                { raw, sectionMax, test_type: testType, section: section.id });
             }
-            score = Math.min(raw, maxBand);
+            score = Math.min(raw, sectionMax);
           }
         } catch {}
         if (score !== null) bands.push(score);
@@ -1007,6 +1012,14 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
       total_score: totalScore,
       band_score: totalScore,
       section_scores: sectionScores,
+      // Expose max_band + per-section max_score so the frontend can
+      // render the score denominator + progress bar correctly. Without
+      // this, TestResults.tsx hardcoded "dari 6.0" and `(score/6)*100%`
+      // which was wrong for every test except the old iBT 1-6 scale.
+      max_band: config.max_band,
+      section_max_scores: Object.fromEntries(
+        (config.sections || []).map((s: any) => [s.id, s.max_score])
+      ),
       irt: irtProfile ? {
         ibt_estimate: irtProfile.ibt_estimate,
         cefr: irtProfile.cefr,
@@ -1290,12 +1303,20 @@ testRoutes.get('/results/:id', async (c) => {
 
   if (!result) return c.json({ error: 'Results not found', code: 'NO_RESULT_ROW' }, 404);
 
+  const configForResult = TEST_CONFIGS[attempt.test_type as string];
   return c.json({
     attempt_id: attemptId,
     test_type: attempt.test_type,
     total_score: result.total_score,
     band_score: result.band_score,
     section_scores: JSON.parse(result.section_scores as string),
+    // Include max_band + per-section max_score so the frontend can
+    // render the denominator + progress bar correctly. Mirrors the
+    // finish endpoint response shape.
+    max_band: configForResult?.max_band,
+    section_max_scores: Object.fromEntries(
+      (configForResult?.sections || []).map((s: any) => [s.id, s.max_score])
+    ),
     ai_summary: result.ai_summary,
     detailed_feedback: result.detailed_feedback ? JSON.parse(result.detailed_feedback as string) : null,
     completed_at: attempt.finished_at,

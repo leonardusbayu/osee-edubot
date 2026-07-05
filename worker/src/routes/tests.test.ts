@@ -111,4 +111,40 @@ describe('scoreAttempt', () => {
     expect(result!.scoredSectionCount).toBe(3); // reading, listening, speaking
     expect(result!.scoredAnswerCount).toBe(4);
   });
+
+  // ─── Per-section max_score clamp (iBT speaking 0-4, writing 0-5) ───
+  // The official ETS iBT rubric scores speaking 0-4 per task and
+  // writing 0-5 per task. The AI scorer now returns scores on those
+  // scales. scoreAttempt must clamp to the per-section max, NOT the
+  // test-level maxBand (30) — otherwise a speaking score of 6 (model
+  // misbehaving) would surface as 6 instead of being clamped to 4.
+  it('clamps AI speaking scores to section.max_score (iBT 0-4)', () => {
+    const iBtSectionsWithMax = [
+      { id: 'reading', name: 'Reading', duration_minutes: 30, max_score: 30 },
+      { id: 'listening', name: 'Listening', duration_minutes: 29, max_score: 30 },
+      { id: 'speaking', name: 'Speaking', duration_minutes: 8, max_score: 4 },
+      { id: 'writing', name: 'Writing', duration_minutes: 23, max_score: 5 },
+    ];
+    const answers = [
+      { section: 'speaking', is_correct: null, answer_data: '{"score": 6}' }, // exceeds 4
+      { section: 'speaking', is_correct: null, answer_data: '{"score": 3}' },
+    ];
+    const result = scoreAttempt(answers, 'TOEFL_IBT', iBtSectionsWithMax, 30);
+    // (4 + 3) / 2 = 3.5 — the 6 is clamped to 4 before averaging
+    expect(result!.sectionScores.speaking).toBe(3.5);
+  });
+
+  it('clamps AI writing scores to section.max_score (iBT 0-5)', () => {
+    const iBtSectionsWithMax = [
+      { id: 'reading', name: 'Reading', duration_minutes: 30, max_score: 30 },
+      { id: 'listening', name: 'Listening', duration_minutes: 29, max_score: 30 },
+      { id: 'speaking', name: 'Speaking', duration_minutes: 8, max_score: 4 },
+      { id: 'writing', name: 'Writing', duration_minutes: 23, max_score: 5 },
+    ];
+    const answers = [
+      { section: 'writing', is_correct: null, answer_data: '{"score": 7}' }, // exceeds 5
+    ];
+    const result = scoreAttempt(answers, 'TOEFL_IBT', iBtSectionsWithMax, 30);
+    expect(result!.sectionScores.writing).toBe(5); // clamped to 5
+  });
 });
