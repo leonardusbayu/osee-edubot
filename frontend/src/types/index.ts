@@ -64,6 +64,17 @@ export interface TestResult {
   ai_summary: string | null;
   detailed_feedback: Record<string, unknown> | null;
   completed_at: string | null;
+  // Score prediction — added to /finish + /results responses. Optional
+  // because older attempts stored in test_results won't have it.
+  score_prediction?: {
+    current_band: number;
+    confidence_interval: [number, number];
+    projected_band: number;
+    verdict: 'on_track' | 'behind_pace' | 'ready_now' | 'no_data';
+    weeks_to_exam: number | null;
+    target_score: number | null;
+    exam_deadline: string | null;
+  } | null;
 }
 
 export interface ProgressOverview {

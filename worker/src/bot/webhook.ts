@@ -3532,7 +3532,29 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
       case '/today': {
         const { getTodayLesson } = await import('../services/studyplan');
         const lesson = await getTodayLesson(env, user.id);
-        let base = lesson || `📋 *Belum ada study plan*\n\n` +
+
+        // Adaptive session engine — builds a personalized 20-min session
+        // from FSRS due cards + weakness profile + IRT theta + exam
+        // deadline. Falls back to the fixed lesson if the engine returns
+        // null (brand new user with no signals).
+        let sessionMsg = '';
+        try {
+          const { buildDailySession } = await import('../services/daily-session-engine');
+          const session = await buildDailySession(env, user.id, user.name || 'Kamu');
+          if (session) {
+            sessionMsg = `${session.greeting}\n`;
+            if (session.exam_countdown) sessionMsg += `${session.exam_countdown}\n`;
+            sessionMsg += `\n${session.summary}\n\n`;
+            for (const block of session.blocks) {
+              sessionMsg += `━━ ${block.title} (${block.duration_minutes}m) ━━\n${block.detail}\n\n`;
+            }
+            sessionMsg += `Ketik /review buat mulai review, /study buat practice, /test buat mock.\n`;
+          }
+        } catch (e: any) {
+          console.error('[today] session engine error (non-fatal):', e?.message || e);
+        }
+
+        let base = sessionMsg || lesson || `📋 *Belum ada study plan*\n\n` +
           `_Supaya aku bisa kasih lesson yang pas, mulai dengan /diagnostic dulu — cuma 20 soal, sekitar 5-8 menit._ ✨`;
 
         // P0 #3: Surface FSRS-due vocab reviews in /today. The vocab

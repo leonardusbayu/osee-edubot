@@ -254,3 +254,123 @@ export function formatScoreEstimateMessage(estimate: ScoreEstimate, targetBand?:
   }
   return msg;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Score prediction — uses the just-finished attempt's section scores
+// + study plan target + exam deadline to project a test-day score.
+// Used by the /finish + /results endpoints to show the student a
+// "you're on track / behind pace / ready now" verdict.
+// ═══════════════════════════════════════════════════════════════
+
+export interface ScorePrediction {
+  current_band: number;
+  confidence_interval: [number, number];
+  projected_band: number;
+  verdict: 'on_track' | 'behind_pace' | 'ready_now' | 'no_data';
+  weeks_to_exam: number | null;
+  target_score: number | null;
+  exam_deadline: string | null;
+}
+
+// Per-test confidence intervals (± around current_band). These are
+// empirical — IELTS band descriptors are 0.5 wide so ±0.3 captures
+// the uncertainty; iBT is 0-30 per section so ±2 captures section
+// noise; ITP 310-677 so ±30; TOEIC 10-990 so ±50.
+const CONFIDENCE_BY_TEST: Record<string, number> = {
+  IELTS: 0.3,
+  TOEFL_IBT: 2.0,
+  TOEFL_ITP: 30,
+  TOEIC: 50,
+};
+
+/**
+ * Build a score prediction from a just-finished attempt's section
+ * scores + the student's study plan. Best-effort: if there's no
+ * study plan or exam date, still return current_band + confidence
+ * interval but with verdict='no_data'.
+ */
+export async function buildScorePrediction(
+  env: Env,
+  userId: number,
+  testType: string,
+  sectionScores: Record<string, number | null>,
+  totalScore: number,
+): Promise<ScorePrediction> {
+  const scale = SCALE_BY_TEST[testType] || SCALE_BY_TEST.TOEFL_IBT;
+  const currentBand = totalScore;
+  const ci = CONFIDENCE_BY_TEST[testType] ?? 2.0;
+
+  // Fetch study plan for target_score + target_date
+  let targetScore: number | null = null;
+  let examDeadline: string | null = null;
+  try {
+    const plan = await env.DB.prepare(
+      `SELECT target_score, target_date FROM study_plans
+       WHERE user_id = ? AND status = 'active'
+       ORDER BY created_at DESC LIMIT 1`
+    ).bind(userId).first<{ target_score: number | null; target_date: string | null }>();
+    if (plan) {
+      targetScore = plan.target_score ? Number(plan.target_score) : null;
+      examDeadline = plan.target_date || null;
+    }
+  } catch { /* study_plans missing or empty — fine */ }
+
+  // Compute weeks to exam
+  let weeksToExam: number | null = null;
+  if (examDeadline) {
+    const examMs = new Date(examDeadline).getTime();
+    if (Number.isFinite(examMs)) {
+      const daysToExam = Math.max(0, (examMs - Date.now()) / (1000 * 60 * 60 * 24));
+      weeksToExam = Math.round(daysToExam / 7);
+    }
+  }
+
+  // Learning rate: pull the user's mock_test_history deltas to estimate
+  // improvement per week. If <2 mock scores, assume 0 (can't project).
+  let learningRate = 0;
+  try {
+    const history = await env.DB.prepare(
+      `SELECT estimated_score, created_at FROM mock_test_history
+       WHERE user_id = ? AND test_type = ?
+       ORDER BY created_at ASC LIMIT 10`
+    ).bind(userId, testType).all<{ estimated_score: number; created_at: string }>();
+    const rows = history.results || [];
+    if (rows.length >= 2) {
+      const first = rows[0];
+      const last = rows[rows.length - 1];
+      const firstScore = Number(first.estimated_score);
+      const lastScore = Number(last.estimated_score);
+      const firstMs = new Date(first.created_at).getTime();
+      const lastMs = new Date(last.created_at).getTime();
+      const weeksBetween = Math.max(0.5, (lastMs - firstMs) / (1000 * 60 * 60 * 24 * 7));
+      learningRate = (lastScore - firstScore) / weeksBetween;
+    }
+  } catch { /* mock_test_history missing — fine */ }
+
+  // Project: current + learning_rate × weeks_to_exam
+  const projectedBand = weeksToExam !== null && Number.isFinite(learningRate)
+    ? currentBand + learningRate * weeksToExam
+    : currentBand;
+
+  // Verdict
+  let verdict: ScorePrediction['verdict'];
+  if (targetScore === null || weeksToExam === null) {
+    verdict = 'no_data';
+  } else if (projectedBand >= targetScore) {
+    verdict = 'ready_now';
+  } else if (projectedBand >= targetScore - ci) {
+    verdict = 'on_track';
+  } else {
+    verdict = 'behind_pace';
+  }
+
+  return {
+    current_band: currentBand,
+    confidence_interval: [currentBand - ci, currentBand + ci],
+    projected_band: Math.round(projectedBand * 10) / 10,
+    verdict,
+    weeks_to_exam: weeksToExam,
+    target_score: targetScore,
+    exam_deadline: examDeadline,
+  };
+}

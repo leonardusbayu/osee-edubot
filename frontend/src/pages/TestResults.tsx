@@ -245,6 +245,62 @@ export default function TestResults() {
         </div>
       </div>
 
+      {/* Score prediction — projects the student's test-day score based
+          on current band + learning rate + weeks to exam. Verdict tells
+          them if they're on track / behind pace / ready now. */}
+      {result.score_prediction && (() => {
+        const p = result.score_prediction as any;
+        const verdictColor: Record<string, string> = {
+          ready_now: 'text-green-500',
+          on_track: 'text-green-500',
+          behind_pace: 'text-orange-500',
+          no_data: 'text-tg-hint',
+        };
+        const verdictLabel: Record<string, string> = {
+          ready_now: '✅ Siap untuk ujian!',
+          on_track: '✅ On track',
+          behind_pace: '⚠️ Belum tertinggal dari target',
+          no_data: '📊 Belum ada data cukup',
+        };
+        const [ciLow, ciHigh] = p.confidence_interval;
+        return (
+          <div className="mb-6">
+            <h2 className="font-semibold mb-3">Prediksi Skor</h2>
+            <div className="bg-tg-secondary rounded-xl p-4 space-y-2">
+              <div className="flex justify-between">
+                <span className="text-tg-hint">Skor sekarang</span>
+                <span className="font-bold">{p.current_band}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-tg-hint">Confidence</span>
+                <span className="font-medium">±{(ciHigh - ciLow) / 2}</span>
+              </div>
+              {p.projected_band !== p.current_band && (
+                <div className="flex justify-between">
+                  <span className="text-tg-hint">Proyeksi di ujian</span>
+                  <span className="font-bold">{p.projected_band}</span>
+                </div>
+              )}
+              {p.weeks_to_exam !== null && (
+                <div className="flex justify-between">
+                  <span className="text-tg-hint">Minggu ke ujian</span>
+                  <span className="font-medium">{p.weeks_to_exam}</span>
+                </div>
+              )}
+              {p.target_score !== null && (
+                <div className="flex justify-between">
+                  <span className="text-tg-hint">Target</span>
+                  <span className="font-medium">{p.target_score}</span>
+                </div>
+              )}
+              <div className={`text-center font-bold pt-2 border-t border-tg-hint/20 ${verdictColor[p.verdict] || ''}`}>
+                {verdictLabel[p.verdict] || p.verdict}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* AI Feedback */}
       {result.ai_summary && (
         <div className="mb-6">

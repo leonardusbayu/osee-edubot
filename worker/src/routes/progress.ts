@@ -615,3 +615,102 @@ progressRoutes.get('/report-card', async (c) => {
     return c.json({ error: 'Failed to load report card data' }, 500);
   }
 });
+
+// Score trajectory — returns the student's mock test scores over time
+// + IRT theta history + improvement delta + verdict. Used by the
+// Progress page to answer "Am I improving?" and "Will I be ready?"
+progressRoutes.get('/trajectory', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user?.id) return c.json({ error: 'Unauthorized' }, 401);
+
+  try {
+    // Mock test scores over time
+    let mockScores: any[] = [];
+    try {
+      const { results } = await c.env.DB.prepare(
+        `SELECT estimated_score, score_scale, created_at, attempt_id
+         FROM mock_test_history
+         WHERE user_id = ?
+         ORDER BY created_at ASC LIMIT 50`
+      ).bind(user.id).all();
+      mockScores = (results || []).map((r: any) => ({
+        date: r.created_at,
+        score: Number(r.estimated_score),
+        scale: r.score_scale,
+        attempt_id: r.attempt_id,
+      }));
+    } catch { /* mock_test_history missing — fine */ }
+
+    // Study plan: target_score + target_date
+    let targetScore: number | null = null;
+    let examDeadline: string | null = null;
+    try {
+      const plan = await c.env.DB.prepare(
+        `SELECT target_score, target_date FROM study_plans
+         WHERE user_id = ? AND status = 'active'
+         ORDER BY created_at DESC LIMIT 1`
+      ).bind(user.id).first<{ target_score: number | null; target_date: string | null }>();
+      if (plan) {
+        targetScore = plan.target_score ? Number(plan.target_score) : null;
+        examDeadline = plan.target_date || null;
+      }
+    } catch { /* study_plans missing */ }
+
+    // Compute improvement
+    let firstScore: number | null = null;
+    let latestScore: number | null = null;
+    let improvement: number | null = null;
+    let improvementPct: number | null = null;
+    if (mockScores.length >= 2) {
+      const first = mockScores[0].score;
+      const latest = mockScores[mockScores.length - 1].score;
+      firstScore = first;
+      latestScore = latest;
+      improvement = Math.round((latest - first) * 10) / 10;
+      improvementPct = first !== 0 ? Math.round((improvement / first) * 1000) / 10 : null;
+    }
+
+    // Weeks to exam
+    let weeksToExam: number | null = null;
+    if (examDeadline) {
+      const examMs = new Date(examDeadline).getTime();
+      if (Number.isFinite(examMs)) {
+        const days = Math.max(0, (examMs - Date.now()) / (1000 * 60 * 60 * 24));
+        weeksToExam = Math.round(days / 7);
+      }
+    }
+
+    // Verdict
+    let verdict: 'on_track' | 'behind_pace' | 'ready_now' | 'no_data';
+    if (mockScores.length < 2 || targetScore === null) {
+      verdict = 'no_data';
+    } else if (latestScore !== null && latestScore >= targetScore) {
+      verdict = 'ready_now';
+    } else if (latestScore !== null && improvement !== null && improvement > 0) {
+      // Project: latest + improvement_rate × weeks_to_exam
+      const firstDate = new Date(mockScores[0].date).getTime();
+      const latestDate = new Date(mockScores[mockScores.length - 1].date).getTime();
+      const weeksBetween = Math.max(0.5, (latestDate - firstDate) / (1000 * 60 * 60 * 24 * 7));
+      const rate = improvement / weeksBetween;
+      const projected = latestScore + rate * (weeksToExam ?? 0);
+      verdict = projected >= targetScore - 0.2 ? 'on_track' : 'behind_pace';
+    } else {
+      verdict = 'behind_pace';
+    }
+
+    return c.json({
+      mock_scores: mockScores,
+      first_score: firstScore,
+      latest_score: latestScore,
+      improvement,
+      improvement_pct: improvementPct,
+      verdict,
+      target_score: targetScore,
+      exam_deadline: examDeadline,
+      weeks_to_exam: weeksToExam,
+    });
+  } catch (e: any) {
+    console.error('Trajectory error:', e);
+    return c.json({ error: 'Failed to load trajectory' }, 500);
+  }
+});

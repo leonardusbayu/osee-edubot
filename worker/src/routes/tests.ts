@@ -951,6 +951,19 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
       }
     } catch {}
 
+    // Score prediction — uses the just-finished attempt's sectionScores
+    // + study plan target + exam deadline + learning rate from mock
+    // history. Best-effort: if no study plan, returns verdict='no_data'.
+    let scorePrediction = null;
+    try {
+      if (userId > 0) {
+        const { buildScorePrediction } = await import('../services/score-predictor');
+        scorePrediction = await buildScorePrediction(c.env, userId, attempt.test_type as string, sectionScores, totalScore);
+      }
+    } catch (e: any) {
+      console.error('[finish] score prediction error (non-fatal):', e?.message || e);
+    }
+
     // Growth recognition — check if student improved since last period
     let growthMessage: string | null = null;
     try {
@@ -1026,6 +1039,7 @@ testRoutes.post('/attempt/:id/finish', async (c) => {
         confidence: irtProfile.confidence,
         abilities: irtProfile.abilities,
       } : null,
+      score_prediction: scorePrediction,
       ai_summary: null,
       detailed_feedback: null,
       completed_at: now,
@@ -1304,6 +1318,27 @@ testRoutes.get('/results/:id', async (c) => {
   if (!result) return c.json({ error: 'Results not found', code: 'NO_RESULT_ROW' }, 404);
 
   const configForResult = TEST_CONFIGS[attempt.test_type as string];
+
+  // Rebuild score_prediction for the results view. Best-effort: if the
+  // study plan or mock history changed since the test was finished, the
+  // prediction will reflect the current state (not the state at finish
+  // time). That's fine — the student wants to know the current outlook.
+  let scorePrediction = null;
+  try {
+    if (attempt.user_id && Number.isFinite(Number(attempt.user_id))) {
+      const { buildScorePrediction } = await import('../services/score-predictor');
+      scorePrediction = await buildScorePrediction(
+        c.env,
+        Number(attempt.user_id),
+        attempt.test_type as string,
+        JSON.parse(result.section_scores as string),
+        Number(result.total_score),
+      );
+    }
+  } catch (e: any) {
+    console.error('[results] score prediction error (non-fatal):', e?.message || e);
+  }
+
   return c.json({
     attempt_id: attemptId,
     test_type: attempt.test_type,
@@ -1317,6 +1352,7 @@ testRoutes.get('/results/:id', async (c) => {
     section_max_scores: Object.fromEntries(
       (configForResult?.sections || []).map((s: any) => [s.id, s.max_score])
     ),
+    score_prediction: scorePrediction,
     ai_summary: result.ai_summary,
     detailed_feedback: result.detailed_feedback ? JSON.parse(result.detailed_feedback as string) : null,
     completed_at: attempt.finished_at,

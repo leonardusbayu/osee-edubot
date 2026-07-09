@@ -82,12 +82,25 @@ export default function Progress() {
   const [loading, setLoading] = useState(true);
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
   const [badges, setBadges] = useState<Badge[]>([]);
+  const [trajectory, setTrajectory] = useState<any>(null);
 
   useEffect(() => {
     loadProgress();
     loadQuota();
     loadBadges();
+    loadTrajectory();
   }, []);
+
+  async function loadTrajectory() {
+    try {
+      const response = await authedFetch('/api/progress/trajectory');
+      if (response.ok) {
+        setTrajectory(await response.json());
+      }
+    } catch (err) {
+      console.error('Failed to load trajectory:', err);
+    }
+  }
 
   async function loadBadges() {
     try {
@@ -517,6 +530,86 @@ export default function Progress() {
               </div>
             </div>
           )}
+
+          {/* Score trajectory — answers "Am I improving?" + "Will I be ready?"
+              Shows mock test scores over time, improvement delta, + verdict.
+              Only renders if trajectory data exists (needs 2+ mock tests). */}
+          {trajectory && trajectory.mock_scores && trajectory.mock_scores.length > 0 && (() => {
+            const verdictColor: Record<string, string> = {
+              ready_now: 'text-green-500',
+              on_track: 'text-green-500',
+              behind_pace: 'text-orange-500',
+              no_data: 'text-tg-hint',
+            };
+            const verdictLabel: Record<string, string> = {
+              ready_now: '✅ Siap untuk ujian!',
+              on_track: '✅ On track',
+              behind_pace: '⚠️ Perlu percepat',
+              no_data: '📊 Data belum cukup',
+            };
+            // Simple SVG line chart of mock_scores
+            const scores = trajectory.mock_scores;
+            const maxScore = Math.max(...scores.map((s: any) => s.score), trajectory.target_score || 0);
+            const minScore = Math.min(...scores.map((s: any) => s.score)) - 0.5;
+            const range = Math.max(1, maxScore - minScore);
+            const firstDate = new Date(scores[0].date).getTime();
+            const lastDate = new Date(scores[scores.length - 1].date).getTime();
+            const dateRange = Math.max(1, lastDate - firstDate);
+            const points = scores.map((s: any, i: number) => {
+              const x = ((new Date(s.date).getTime() - firstDate) / dateRange) * 280 + 10;
+              const y = 80 - ((s.score - minScore) / range) * 70;
+              return `${x},${y}`;
+            }).join(' ');
+            return (
+              <div className="bg-tg-secondary rounded-xl p-4 mb-4">
+                <h3 className="font-bold mb-1">📊 Trajektori Skor</h3>
+                {trajectory.target_score !== null && (
+                  <p className="text-xs text-tg-hint mb-2">
+                    Target: {trajectory.target_score}
+                    {trajectory.exam_deadline && ` · Ujian: ${new Date(trajectory.exam_deadline).toLocaleDateString('id-ID')}`}
+                    {trajectory.weeks_to_exam !== null && ` · ${trajectory.weeks_to_exam} minggu lagi`}
+                  </p>
+                )}
+                {trajectory.improvement !== null && (
+                  <p className="text-sm mb-2">
+                    {trajectory.first_score} → {trajectory.latest_score}
+                    <span className={`ml-2 font-bold ${trajectory.improvement > 0 ? 'text-green-500' : trajectory.improvement < 0 ? 'text-red-500' : 'text-tg-hint'}`}>
+                      {trajectory.improvement > 0 ? '🎉 +' : trajectory.improvement < 0 ? '⚠️ ' : '😐 '}{trajectory.improvement}
+                    </span>
+                  </p>
+                )}
+                {scores.length >= 2 ? (
+                  <svg viewBox="0 0 300 90" className="w-full h-20 mb-2">
+                    {/* Target line */}
+                    {trajectory.target_score !== null && (() => {
+                      const ty = 80 - ((trajectory.target_score - minScore) / range) * 70;
+                      return <line x1="10" y1={ty} x2="290" y2={ty} stroke="#f59e0b" strokeWidth="1" strokeDasharray="4 2" />;
+                    })()}
+                    {/* Score line */}
+                    <polyline
+                      points={points}
+                      fill="none"
+                      stroke="#22c55e"
+                      strokeWidth="2"
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                    {/* Score dots */}
+                    {scores.map((s: any, i: number) => {
+                      const x = ((new Date(s.date).getTime() - firstDate) / dateRange) * 280 + 10;
+                      const y = 80 - ((s.score - minScore) / range) * 70;
+                      return <circle key={i} cx={x} cy={y} r="3" fill="#22c55e" />;
+                    })}
+                  </svg>
+                ) : (
+                  <p className="text-xs text-tg-hint mb-2">Take 2+ mock tests to see your trajectory.</p>
+                )}
+                <div className={`text-center font-bold ${verdictColor[trajectory.verdict] || ''}`}>
+                  {verdictLabel[trajectory.verdict] || trajectory.verdict}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Motivational message based on data */}
           <div className="bg-tg-secondary rounded-xl p-4 text-center text-sm">
