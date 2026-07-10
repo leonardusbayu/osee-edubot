@@ -2111,6 +2111,19 @@ export default {
       // Hourly — channel content rotation + cancel expired payments + cleanup abandoned attempts + trial expiry nudge
       ctx.waitUntil(safeTask('hourly-channel', () => handleHourlyChannelCron(env)));
       ctx.waitUntil(safeTask('payment-expiry', () => handlePaymentExpiryCron(env)));
+      // Intervention engine — detects struggling/inactive students and
+      // sends targeted nudges (max 1 per type per 24h per user via
+      // intervention_log). Best-effort, never blocks other hourly jobs.
+      ctx.waitUntil(
+        (async () => {
+          try {
+            const { runInterventionEngine } = await import('./services/intervention-engine');
+            await runInterventionEngine(env);
+          } catch (e: any) {
+            console.error('[cron] intervention-engine error:', e?.message || e);
+          }
+        })()
+      );
       ctx.waitUntil(safeTask('abandoned-attempts', () => handleAbandonedAttemptCleanup(env)));
       ctx.waitUntil(safeTask('trial-expiry', () => handleTrialExpiryPush(env)));
       ctx.waitUntil(safeTask('streak-warning', () => handleStreakWarningPush(env)));

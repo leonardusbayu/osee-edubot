@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useTestStore } from '../stores/test';
 import { authedFetch, getTelegramUserId } from '../api/authedFetch';
 import { startOfflineSyncService, stopOfflineSyncService, syncPendingAnswers } from '../utils/offline-sync';
@@ -177,6 +177,13 @@ function shuffleArray<T>(arr: T[]): T[] {
 export default function TestRunner() {
   const { attemptId } = useParams<{ attemptId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  // Mock test exam-mode: when the student started via "Mock Test" button,
+  // TestSelection passes mock_mode + deadline_at via location state. In
+  // exam mode: no back button, prominent timer, auto-transition when the
+  // section timer expires, auto-finish when the overall deadline passes.
+  const mockMode = (location.state as any)?.mock_mode === true;
+  const deadlineAt = (location.state as any)?.deadline_at as string | undefined;
   const {
     sections, currentSection, currentQuestionIndex,
     setCurrentSection, setQuestionIndex, saveAnswer, answers,
@@ -211,6 +218,13 @@ export default function TestRunner() {
   const [sectionTimeSeconds, setSectionTimeSeconds] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [writingText, setWritingText] = useState('');
+  // Writing draft tracking — multi-draft loop. Each draft submitted
+  // is stored in writing_drafts via /api/writing/draft (max 3 per
+  // question). The student sees a draft counter + can "Rewrite" by
+  // editing the text and submitting again.
+  const [draftNumber, setDraftNumber] = useState(0);
+  const [draftSaved, setDraftSaved] = useState(false);
+  const [draftSaving, setDraftSaving] = useState(false);
   const [sentenceOrder, setSentenceOrder] = useState<string[]>([]);
   const [blankInputs, setBlankInputs] = useState<string[]>([]);
   const [speakingResult, setSpeakingResult] = useState<any>(null);
@@ -243,6 +257,26 @@ export default function TestRunner() {
       isMountedRef.current = false;
     };
   }, []);
+
+  // Mock test deadline enforcement — auto-finish when the overall
+  // deadline passes. The backend already enforces this on /finish
+  // (marks the attempt as 'time_expired'), but the frontend should
+  // also auto-submit so the student doesn't keep answering after the
+  // deadline. Polls every 5s — cheap + good enough for a 90-min test.
+  useEffect(() => {
+    if (!mockMode || !deadlineAt) return;
+    const deadlineMs = new Date(deadlineAt).getTime();
+    if (!Number.isFinite(deadlineMs)) return;
+    const check = () => {
+      if (Date.now() >= deadlineMs) {
+        handleFinish();
+      }
+    };
+    const interval = setInterval(check, 5000);
+    check(); // initial check in case the deadline already passed
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mockMode, deadlineAt]);
 
   const currentQuestion = questions[currentQuestionIndex];
 
@@ -1459,7 +1493,10 @@ export default function TestRunner() {
     const currentIdx = sections.findIndex((s) => s.id === currentSection);
     // Same -1 guard as advanceToNext: unknown section → finish, don't wrap to 0.
     if (currentIdx >= 0 && currentIdx + 1 < sections.length) {
+      // In mock mode, auto-advance to next section (no student action needed).
+      // In practice mode, this only fires if the student lets the timer run out.
       setCurrentSection(sections[currentIdx + 1].id);
+      setQuestionIndex(0);
     } else {
       handleFinish();
     }
@@ -1676,6 +1713,18 @@ export default function TestRunner() {
           {!networkAvailable && (
             <p className="text-xs mt-1 opacity-80">Internet belum aktif. Akan dikirim otomatis saat online.</p>
           )}
+        </div>
+      )}
+
+      {/* Mock test exam-mode banner — shown when the student started via
+          the "Mock Test" button. Warns them that the timer is real + they
+          can't go back. The banner is sticky so it stays visible while
+          scrolling through questions. */}
+      {mockMode && (
+        <div className="sticky top-0 bg-gradient-to-r from-orange-500 to-red-500 text-white px-4 py-2 text-center z-20 shadow-md">
+          <p className="text-xs font-bold">
+            🎯 MOCK TEST — Timer berjalan, tidak bisa kembali ke section sebelumnya
+          </p>
         </div>
       )}
 
@@ -2171,6 +2220,47 @@ export default function TestRunner() {
                         {wordCount >= target && !isOver && ' ✓'}
                         {isOver && ' (terlalu panjang)'}
                       </span>
+                      {draftNumber > 0 && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                          ✏️ Draft {draftNumber}/3
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (draftNumber >= 3 || draftSaving || writingText.length < 20) return;
+                          setDraftSaving(true);
+                          try {
+                            const res = await authedFetch('/api/writing/draft', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                content_id: currentQuestion.id,
+                                test_type: useTestStore.getState().testType,
+                                task_type: currentQuestion.type,
+                                prompt: currentQuestion.prompt || currentQuestion.question || '',
+                                text: writingText,
+                              }),
+                            });
+                            const json = await res.json();
+                            if (res.ok) {
+                              setDraftNumber(json.draft_number);
+                              setDraftSaved(true);
+                              setTimeout(() => setDraftSaved(false), 2500);
+                            } else {
+                              alert(json.message || json.error || 'Gagal simpan draft');
+                            }
+                          } catch (e: any) {
+                            alert('Network error: ' + e?.message);
+                          } finally {
+                            setDraftSaving(false);
+                          }
+                        }}
+                        disabled={draftNumber >= 3 || draftSaving || writingText.length < 20}
+                        className="text-xs px-3 py-1 rounded-lg bg-blue-500/20 text-blue-400 font-medium disabled:opacity-40"
+                      >
+                        {draftSaving ? 'Menyimpan...' : draftSaved ? '✓ Tersimpan' : draftNumber === 0 ? '📝 Simpan draft' : `📝 Simpan draft ${draftNumber + 1}`}
+                      </button>
                       <span className="text-xs text-tg-hint">
                         {currentQuestion.type === 'write_email'
                           ? 'Target: 150-200 kata'

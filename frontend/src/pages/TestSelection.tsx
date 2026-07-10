@@ -291,6 +291,51 @@ export default function TestSelection() {
     }
   }
 
+  // Mock test — same as full test but with mock_mode: true. The backend
+  // computes a hard deadline (total_duration + 30s grace) + enforces it
+  // on finish. The frontend TestRunner enters "exam mode": no back
+  // button, auto-transition between sections, auto-finish on deadline.
+  async function handleStartMockTest() {
+    if (!confirm(
+      'Mode Mock Test:\n\n' +
+      '• Timer berjalan dari detik pertama\n' +
+      '• Tidak bisa kembali ke section sebelumnya\n' +
+      '• Auto-transisi antar section\n' +
+      '• Auto-finish kalau waktu habis\n\n' +
+      'Simulasi kondisi ujian yang sesungguhnya. Siap?'
+    )) return;
+    setStarting('mock');
+    setError(null);
+    try {
+      const response = await authedFetch('/api/tests/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ test_type: testType, mock_mode: true }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        if (data.code === 'LIMIT_REACHED') {
+          setError('Batas harian tercapai! Upgrade ke premium untuk akses unlimited.');
+          setQuota(data.quota);
+        } else {
+          setError(data.error || 'Gagal memulai mock test');
+        }
+        return;
+      }
+      startTest(data.attempt_id, data.test_type, data.sections, data.current_section);
+      // Pass mock_mode + deadline_at to the test store via the navigate
+      // state so TestRunner can enter exam mode. The store doesn't
+      // persist these, so we use location state.
+      navigate(`/test/${data.attempt_id}`, {
+        state: { mock_mode: true, deadline_at: data.deadline_at },
+      });
+    } catch {
+      setError('Kesalahan jaringan');
+    } finally {
+      setStarting(null);
+    }
+  }
+
   async function handleStartSection(section: string, questionType?: string) {
     setStarting(section + (questionType || ''));
     setError(null);
@@ -635,6 +680,36 @@ export default function TestSelection() {
         >
           {starting === 'full' ? 'Memulai...' : 'Mulai Tes Lengkap'}
         </button>
+
+        {/* Mock Test mode — same as full test but with mock_mode=true.
+            The backend enforces a hard deadline (total duration + 30s
+            grace). The frontend TestRunner enters "exam mode": no back
+            button, prominent timer, auto-transition when timer expires. */}
+        <button
+          onClick={handleStartMockTest}
+          disabled={!!starting}
+          className="w-full bg-orange-500/20 text-orange-400 border border-orange-500/30 py-3 rounded-xl font-medium disabled:opacity-50 mt-2"
+        >
+          {starting === 'mock' ? 'Memulai...' : '📝 Mock Test (Timed)'}
+        </button>
+        <p className="text-xs text-tg-hint mt-1 text-center">
+          Mode ujian: timer berjalan, tidak bisa kembali ke section sebelumnya
+        </p>
+
+        {/* Mock Test — exam-mode: timer, no back, auto-transition. The
+            backend already supports mock_mode in the /start endpoint
+            (computes deadline_at). TestRunner reads mock_mode from
+            location state + enters exam mode. */}
+        <button
+          onClick={handleStartMockTest}
+          disabled={!!starting}
+          className="w-full bg-gradient-to-r from-orange-500 to-red-500 text-white py-3 rounded-xl font-medium disabled:opacity-50 mt-2"
+        >
+          {starting === 'mock' ? 'Memulai mock...' : '🎯 Mulai Mock Test (Exam Mode)'}
+        </button>
+        <p className="text-xs text-tg-hint mt-2 text-center">
+          ⏱️ Timer berjalan · 🔒 Tidak bisa kembali · ⚡ Auto-transisi
+        </p>
       </div>
 
       {/* Quick Test Banner — 5 soal, 5 menit, fix for BUGS #16 (0% completion) */}
