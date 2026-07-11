@@ -68,12 +68,20 @@ export interface TestResult {
   // because older attempts stored in test_results won't have it.
   score_prediction?: {
     current_band: number;
+    // Per-section band values (e.g. iBT reading 22/30). The frontend renders
+    // the section breakdown in the "Prediksi Skor" card using these.
+    section_bands?: Record<string, number | null>;
     confidence_interval: [number, number];
+    // Width of the confidence interval (current_band +/- ci_width).
+    ci_width?: number;
     projected_band: number;
     verdict: 'on_track' | 'behind_pace' | 'ready_now' | 'no_data';
     weeks_to_exam: number | null;
-    target_score: number | null;
+    // Renamed from target_score (study_plans.target_band is the real column).
+    target_band: number | null;
     exam_deadline: string | null;
+    // How many sections had data when this prediction was generated.
+    sections_with_data?: number;
   } | null;
 }
 

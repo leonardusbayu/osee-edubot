@@ -264,30 +264,59 @@ export function formatScoreEstimateMessage(estimate: ScoreEstimate, targetBand?:
 
 export interface ScorePrediction {
   current_band: number;
+  // Per-section band values, used to render the section breakdown in
+  // TestResults. Null = no data for that section.
+  section_bands: Record<string, number | null>;
   confidence_interval: [number, number];
+  // Width of the confidence interval (current_band ± ci_width).
+  ci_width: number;
   projected_band: number;
   verdict: 'on_track' | 'behind_pace' | 'ready_now' | 'no_data';
   weeks_to_exam: number | null;
   target_band: number | null;
   exam_deadline: string | null;
+  // How many sections had data. Drives the verdict confidence: a 1-section
+  // attempt has a much wider CI than a 4-section attempt.
+  sections_with_data: number;
 }
 
-// Per-test confidence intervals (± around current_band). These are
-// empirical — IELTS band descriptors are 0.5 wide so ±0.3 captures
-// the uncertainty; iBT is 0-30 per section so ±2 captures section
-// noise; ITP 310-677 so ±30; TOEIC 10-990 so ±50.
-const CONFIDENCE_BY_TEST: Record<string, number> = {
-  IELTS: 0.3,
-  TOEFL_IBT: 2.0,
-  TOEFL_ITP: 30,
-  TOEIC: 50,
+// Per-section max scores for the prediction normalization. Mirrors
+// the section max_score values in TEST_CONFIGS in tests.ts. Centralized
+// here so the prediction can compute per-section 0-1 normalized scores
+// without a circular dependency on tests.ts.
+const SECTION_MAX_BY_TEST: Record<string, Record<string, number>> = {
+  TOEFL_IBT: { reading: 30, listening: 30, speaking: 4, writing: 5 },
+  IELTS: { reading: 9, listening: 9, speaking: 9, writing: 9 },
+  TOEIC: { listening: 495, reading: 495 },
+  TOEFL_ITP: { listening: 68, structure: 68, reading: 68 },
+};
+
+// Per-test test-level max score (for projecting the normalized average
+// back to the reporting scale).
+const TEST_MAX_BAND: Record<string, number> = {
+  IELTS: 9, TOEFL_IBT: 30, TOEIC: 990, TOEFL_ITP: 677,
+};
+
+// Per-test confidence interval width. Empirically calibrated:
+//   - IELTS: ±0.3 band covers typical section noise
+//   - iBT: ±2 covers typical section score variance
+//   - TOEIC: ±50 covers typical L+R sum variance
+//   - ITP: ±30 covers typical 31-68 scale variance
+// Section coverage widens the CI: a 1-section attempt gets +50% width.
+const BASE_CI_BY_TEST: Record<string, number> = {
+  IELTS: 0.3, TOEFL_IBT: 2.0, TOEIC: 50, TOEFL_ITP: 30,
 };
 
 /**
- * Build a score prediction from a just-finished attempt's section
- * scores + the student's study plan. Best-effort: if there's no
- * study plan or exam date, still return current_band + confidence
- * interval but with verdict='no_data'.
+ * Build a score prediction from the just-finished attempt's section
+ * scores + study plan target + exam deadline + the user's learning
+ * rate from past mock tests. Returns a per-section band breakdown
+ * so the frontend can show "Reading 22/30, Listening 18/30..." instead
+ * of a single opaque number.
+ *
+ * Persists the prediction to prediction_history so we can backfill the
+ * actual_band once the user takes another mock test, and the outcome
+ * tracking cron can compute prediction error over time.
  */
 export async function buildScorePrediction(
   env: Env,
@@ -296,24 +325,49 @@ export async function buildScorePrediction(
   sectionScores: Record<string, number | null>,
   totalScore: number,
 ): Promise<ScorePrediction> {
-  const scale = SCALE_BY_TEST[testType] || SCALE_BY_TEST.TOEFL_IBT;
-  const currentBand = totalScore;
-  const ci = CONFIDENCE_BY_TEST[testType] ?? 2.0;
+  const sectionMax = SECTION_MAX_BY_TEST[testType] || SECTION_MAX_BY_TEST.TOEFL_IBT;
+  const testMax = TEST_MAX_BAND[testType] || TEST_MAX_BAND.TOEFL_IBT;
+  const baseCi = BASE_CI_BY_TEST[testType] || BASE_CI_BY_TEST.TOEFL_IBT;
+
+  // Build per-section band values: clamp each section score to its max.
+  const sectionBands: Record<string, number | null> = {};
+  for (const [section, raw] of Object.entries(sectionScores)) {
+    if (raw == null) { sectionBands[section] = null; continue; }
+    const max = sectionMax[section] || testMax;
+    sectionBands[section] = Math.max(0, Math.min(max, Number(raw)));
+  }
+
+  // Current band = mean of the section bands (the reporting scale).
+  const presentSections = Object.entries(sectionBands).filter(
+    ([, v]) => v !== null,
+  ) as [string, number][];
+  const sectionsWithData = presentSections.length;
+  let currentBand: number;
+  if (sectionsWithData > 0) {
+    currentBand = presentSections.reduce((s, [, v]) => s + v, 0) / sectionsWithData;
+  } else {
+    currentBand = totalScore; // fall back to aggregate
+  }
+
+  // CI width: base, then widen by inverse section coverage.
+  // 4 sections -> 1.0x, 2 sections -> 1.3x, 1 section -> 1.7x.
+  const coverageMultiplier = 4 / Math.max(1, sectionsWithData);
+  const ciWidth = +(baseCi * coverageMultiplier).toFixed(2);
 
   // Fetch study plan for target_band + target_date
-  let targetScore: number | null = null;
+  let targetBand: number | null = null;
   let examDeadline: string | null = null;
   try {
     const plan = await env.DB.prepare(
       `SELECT target_band, target_date FROM study_plans
        WHERE user_id = ? AND status = 'active'
-       ORDER BY created_at DESC LIMIT 1`
+       ORDER BY created_at DESC LIMIT 1`,
     ).bind(userId).first<{ target_band: number | null; target_date: string | null }>();
     if (plan) {
-      targetScore = plan.target_band ? Number(plan.target_band) : null;
+      targetBand = plan.target_band ? Number(plan.target_band) : null;
       examDeadline = plan.target_date || null;
     }
-  } catch { /* study_plans missing or empty — fine */ }
+  } catch { /* study_plans missing or empty -- fine */ }
 
   // Compute weeks to exam
   let weeksToExam: number | null = null;
@@ -328,13 +382,15 @@ export async function buildScorePrediction(
   // Learning rate: pull the user's mock_test_history deltas to estimate
   // improvement per week. If <2 mock scores, assume 0 (can't project).
   let learningRate = 0;
+  let mockCount = 0;
   try {
     const history = await env.DB.prepare(
       `SELECT estimated_score, taken_at FROM mock_test_history
        WHERE user_id = ? AND test_type = ?
-       ORDER BY created_at ASC LIMIT 10`
+       ORDER BY created_at ASC LIMIT 10`,
     ).bind(userId, testType).all<{ estimated_score: number; taken_at: string }>();
     const rows = history.results || [];
+    mockCount = rows.length;
     if (rows.length >= 2) {
       const first = rows[0];
       const last = rows[rows.length - 1];
@@ -345,32 +401,60 @@ export async function buildScorePrediction(
       const weeksBetween = Math.max(0.5, (lastMs - firstMs) / (1000 * 60 * 60 * 24 * 7));
       learningRate = (lastScore - firstScore) / weeksBetween;
     }
-  } catch { /* mock_test_history missing — fine */ }
+  } catch { /* mock_test_history missing -- fine */ }
 
-  // Project: current + learning_rate × weeks_to_exam
+  // Project: current + learning_rate * weeks_to_exam
   const projectedBand = weeksToExam !== null && Number.isFinite(learningRate)
     ? currentBand + learningRate * weeksToExam
     : currentBand;
 
   // Verdict
   let verdict: ScorePrediction['verdict'];
-  if (targetScore === null || weeksToExam === null) {
+  if (targetBand === null || weeksToExam === null) {
     verdict = 'no_data';
-  } else if (projectedBand >= targetScore) {
+  } else if (projectedBand >= targetBand) {
     verdict = 'ready_now';
-  } else if (projectedBand >= targetScore - ci) {
+  } else if (projectedBand >= targetBand - ciWidth) {
     verdict = 'on_track';
   } else {
     verdict = 'behind_pace';
   }
 
+  // Clamp the projected band to the test's valid range [0, testMax].
+  const clampedProjected = Math.max(0, Math.min(testMax, projectedBand));
+
+  // Persist the prediction so the outcome tracking cron can later
+  // compare against the actual_band (filled in when the user takes
+  // another mock test). Best-effort: don't block the response.
+  try {
+    await env.DB.prepare(
+      `INSERT INTO prediction_history
+         (user_id, test_type, prediction, confidence_low, confidence_high, created_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+    ).bind(
+      userId,
+      testType,
+      clampedProjected,
+      Math.max(0, clampedProjected - ciWidth),
+      Math.min(testMax, clampedProjected + ciWidth),
+    ).run();
+  } catch (e: any) {
+    console.warn('[score-predictor] prediction_history insert failed (non-fatal):', e?.message || e);
+  }
+
   return {
-    current_band: currentBand,
-    confidence_interval: [currentBand - ci, currentBand + ci],
-    projected_band: Math.round(projectedBand * 10) / 10,
+    current_band: Math.round(currentBand * 10) / 10,
+    section_bands: sectionBands,
+    confidence_interval: [
+      Math.max(0, Math.round((currentBand - ciWidth) * 10) / 10),
+      Math.min(testMax, Math.round((currentBand + ciWidth) * 10) / 10),
+    ],
+    ci_width: ciWidth,
+    projected_band: Math.round(clampedProjected * 10) / 10,
     verdict,
     weeks_to_exam: weeksToExam,
-    target_band: targetScore,
+    target_band: targetBand,
     exam_deadline: examDeadline,
+    sections_with_data: sectionsWithData,
   };
 }

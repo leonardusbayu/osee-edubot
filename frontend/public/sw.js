@@ -3,7 +3,7 @@
 // (with the previous bundle's content hash) and users see stale
 // frontend bugs after a deploy. The activate handler deletes the
 // previous cache automatically.
-const CACHE_NAME = 'edubot-v9';
+const CACHE_NAME = 'edubot-v10';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -48,3 +48,4 @@ self.addEventListener('fetch', (event) => {
       .catch(() => caches.match(event.request).then((cached) => cached || caches.match('/')))
   );
 });
+

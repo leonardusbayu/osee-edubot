@@ -714,3 +714,36 @@ progressRoutes.get('/trajectory', async (c) => {
     return c.json({ error: 'Failed to load trajectory' }, 500);
   }
 });
+
+// GET /api/progress/outcome?window=30 - latest user_outcomes row for
+// the current user. Powers the "Score Improvement" card on the Progress
+// page. Returns the most recent (user, test_type, window) row per
+// window, plus a list of all (test_type, window) pairs so the frontend
+// can render per-test breakdown.
+progressRoutes.get('/outcome', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+  try {
+    const { getUserOutcome } = await import('../services/outcome-tracking');
+    const testTypeParam = c.req.query('test_type');
+    const windowParam = parseInt(c.req.query('window') || '30');
+    const validWindows = [30, 60, 90];
+    const window = validWindows.includes(windowParam) ? windowParam : 30;
+    const primary = await getUserOutcome(c.env, user.id, testTypeParam || null, window);
+    // Also pull all (test_type, window) pairs so the frontend can show
+    // per-test breakdowns.
+    const all = (await c.env.DB.prepare(
+      `SELECT test_type, window_days, avg_band, best_band, attempts_count, improvement, window_start, window_end
+       FROM user_outcomes
+       WHERE user_id = ? AND window_days = ?
+       ORDER BY updated_at DESC`,
+    ).bind(user.id, window).all()).results ?? [];
+    return c.json({
+      primary,
+      all,
+    });
+  } catch (e: any) {
+    console.error('Outcome error:', e);
+    return c.json({ error: 'Failed' }, 500);
+  }
+});

@@ -257,12 +257,23 @@ export default function TestResults() {
           no_data: 'text-tg-hint',
         };
         const verdictLabel: Record<string, string> = {
-          ready_now: '✅ Siap untuk ujian!',
-          on_track: '✅ On track',
-          behind_pace: '⚠️ Belum tertinggal dari target',
-          no_data: '📊 Belum ada data cukup',
+          ready_now: 'Siap untuk ujian!',
+          on_track: 'On track',
+          behind_pace: 'Belum tertinggal dari target',
+          no_data: 'Belum ada data cukup',
         };
-        const [ciLow, ciHigh] = p.confidence_interval;
+        // Use the new ci_width field directly when available; fall back
+        // to (ciHigh - ciLow) / 2 for older payloads (pre-fix).
+        const ciWidth = typeof p.ci_width === 'number'
+          ? p.ci_width
+          : (p.confidence_interval[1] - p.confidence_interval[0]) / 2;
+        // New: section_bands is an optional record. We render it as a
+        // compact row (e.g. "Reading 22/30 | Listening 18/30") when
+        // available, giving the student per-section transparency.
+        const sectionEntries = p.section_bands
+          ? Object.entries(p.section_bands as Record<string, number | null>)
+              .filter(([, v]) => v !== null)
+          : [];
         return (
           <div className="mb-6">
             <h2 className="font-semibold mb-3">Prediksi Skor</h2>
@@ -273,8 +284,22 @@ export default function TestResults() {
               </div>
               <div className="flex justify-between">
                 <span className="text-tg-hint">Confidence</span>
-                <span className="font-medium">±{(ciHigh - ciLow) / 2}</span>
+                <span className="font-medium">±{ciWidth}</span>
               </div>
+              {sectionEntries.length > 0 && (
+                <div className="text-xs text-tg-hint border-t border-tg-hint/20 pt-2 mt-2">
+                  {sectionEntries.map(([section, band]) => (
+                    <span key={section} className="inline-block mr-3 capitalize">
+                      {section}: {band}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {typeof p.sections_with_data === 'number' && p.sections_with_data < 2 && (
+                <p className="text-xs text-orange-500 mt-1">
+                  Prediction ini hanya berdasarkan {p.sections_with_data} section. Confidence interval lebih lebar.
+                </p>
+              )}
               {p.projected_band !== p.current_band && (
                 <div className="flex justify-between">
                   <span className="text-tg-hint">Proyeksi di ujian</span>
@@ -287,10 +312,10 @@ export default function TestResults() {
                   <span className="font-medium">{p.weeks_to_exam}</span>
                 </div>
               )}
-              {p.target_score !== null && (
+              {p.target_band !== null && p.target_band !== undefined && (
                 <div className="flex justify-between">
                   <span className="text-tg-hint">Target</span>
-                  <span className="font-medium">{p.target_score}</span>
+                  <span className="font-medium">{p.target_band}</span>
                 </div>
               )}
               <div className={`text-center font-bold pt-2 border-t border-tg-hint/20 ${verdictColor[p.verdict] || ''}`}>
