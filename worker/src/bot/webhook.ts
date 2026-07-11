@@ -3820,6 +3820,41 @@ await sendMessage(env, chatId, renderStudyMenuIntro(user.target_test || 'TOEFL_I
         return;
       }
 
+      // Cross-test practice recommendation - uses IRT theta to suggest
+      // related sections in other tests. Heuristic transfer matrix.
+      case '/cross-train': {
+        try {
+          const { getStudentIRTProfile } = await import('../services/irt-engine');
+          const { recommendFromIRT } = await import('../services/cross-test-transfer');
+          const profile = await getStudentIRTProfile(env.DB, user.id);
+          const targetTest = user.target_test || 'TOEFL_IBT';
+          const abilities = (profile?.abilities || []).map((a) => ({
+            skill: a.skill,
+            theta: Number(a.theta) || 0,
+          }));
+          const recs = recommendFromIRT(abilities, targetTest as any, 2);
+          if (recs.length === 0) {
+            await sendMessage(env, chatId,
+              'Tidak ada rekomendasi cross-test. Selesaikan /diagnostic dulu supaya aku bisa baca profil kamu.'
+            );
+            return;
+          }
+          let msg = '*Cross-test practice*' + '\n\n';
+          msg += 'Skill terkuat kamu di ' + targetTest.replace(/_/g, ' ') + ':' + '\n';
+          for (const r of recs) {
+            msg += '\n*' + r.test.replace(/_/g, ' ') + ' ' + r.section + '* (' + Math.round(r.confidence * 100) + '% transfer)' + '\n';
+            msg += '  ' + r.note + '\n';
+            msg += '  Source: ' + (r.source_theta > 0 ? '+' : '') + r.source_theta.toFixed(2) + ' theta' + '\n';
+          }
+          msg += '\nKetik /study buat mulai practice.';
+          await sendMessage(env, chatId, msg);
+        } catch (e) {
+          console.error('cross-train error:', e);
+          await sendMessage(env, chatId, 'Gagal memuat rekomendasi.');
+        }
+        return;
+      }
+
       case '/challenge': {
         // /challenge @username
         const target = (text.split(' ')[1] || '').replace('@', '').trim();
