@@ -268,7 +268,7 @@ export interface ScorePrediction {
   projected_band: number;
   verdict: 'on_track' | 'behind_pace' | 'ready_now' | 'no_data';
   weeks_to_exam: number | null;
-  target_score: number | null;
+  target_band: number | null;
   exam_deadline: string | null;
 }
 
@@ -300,17 +300,17 @@ export async function buildScorePrediction(
   const currentBand = totalScore;
   const ci = CONFIDENCE_BY_TEST[testType] ?? 2.0;
 
-  // Fetch study plan for target_score + target_date
+  // Fetch study plan for target_band + target_date
   let targetScore: number | null = null;
   let examDeadline: string | null = null;
   try {
     const plan = await env.DB.prepare(
-      `SELECT target_score, target_date FROM study_plans
+      `SELECT target_band, target_date FROM study_plans
        WHERE user_id = ? AND status = 'active'
        ORDER BY created_at DESC LIMIT 1`
-    ).bind(userId).first<{ target_score: number | null; target_date: string | null }>();
+    ).bind(userId).first<{ target_band: number | null; target_date: string | null }>();
     if (plan) {
-      targetScore = plan.target_score ? Number(plan.target_score) : null;
+      targetScore = plan.target_band ? Number(plan.target_band) : null;
       examDeadline = plan.target_date || null;
     }
   } catch { /* study_plans missing or empty — fine */ }
@@ -330,18 +330,18 @@ export async function buildScorePrediction(
   let learningRate = 0;
   try {
     const history = await env.DB.prepare(
-      `SELECT estimated_score, created_at FROM mock_test_history
+      `SELECT estimated_score, taken_at FROM mock_test_history
        WHERE user_id = ? AND test_type = ?
        ORDER BY created_at ASC LIMIT 10`
-    ).bind(userId, testType).all<{ estimated_score: number; created_at: string }>();
+    ).bind(userId, testType).all<{ estimated_score: number; taken_at: string }>();
     const rows = history.results || [];
     if (rows.length >= 2) {
       const first = rows[0];
       const last = rows[rows.length - 1];
       const firstScore = Number(first.estimated_score);
       const lastScore = Number(last.estimated_score);
-      const firstMs = new Date(first.created_at).getTime();
-      const lastMs = new Date(last.created_at).getTime();
+      const firstMs = new Date(first.taken_at).getTime();
+      const lastMs = new Date(last.taken_at).getTime();
       const weeksBetween = Math.max(0.5, (lastMs - firstMs) / (1000 * 60 * 60 * 24 * 7));
       learningRate = (lastScore - firstScore) / weeksBetween;
     }
@@ -370,7 +370,7 @@ export async function buildScorePrediction(
     projected_band: Math.round(projectedBand * 10) / 10,
     verdict,
     weeks_to_exam: weeksToExam,
-    target_score: targetScore,
+    target_band: targetScore,
     exam_deadline: examDeadline,
   };
 }

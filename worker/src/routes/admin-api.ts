@@ -2032,6 +2032,14 @@ adminApiRoutes.get('/teacher-dashboard/engagement', requireAdmin, async (c) => {
 // ═══════════════════════════════════════════════════════════════
 
 adminApiRoutes.post('/teacher-dashboard/assign-homework', requireAdmin, async (c) => {
+
+  // Use the authenticated teacher from JWT, not the request body. If
+  // only x-api-key was used (no JWT user), reject -- the teacher
+  // identity is required to attribute the homework correctly.
+  const user = (c as any).get('user') as { id: number } | null;
+  if (!user) {
+    return c.json({ error: 'Teacher identity required (use JWT auth, not x-api-key)' }, 401);
+  }
   const body = await c.req.json();
   const { class_id, section, question_count, due_date, notes } = body;
   if (!class_id || !section || !question_count || !due_date) {
@@ -2041,7 +2049,7 @@ adminApiRoutes.post('/teacher-dashboard/assign-homework', requireAdmin, async (c
     const result = await c.env.DB.prepare(
       `INSERT INTO class_homework (class_id, assigned_by, section, question_count, due_date, notes)
        VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(class_id, body.assigned_by || 0, section, question_count, due_date, notes || null).run();
+    ).bind(class_id, user.id, section, question_count, due_date, notes || null).run();
     return c.json({ status: 'created', homework_id: result.meta.last_row_id });
   } catch (e: any) {
     console.error('assign-homework error:', e?.message || e);

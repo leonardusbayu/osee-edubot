@@ -1,0 +1,31 @@
+# Run the schema validator on every push and PR.
+# Catches drift between what service code expects and what D1 has.
+# Flags missing tables + missing columns before they reach production.
+
+name: schema-validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install wrangler
+        run: npm install -g wrangler
+      - name: Run schema validator
+        env:
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+        run: node scripts/schema-validate.mjs
+      - name: Fail summary
+        if: failure()
+        run: |
+          echo "::error::Schema drift detected. The code references tables or columns that don't exist in D1. Write a migration and apply it before merging."
+          echo "The validator output above shows the missing tables/columns."

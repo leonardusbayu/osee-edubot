@@ -275,7 +275,13 @@ testRoutes.get('/attempt/resume', async (c) => {
       answers_submitted: attempt.answer_count || 0,
       section_progress: sectionProgress,
       started_at: attempt.started_at,
-      metadata: attempt.metadata ? JSON.parse(attempt.metadata as string) : null,
+            // Mock mode persistence: first-class columns (not just metadata).
+      // The frontend uses these to restore exam mode on page refresh
+      // (location.state would be lost).
+      mock_mode: (attempt as any).mock_mode === 1,
+      deadline_at: (attempt as any).deadline_at || null,
+      exam_mode_started_at: (attempt as any).exam_mode_started_at || null,
+metadata: attempt.metadata ? JSON.parse(attempt.metadata as string) : null,
     });
   } catch (e: any) {
     return c.json({ error: e.message }, 500);
@@ -338,18 +344,22 @@ testRoutes.post('/attempt/:id/answer', async (c) => {
 
     // Mock-mode deadline enforcement — reject late answers server-side
     try {
-      const meta = attempt.metadata ? JSON.parse(attempt.metadata as string) : {};
-      if (meta?.mock_mode && meta?.deadline_at) {
-        const deadline = new Date(meta.deadline_at).getTime();
+      // Read from first-class columns (mock_mode + deadline_at) when set.
+      // Fall back to metadata JSON for backwards compat with older rows.
+      const deadlineSource = (attempt as any).deadline_at
+        || (() => { try { const m = attempt.metadata ? JSON.parse(attempt.metadata as string) : {}; return m?.deadline_at; } catch { return null; } })();
+      const mockModeFlag = (attempt as any).mock_mode === 1
+        || (() => { try { const m = attempt.metadata ? JSON.parse(attempt.metadata as string) : {}; return m?.mock_mode; } catch { return false; } })();
+      if (mockModeFlag && deadlineSource) {
+        const deadline = new Date(deadlineSource).getTime();
         if (Number.isFinite(deadline) && Date.now() > deadline) {
-          // Auto-finish the attempt
           await c.env.DB.prepare(
             "UPDATE test_attempts SET status = 'time_expired', finished_at = datetime('now') WHERE id = ? AND status = 'in_progress'"
           ).bind(attemptId).run();
           return c.json({
             error: 'Time is up',
             code: 'TIME_EXPIRED',
-            deadline_at: meta.deadline_at,
+            deadline_at: deadlineSource,
             message: 'Waktu tes habis. Tes otomatis diselesaikan.',
           }, 403);
         }

@@ -45,6 +45,10 @@ interface ResumeAttempt {
   section_progress?: Record<string, number>;
   started_at?: string;
   metadata?: any;
+  // Mock mode persistence: hydrated from /resume API so page refresh
+  // restores exam mode without losing the timer.
+  mock_mode?: boolean;
+  deadline_at?: string | null;
 }
 
 const SECTION_INFO: Record<string, { icon: string; name: string; color: string; desc: string }> = {
@@ -326,9 +330,13 @@ export default function TestSelection() {
       // Pass mock_mode + deadline_at to the test store via the navigate
       // state so TestRunner can enter exam mode. The store doesn't
       // persist these, so we use location state.
-      navigate(`/test/${data.attempt_id}`, {
-        state: { mock_mode: true, deadline_at: data.deadline_at },
-      });
+// Pass mockMode + deadlineAt to the test store (persisted, survives
+      // page refresh). The old location.state approach was lost on reload.
+      useTestStore.getState().startTest(
+        data.attempt_id, data.test_type, data.sections, data.current_section,
+        null, null, { mockMode: true, deadlineAt: data.deadline_at }
+      );
+      navigate(`/test/${data.attempt_id}`);
     } catch {
       setError('Kesalahan jaringan');
     } finally {

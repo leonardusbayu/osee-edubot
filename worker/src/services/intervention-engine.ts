@@ -83,13 +83,15 @@ async function detectSignals(env: Env, userId: number): Promise<NudgeSpec[]> {
   } catch { /* fine */ }
 
   // 2. Low accuracy (10+ recent questions, accuracy < 40%)
+  // attempt_answers does not have user_id directly; JOIN through test_attempts.
   try {
     const acc = await env.DB.prepare(
       `SELECT
-         SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct,
+         SUM(CASE WHEN aa.is_correct = 1 THEN 1 ELSE 0 END) as correct,
          COUNT(*) as total
-       FROM attempt_answers
-       WHERE user_id = ? AND submitted_at >= datetime('now', '-14 days')`
+       FROM attempt_answers aa
+       JOIN test_attempts ta ON aa.attempt_id = ta.id
+       WHERE ta.user_id = ? AND aa.submitted_at >= datetime('now', '-14 days')`
     ).bind(userId).first<{ correct: number; total: number }>();
     if (acc && acc.total >= 10) {
       const pct = Math.round((acc.correct / acc.total) * 100);

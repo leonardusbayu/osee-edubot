@@ -182,8 +182,10 @@ export default function TestRunner() {
   // TestSelection passes mock_mode + deadline_at via location state. In
   // exam mode: no back button, prominent timer, auto-transition when the
   // section timer expires, auto-finish when the overall deadline passes.
-  const mockMode = (location.state as any)?.mock_mode === true;
-  const deadlineAt = (location.state as any)?.deadline_at as string | undefined;
+  // Mock mode: persisted in the test store, hydrated by startTest or
+  // by the resume fetch on page refresh (location.state is lost on reload).
+  const mockMode = useTestStore((s) => s.mockMode);
+  const deadlineAt = useTestStore((s) => s.deadlineAt);
   const {
     sections, currentSection, currentQuestionIndex,
     setCurrentSection, setQuestionIndex, saveAnswer, answers,

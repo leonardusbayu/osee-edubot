@@ -37,14 +37,19 @@ interface TestState {
   // TestRunner shows a "warm-up" banner on the first 3 questions so the
   // student knows the easy questions are intentional, not a bug.
   hasTheta: boolean;
+  // Mock mode exam-mode: persisted from /start + /resume so
+  // page refresh restores exam mode (location.state is lost on reload).
+  mockMode: boolean;
+  deadlineAt: string | null;
 
-  startTest: (attemptId: number, testType: string, sections: SectionInfo[], currentSection: string, questionType?: string | null, drill?: { concept: string; count: number } | null) => void;
+  startTest: (attemptId: number, testType: string, sections: SectionInfo[], currentSection: string, questionType?: string | null, drill?: { concept: string; count: number } | null, examMode?: { mockMode: boolean; deadlineAt: string | null }) => void;
   setCurrentSection: (section: string) => void;
   setQuestionIndex: (index: number) => void;
   setTimeRemaining: (seconds: number) => void;
   saveAnswer: (section: string, questionIndex: number, answer: unknown) => void;
   finishTest: () => void;
   reset: () => void;
+  setExamMode: (mockMode: boolean, deadlineAt: string | null) => void;
 
   // Offline-first methods
   prefetchQuestions: (attemptId: number) => Promise<boolean>;
@@ -77,6 +82,8 @@ export const useTestStore = create<TestState>((set, get) => ({
   pendingAnswers: [],
   networkAvailable: typeof navigator !== 'undefined' ? navigator.onLine : true,
   hasTheta: false,
+  mockMode: false,
+  deadlineAt: null,
 
   startTest: (attemptId, testType, sections, currentSection, questionType, drill) =>
     set({
@@ -95,6 +102,8 @@ export const useTestStore = create<TestState>((set, get) => ({
       pendingAnswers: [],
       networkAvailable: typeof navigator !== 'undefined' ? navigator.onLine : true,
       hasTheta: false,
+  // mockMode + deadlineAt placeholder removed; see below
+  // mockMode + deadlineAt placeholder removed; see below
     }),
 
   setCurrentSection: (section) => set({ currentSection: section, currentQuestionIndex: 0 }),
@@ -113,6 +122,7 @@ export const useTestStore = create<TestState>((set, get) => ({
     })),
 
   finishTest: () => set({ isFinished: true }),
+  setExamMode: (mockMode, deadlineAt) => set({ mockMode, deadlineAt }),
 
   reset: () =>
     set({
