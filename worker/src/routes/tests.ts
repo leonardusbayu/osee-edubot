@@ -1846,3 +1846,28 @@ testRoutes.get('/skill-practice/history', async (c) => {
     return c.json({ error: e.message || 'Failed to load history' }, 500);
   }
 });
+
+// Cross-test skill transfer recommendations
+testRoutes.get('/recommend', async (c) => {
+  const user = await getAuthUser(c.req.raw, c.env);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
+  try {
+    const { getStudentIRTProfile } = await import('../services/irt-engine');
+    const { recommendFromIRT } = await import('../services/cross-test-transfer');
+    const profile = await getStudentIRTProfile(c.env.DB, user.id);
+    const targetTest = user.target_test || 'TOEFL_IBT';
+    const abilities = (profile?.abilities || []).map((a) => ({
+      skill: a.skill,
+      theta: Number(a.theta) || 0,
+    }));
+    const recs = recommendFromIRT(abilities, targetTest, 2);
+    return c.json({
+      target_test: targetTest,
+      current_abilities: abilities,
+      recommendations: recs,
+    });
+  } catch (e) {
+    return c.json({ error: 'Failed' }, 500);
+  }
+});
+
