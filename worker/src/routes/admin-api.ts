@@ -2026,3 +2026,65 @@ adminApiRoutes.get('/teacher-dashboard/engagement', requireAdmin, async (c) => {
     avg_study_time_weekly: avgStudyTime.results,
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// CLASS HOMEWORK — teacher assigns practice to a whole class.
+// ═══════════════════════════════════════════════════════════════
+
+adminApiRoutes.post('/teacher-dashboard/assign-homework', requireAdmin, async (c) => {
+  const body = await c.req.json();
+  const { class_id, section, question_count, due_date, notes } = body;
+  if (!class_id || !section || !question_count || !due_date) {
+    return c.json({ error: 'class_id, section, question_count, due_date required' }, 400);
+  }
+  try {
+    const result = await c.env.DB.prepare(
+      `INSERT INTO class_homework (class_id, assigned_by, section, question_count, due_date, notes)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(class_id, body.assigned_by || 0, section, question_count, due_date, notes || null).run();
+    return c.json({ status: 'created', homework_id: result.meta.last_row_id });
+  } catch (e: any) {
+    console.error('assign-homework error:', e?.message || e);
+    return c.json({ error: 'Failed to create homework' }, 500);
+  }
+});
+
+adminApiRoutes.get('/teacher-dashboard/homework/:classId', requireAdmin, async (c) => {
+  const classId = parseInt(c.req.param('classId'));
+  if (isNaN(classId)) return c.json({ homework: [] });
+  try {
+    const rows = await c.env.DB.prepare(
+      `SELECT h.id, h.section, h.question_count, h.due_date, h.notes, h.status, h.created_at,
+              (SELECT COUNT(*) FROM class_enrollments WHERE class_id = h.class_id AND status = 'active') as class_size,
+              (SELECT COUNT(*) FROM homework_completions hc WHERE hc.homework_id = h.id) as completed_count
+       FROM class_homework h
+       WHERE h.class_id = ? AND h.status = 'active'
+       ORDER BY h.due_date ASC`
+    ).bind(classId).all();
+    return c.json({ homework: rows.results || [] });
+  } catch (e: any) {
+    console.error('homework error:', e?.message || e);
+    return c.json({ homework: [] });
+  }
+});
+
+adminApiRoutes.post('/teacher-dashboard/mark-progress', requireAdmin, async (c) => {
+  const body = await c.req.json();
+  const { homework_id, user_id, completed_count } = body;
+  if (!homework_id || !user_id || completed_count === undefined) {
+    return c.json({ error: 'homework_id, user_id, completed_count required' }, 400);
+  }
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO homework_completions (homework_id, user_id, completed_count)
+       VALUES (?, ?, ?)
+       ON CONFLICT(homework_id, user_id) DO UPDATE SET
+         completed_count = MAX(completed_count, ?),
+         completed_at = datetime('now')`
+    ).bind(homework_id, user_id, completed_count, completed_count).run();
+    return c.json({ status: 'ok' });
+  } catch (e: any) {
+    console.error('mark-progress error:', e?.message || e);
+    return c.json({ error: 'Failed' }, 500);
+  }
+});

@@ -723,6 +723,11 @@ export default function TeacherDashboard() {
   const [weakness, setWeakness] = useState<WeaknessData | null>(null);
   const [progression, setProgression] = useState<ProgressionData | null>(null);
   const [engagement, setEngagement] = useState<EngagementData | null>(null);
+const [classId, setClassId] = useState<number | null>(null);
+const [homework, setHomework] = useState<any[]>([]);
+const [assignOpen, setAssignOpen] = useState(false);
+const [assignForm, setAssignForm] = useState({ section: 'reading', question_count: 20, due_date: '' });
+const [assigning, setAssigning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
